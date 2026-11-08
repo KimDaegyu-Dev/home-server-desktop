@@ -1,0 +1,117 @@
+---
+- name: Install or converge K3s
+  hosts: home_server
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../versions.yml
+  vars:
+    k3s_installer_path: /usr/local/sbin/home-server-k3s-install.sh
+  tasks:
+    - name: Read the invoking user's identity
+      become: false
+      ansible.builtin.command:
+        argv: [id, -un]
+      register: invoking_user
+      changed_when: false
+
+    - name: Read the invoking user's primary group
+      become: false
+      ansible.builtin.command:
+        argv: [id, -gn]
+      register: invoking_group
+      changed_when: false
+
+    - name: Read the invoking user's home directory
+      become: false
+      ansible.builtin.command:
+        argv: [bash, -lc, "printf %s \"$HOME\""]
+      register: invoking_home
+      changed_when: false
+
+    - name: Require Linux with systemd
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.system == "Linux"
+          - ansible_facts.service_mgr == "systemd"
+        fail_msg: "K3s requires a systemd-based Linux host."
+
+    - name: Create K3s configuration directory
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Render K3s configuration from the selected inventory
+      ansible.builtin.template:
+        src: ../templates/k3s-config.yaml.j2
+        dest: /etc/rancher/k3s/config.yaml
+        owner: root
+        group: root
+        mode: "0600"
+      notify: Restart K3s
+
+    - name: Download the official K3s installer
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s }}/install.sh"
+        dest: "{{ k3s_installer_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Read installed K3s version
+      ansible.builtin.command:
+        argv: [/usr/local/bin/k3s, --version]
+      register: k3s_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Install the pinned K3s release
+      ansible.builtin.command:
+        argv: [/bin/sh, "{{ k3s_installer_path }}"]
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s }}"
+        INSTALL_K3S_EXEC: server
+      when: k3s_installed.rc != 0 or k3s not in k3s_installed.stdout
+      notify: Restart K3s
+
+    - name: Enable and start K3s
+      ansible.builtin.systemd_service:
+        name: k3s
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Create the invoking user's kubeconfig directory
+      become: false
+      ansible.builtin.file:
+        path: "{{ invoking_home.stdout }}/.kube"
+        state: directory
+        mode: "0700"
+
+    - name: Copy kubeconfig for the invoking user
+      ansible.builtin.copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "{{ invoking_home.stdout }}/.kube/config"
+        remote_src: true
+        owner: "{{ invoking_user.stdout }}"
+        group: "{{ invoking_group.stdout }}"
+        mode: "0600"
+
+    - name: Wait for the K3s API
+      ansible.builtin.command:
+        argv: [/usr/local/bin/k3s, kubectl, get, nodes]
+      register: k3s_nodes
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: k3s_nodes.rc == 0
+
+  handlers:
+    - name: Restart K3s
+      ansible.builtin.systemd_service:
+        name: k3s
+        state: restarted
+        daemon_reload: true

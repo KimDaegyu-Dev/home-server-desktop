@@ -1,0 +1,43 @@
+---
+- name: Bootstrap Argo CD and the environment root application
+  hosts: home_server
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../../versions.yml
+  vars:
+    home_repo_root: "{{ playbook_dir }}/../.."
+  tasks:
+    - name: Create the Argo CD namespace
+      ansible.builtin.shell:
+        cmd: |
+          /usr/local/bin/k3s kubectl create namespace argocd \
+            --dry-run=client -o yaml | /usr/local/bin/k3s kubectl apply -f -
+      register: argocd_namespace
+      changed_when: "'created' in argocd_namespace.stdout or 'configured' in argocd_namespace.stdout"
+
+    - name: Install the pinned Argo CD release
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - apply
+          - --namespace
+          - argocd
+          - --server-side
+          - --force-conflicts
+          - -f
+          - "https://raw.githubusercontent.com/argoproj/argo-cd/{{ argocd }}/manifests/install.yaml"
+      register: argocd_install
+      changed_when: "'created' in argocd_install.stdout or 'configured' in argocd_install.stdout"
+
+    - name: Apply the environment's root Application
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - apply
+          - -f
+          - "{{ home_repo_root }}/clusters/{{ home_environment }}/root-app.yaml"
+      register: root_application
+      changed_when: "'created' in root_application.stdout or 'configured' in root_application.stdout"

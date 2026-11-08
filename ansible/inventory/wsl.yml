@@ -1,0 +1,13 @@
+all:
+  children:
+    home_server:
+      hosts:
+        localhost:
+          ansible_connection: local
+          ansible_python_interpreter: /usr/bin/python3
+      vars:
+        home_environment: wsl
+        k3s_storage_path: /var/lib/home-server-desktop/k3s-local-path
+        k3s_node_name: home-server-wsl
+        k3s_tls_sans:
+          - localhost

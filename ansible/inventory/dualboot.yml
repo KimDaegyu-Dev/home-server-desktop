@@ -1,0 +1,13 @@
+all:
+  children:
+    home_server:
+      hosts:
+        localhost:
+          ansible_connection: local
+          ansible_python_interpreter: /usr/bin/python3
+      vars:
+        home_environment: dualboot
+        k3s_storage_path: /srv/home-server-desktop/k3s-local-path
+        k3s_node_name: home-server-linux
+        # LAN API 주소가 정해지면 필요한 DNS 이름 또는 IP를 추가합니다.
+        k3s_tls_sans: []

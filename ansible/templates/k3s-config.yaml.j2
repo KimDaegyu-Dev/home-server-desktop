@@ -1,0 +1,10 @@
+# Managed by Ansible. Change the matching inventory/profile instead.
+write-kubeconfig-mode: "0600"
+node-name: "{{ k3s_node_name }}"
+default-local-storage-path: "{{ k3s_storage_path }}"
+{% if k3s_tls_sans | default([]) | length > 0 %}
+tls-san:
+{% for san in k3s_tls_sans %}
+  - "{{ san }}"
+{% endfor %}
+{% endif %}

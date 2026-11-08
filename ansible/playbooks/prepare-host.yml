@@ -1,0 +1,35 @@
+---
+- name: Prepare the Linux host for K3s
+  hosts: home_server
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Require Ubuntu or Debian with systemd
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.os_family == "Debian"
+          - ansible_facts.service_mgr == "systemd"
+        fail_msg: "This bootstrap supports Ubuntu/Debian with systemd."
+
+    - name: Install host prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - iptables
+          - git
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the K3s local persistent-volume directory
+      ansible.builtin.file:
+        path: "{{ k3s_storage_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Show selected profile
+      ansible.builtin.debug:
+        msg: "Profile={{ home_environment }}, storage={{ k3s_storage_path }}"

@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+*.kubeconfig
+kubeconfig
+ansible/.vault-pass
+ansible/vault-password-file
+secrets/**
+!secrets/.gitkeep
+backups/**
+data/**
+*.sqlite
+*.db
+.venv/
+.ansible/
+__pycache__/
+*.retry

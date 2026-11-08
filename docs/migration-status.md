@@ -10,7 +10,7 @@ Updated: 2026-11-09
 - WSL uses `vmIdleTimeout=-1` so the idle distro remains available. Docker Desktop is stopped by request and was not started during this work.
 - HashiCorp Vault 2.2.1-1 is installed as a systemd service outside K3s, with single-node Raft storage at `/var/lib/vault/data`, TLS at `https://vault.home.arpa:8200`, and a dedicated local CA. Its public CA is available to VSO in `vault-secrets-operator-system/vault-ca`.
 - Vault is intentionally uninitialized and sealed. The one-time initialization and secure storage of key shares/root token remain a manual step for the owner.
-- Git defines VaultConnection and Tailscale Operator credentials through VSO, plus private Tailscale Ingress routes for Argo CD and Vault. Vault uses an in-cluster NGINX bridge that validates the Vault CA while preserving TLS to the external Vault service. The Argo CD Ingress is applied; Vault Ingress awaits the latest Git sync.
+- Git defines VaultConnection and Tailscale Operator credentials through VSO, plus private Tailscale Ingress routes for Argo CD and Vault. The Vault NGINX bridge is healthy; a request through it reached Vault and returned the expected 501 uninitialized health status, confirming TLS verification and upstream connectivity. Both Ingress resources are synced, but no tailnet address is issued until Vault is initialized/unsealed and the Tailscale OAuth secret is available.
 - Tailscale Admin still needs MagicDNS/HTTPS and the Operator OAuth client/tag permissions configured. No Tailscale credential is stored in Git.
 
 ## Data copied without starting Docker

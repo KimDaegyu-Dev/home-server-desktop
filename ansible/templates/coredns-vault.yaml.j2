@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  vault-home-arpa.server: |
+    vault.home.arpa:53 {
+      hosts {
+        {{ vault_bind_address }} vault.home.arpa
+        ttl 30
+      }
+    }

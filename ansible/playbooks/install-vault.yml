@@ -1,0 +1,310 @@
+---
+- name: Install external HashiCorp Vault for the K3s host
+  hosts: home_server
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../../versions.yml
+  vars:
+    vault_apt_arch: "{{ 'amd64' if ansible_facts.architecture == 'x86_64' else 'arm64' }}"
+    vault_tls_dir: /etc/vault.d/tls
+    vault_data_dir: /var/lib/vault/data
+    vault_api_name: vault.home.arpa
+    vault_bind_address: "{{ ansible_facts.default_ipv4.address }}"
+    vault_ca_key: "{{ vault_tls_dir }}/ca.key"
+    vault_ca_cert: "{{ vault_tls_dir }}/ca.crt"
+    vault_tls_key: "{{ vault_tls_dir }}/vault.key"
+    vault_tls_csr: "{{ vault_tls_dir }}/vault.csr"
+    vault_tls_cert: "{{ vault_tls_dir }}/vault.crt"
+    vault_tls_chain: "{{ vault_tls_dir }}/vault-chain.crt"
+    vault_tls_ext: "{{ vault_tls_dir }}/vault.ext"
+  tasks:
+    - name: Require Ubuntu or Debian with systemd and an IPv4 address
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.os_family == "Debian"
+          - ansible_facts.service_mgr == "systemd"
+          - vault_bind_address | length > 0
+        fail_msg: "Vault requires a systemd-based Ubuntu/Debian host with an IPv4 address."
+
+    - name: Download the HashiCorp package signing key
+      ansible.builtin.get_url:
+        url: https://apt.releases.hashicorp.com/gpg
+        dest: /usr/share/keyrings/hashicorp-archive-keyring.asc
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Convert the HashiCorp signing key to a keyring
+      ansible.builtin.command:
+        argv:
+          - gpg
+          - --dearmor
+          - --yes
+          - --output
+          - /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          - /usr/share/keyrings/hashicorp-archive-keyring.asc
+      args:
+        creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+    - name: Remove the temporary HashiCorp repository list from initial setup
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/hashicorp.list
+        state: absent
+
+    - name: Install the dependency for Deb822 APT sources
+      ansible.builtin.apt:
+        name: python3-debian
+        state: present
+        update_cache: true
+
+    - name: Add the official HashiCorp APT repository
+      ansible.builtin.deb822_repository:
+        name: hashicorp
+        types: deb
+        uris: https://apt.releases.hashicorp.com
+        suites: "{{ ansible_facts.distribution_release }}"
+        components: main
+        architectures: "{{ vault_apt_arch }}"
+        signed_by: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        state: present
+
+    - name: Install the pinned Vault package
+      ansible.builtin.apt:
+        name: "vault={{ vault }}"
+        state: present
+        update_cache: true
+
+    - name: Create Vault TLS and Raft data directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ vault_tls_dir }}", owner: root, group: vault, mode: "0750" }
+        - { path: "{{ vault_data_dir }}", owner: vault, group: vault, mode: "0750" }
+
+    - name: Check whether the Vault CA certificate exists
+      ansible.builtin.stat:
+        path: "{{ vault_ca_cert }}"
+      register: vault_ca_certificate
+
+    - name: Generate a dedicated local Vault CA
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - rsa:4096
+          - -sha256
+          - -nodes
+          - -days
+          - "3650"
+          - -keyout
+          - "{{ vault_ca_key }}"
+          - -out
+          - "{{ vault_ca_cert }}"
+          - -subj
+          - "/CN=Home Server Vault CA"
+          - -addext
+          - "basicConstraints=critical,CA:TRUE,pathlen:0"
+          - -addext
+          - "keyUsage=critical,digitalSignature,keyCertSign,cRLSign"
+      when: not vault_ca_certificate.stat.exists
+      notify: Restart Vault
+
+    - name: Protect the private CA signing key
+      ansible.builtin.file:
+        path: "{{ vault_ca_key }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Publish the CA certificate for local trust
+      ansible.builtin.file:
+        path: "{{ vault_ca_cert }}"
+        owner: root
+        group: vault
+        mode: "0644"
+
+    - name: Render Vault server certificate extensions
+      ansible.builtin.template:
+        src: ../templates/vault-cert.ext.j2
+        dest: "{{ vault_tls_ext }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Inspect the current Vault server certificate SANs
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - x509
+          - -in
+          - "{{ vault_tls_cert }}"
+          - -noout
+          - -ext
+          - subjectAltName
+      register: vault_cert_sans
+      changed_when: false
+      failed_when: false
+
+    - name: Check whether the Vault certificate chain exists
+      ansible.builtin.stat:
+        path: "{{ vault_tls_chain }}"
+      register: vault_tls_chain_file
+
+    - name: Generate a Vault server certificate for the current node address
+      ansible.builtin.shell: >-
+        openssl req -new -newkey rsa:3072 -sha256 -nodes
+        -keyout {{ vault_tls_key }}
+        -out {{ vault_tls_csr }}
+        -subj /CN={{ vault_api_name }}
+        && openssl x509 -req -in {{ vault_tls_csr }}
+        -CA {{ vault_ca_cert }} -CAkey {{ vault_ca_key }} -CAcreateserial
+        -out {{ vault_tls_cert }} -days 825 -sha256 -extfile {{ vault_tls_ext }}
+        && cat {{ vault_tls_cert }} {{ vault_ca_cert }} > {{ vault_tls_chain }}
+      args:
+        executable: /bin/bash
+      when: >-
+        not vault_ca_certificate.stat.exists or
+        not vault_tls_chain_file.stat.exists or
+        vault_cert_sans.rc != 0 or
+        ('IP Address:' ~ vault_bind_address) not in vault_cert_sans.stdout
+      notify: Restart Vault
+
+    - name: Secure the Vault server certificate and private key
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: vault
+        group: vault
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ vault_tls_cert }}", mode: "0644" }
+        - { path: "{{ vault_tls_key }}", mode: "0640" }
+        - { path: "{{ vault_tls_chain }}", mode: "0644" }
+
+    - name: Configure Vault Raft storage and TLS listener
+      ansible.builtin.template:
+        src: ../templates/vault.hcl.j2
+        dest: /etc/vault.d/vault.hcl
+        owner: vault
+        group: vault
+        mode: "0640"
+      notify: Restart Vault
+
+    - name: Add the host-side Vault DNS name
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: "^.*\\s{{ vault_api_name | regex_escape }}$"
+        line: "{{ vault_bind_address }} {{ vault_api_name }}"
+        state: present
+      notify: Restart Vault
+
+    - name: Configure the K3s CoreDNS alias for the external Vault service
+      ansible.builtin.template:
+        src: ../templates/coredns-vault.yaml.j2
+        dest: /run/home-server-coredns-vault.yaml
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Apply the K3s CoreDNS alias
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - apply
+          - -f
+          - /run/home-server-coredns-vault.yaml
+      register: coredns_apply
+      changed_when: "'configured' in coredns_apply.stdout or 'created' in coredns_apply.stdout"
+
+    - name: Restart CoreDNS after adding or changing the Vault alias
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - restart
+          - deployment/coredns
+          - --namespace=kube-system
+      when: coredns_apply.changed
+
+    - name: Wait for CoreDNS to load the Vault alias
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/coredns
+          - --namespace=kube-system
+          - --timeout=90s
+      changed_when: false
+      when: coredns_apply.changed
+
+    - name: Enable and start the Vault systemd service
+      ansible.builtin.systemd_service:
+        name: vault
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Apply pending certificate and configuration updates before health checks
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for the TLS-enabled Vault API
+      ansible.builtin.uri:
+        url: "https://{{ vault_api_name }}:8200/v1/sys/health"
+        method: GET
+        ca_path: "{{ vault_ca_cert }}"
+        status_code: [200, 429, 472, 473, 501, 503]
+        return_content: true
+      register: vault_health
+      retries: 12
+      delay: 5
+      until: vault_health.status is defined
+      changed_when: false
+
+    - name: Apply the VSO namespace
+      ansible.builtin.shell: >-
+        /usr/local/bin/k3s kubectl create namespace vault-secrets-operator-system
+        --dry-run=client -o yaml |
+        /usr/local/bin/k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
+      register: vso_namespace_apply
+      changed_when: >-
+        'created' in vso_namespace_apply.stdout or
+        'configured' in vso_namespace_apply.stdout
+
+    - name: Publish the public Vault CA certificate to the VSO namespace
+      ansible.builtin.shell: >-
+        /usr/local/bin/k3s kubectl create secret generic vault-ca
+        --namespace vault-secrets-operator-system
+        --from-file=ca.crt={{ vault_ca_cert }}
+        --dry-run=client -o yaml |
+        /usr/local/bin/k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
+      register: vault_ca_secret
+      changed_when: >-
+        'created' in vault_ca_secret.stdout or
+        'configured' in vault_ca_secret.stdout
+
+    - name: Report the Vault endpoint and initialization state
+      ansible.builtin.debug:
+        msg: >-
+          Vault is listening at https://{{ vault_api_name }}:8200 and is intentionally
+          left uninitialized. Securely initialize and unseal it before writing secrets.
+
+  handlers:
+    - name: Restart Vault
+      ansible.builtin.systemd_service:
+        name: vault
+        state: restarted
+        daemon_reload: true

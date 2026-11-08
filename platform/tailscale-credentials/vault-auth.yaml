@@ -1,0 +1,14 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: tailscale-operator
+  namespace: tailscale
+spec:
+  vaultConnectionRef: vault-secrets-operator-system/default
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: tailscale-operator
+    serviceAccount: tailscale-vault-auth
+    audiences:
+      - vault

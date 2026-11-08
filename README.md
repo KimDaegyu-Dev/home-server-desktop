@@ -36,6 +36,7 @@ python3 -m venv .venv
 python -m pip install --requirement ansible/requirements.txt
 ansible-playbook -i ansible/inventory/wsl.yml ansible/playbooks/prepare-host.yml
 ansible-playbook -i ansible/inventory/wsl.yml ansible/playbooks/install-k3s.yml
+ansible-playbook -i ansible/inventory/wsl.yml ansible/playbooks/install-vault.yml
 ansible-playbook -i ansible/inventory/wsl.yml ansible/playbooks/bootstrap-argocd.yml
 ```
 
@@ -72,3 +73,5 @@ VSO는 Vault 값을 Kubernetes Secret으로 동기화하므로 값은 클러스�
 ## Current setup status
 
 See [docs/migration-status.md](docs/migration-status.md) for the installed cluster and service migration inventory.
+
+The external HashiCorp Vault and Tailscale Ingress setup is described in [docs/vault.md](docs/vault.md) and [docs/networking-tailscale.md](docs/networking-tailscale.md).

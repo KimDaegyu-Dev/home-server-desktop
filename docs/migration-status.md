@@ -1,6 +1,6 @@
 # Current migration status
 
-Updated: 2026-11-08
+Updated: 2026-11-09
 
 ## Installed and running
 
@@ -8,6 +8,10 @@ Updated: 2026-11-08
 - K3s v1.37.2+k3s1 is enabled as a systemd service; node `home-server-wsl` is Ready.
 - Argo CD v3.6.1 and Vault Secrets Operator chart v1.6.2 are installed through the root Application. Both Argo CD Applications are Synced and Healthy.
 - WSL uses `vmIdleTimeout=-1` so the idle distro remains available. Docker Desktop is stopped by request and was not started during this work.
+- HashiCorp Vault 2.2.1-1 is installed as a systemd service outside K3s, with single-node Raft storage at `/var/lib/vault/data`, TLS at `https://vault.home.arpa:8200`, and a dedicated local CA. Its public CA is available to VSO in `vault-secrets-operator-system/vault-ca`.
+- Vault is intentionally uninitialized and sealed. The one-time initialization and secure storage of key shares/root token remain a manual step for the owner.
+- Git now defines VaultConnection and Tailscale Operator credentials through VSO, plus a private Tailscale Ingress for Argo CD. These resources are awaiting the root Application sync; the Tailscale OAuth secret has not been supplied.
+- Tailscale Admin still needs MagicDNS/HTTPS and the Operator OAuth client/tag permissions configured. No Tailscale credential is stored in Git.
 
 ## Data copied without starting Docker
 
@@ -30,10 +34,11 @@ These copies are staging data, not yet mounted by Kubernetes. Keep the originals
 
 ## Remaining prerequisites
 
-1. Configure the external Vault endpoint, TLS trust, Kubernetes authentication, and per-application policies. Do not commit Vault initialization keys, tokens, or secret values.
-2. Publish custom images to GHCR and pin immutable tags or digests. The Snowball workspace currently has no Git remote.
-3. Export the Snowball and companion Docker named volumes through a Docker-aware backup when Docker Desktop can be safely repaired. They cannot be read through Docker CLI while its engine is stopped.
-4. Add each service as an Argo child Application only after its image, Vault references, and persistent data are ready. Keep source data until each application is verified.
+1. Initialize and unseal Vault, then run `bash scripts/bootstrap-vault-tailscale.sh` after Argo creates the Tailscale auth ServiceAccount. Configure the Tailscale Admin prerequisites in `docs/networking-tailscale.md` and provide OAuth credentials through the hidden prompt.
+2. Confirm the root Application syncs the Vault and Tailscale child Applications, and verify the Argo CD MagicDNS HTTPS address from a Tailscale-connected device.
+3. Publish custom images to GHCR and pin immutable tags or digests. The Snowball workspace currently has no Git remote.
+4. Export the Snowball and companion Docker named volumes through a Docker-aware backup when Docker Desktop can be safely repaired. They cannot be read through Docker CLI while its engine is stopped.
+5. Add each service as an Argo child Application only after its image, Vault references, and persistent data are ready. Keep source data until each application is verified.
 
 The Docker VHDX and Docker named volumes have not been deleted or modified intentionally. See [migration.md](migration.md) for the repeatable per-application cutover sequence.
 ## Copy command note

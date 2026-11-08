@@ -7,28 +7,10 @@
     - ../../versions.yml
   vars:
     k3s_installer_path: /usr/local/sbin/home-server-k3s-install.sh
+    k3s_client_user: "{{ lookup('env', 'K3S_CLIENT_USER') | default(lookup('env', 'USER'), true) }}"
+    k3s_client_group: "{{ lookup('env', 'K3S_CLIENT_GROUP') | default(lookup('env', 'USER'), true) }}"
+    k3s_client_home: "{{ lookup('env', 'K3S_CLIENT_HOME') | default(lookup('env', 'HOME'), true) }}"
   tasks:
-    - name: Read the invoking user's identity
-      become: false
-      ansible.builtin.command:
-        argv: [id, -un]
-      register: invoking_user
-      changed_when: false
-
-    - name: Read the invoking user's primary group
-      become: false
-      ansible.builtin.command:
-        argv: [id, -gn]
-      register: invoking_group
-      changed_when: false
-
-    - name: Read the invoking user's home directory
-      become: false
-      ansible.builtin.command:
-        argv: [bash, -lc, "printf %s \"$HOME\""]
-      register: invoking_home
-      changed_when: false
-
     - name: Require Linux with systemd
       ansible.builtin.assert:
         that:
@@ -87,17 +69,17 @@
     - name: Create the invoking user's kubeconfig directory
       become: false
       ansible.builtin.file:
-        path: "{{ invoking_home.stdout }}/.kube"
+        path: "{{ k3s_client_home }}/.kube"
         state: directory
         mode: "0700"
 
     - name: Copy kubeconfig for the invoking user
       ansible.builtin.copy:
         src: /etc/rancher/k3s/k3s.yaml
-        dest: "{{ invoking_home.stdout }}/.kube/config"
+        dest: "{{ k3s_client_home }}/.kube/config"
         remote_src: true
-        owner: "{{ invoking_user.stdout }}"
-        group: "{{ invoking_group.stdout }}"
+        owner: "{{ k3s_client_user }}"
+        group: "{{ k3s_client_group }}"
         mode: "0600"
 
     - name: Wait for the K3s API

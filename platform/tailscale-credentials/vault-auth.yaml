@@ -12,3 +12,4 @@ spec:
     serviceAccount: tailscale-vault-auth
     audiences:
       - vault
+      - https://kubernetes.default.svc.cluster.local

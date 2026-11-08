@@ -1,5 +1,6 @@
 # Managed by Ansible. Change the matching inventory/profile instead.
 write-kubeconfig-mode: "0600"
+secrets-encryption: true
 node-name: "{{ k3s_node_name }}"
 default-local-storage-path: "{{ k3s_storage_path }}"
 {% if k3s_tls_sans | default([]) | length > 0 %}

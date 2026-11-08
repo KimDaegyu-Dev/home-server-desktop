@@ -9,3 +9,6 @@ stat -fc %T /sys/fs/cgroup
 ```
 
 Expected output: `cgroup2fs`.
+
+
+On WSL 2.4.13, vmIdleTimeout=-1 in wsl/.wslconfig disables the VM idle timeout used by this K3s host. Merge the example into the existing Windows configuration, then run wsl --shutdown to apply it.

@@ -2,6 +2,10 @@
 
 Ubuntu 24.04 LTS를 기준으로 WSL2에서 시작해 나중에 듀얼부팅 Ubuntu로 옮겨도 같은 절차로 재구축할 홈 서버 구성입니다.
 
+## WSL VM lifetime
+
+Copy `wsl/.wslconfig` to `%UserProfile%\.wslconfig`. It enables cgroup v2 for K3s and disables automatic shutdown of an idle WSL VM. After changing it, run `wsl --shutdown` once so WSL loads the settings. This stops workloads during the one-time restart.
+
 ## 원칙
 
 - Ansible은 Linux 호스트 준비와 K3s 설치를 담당합니다.
@@ -64,3 +68,7 @@ versions.yml   고정된 구성요소 버전
 VSO는 Vault 값을 Kubernetes Secret으로 동기화하므로 값은 클러스터 etcd에도 존재하게 됩니다. etcd 암호화, namespace 분리, 최소 권한 RBAC를 적용합니다.
 
 이 저장소는 공개 상태입니다. 비밀번호, 토큰, kubeconfig, Vault 초기화 키, 개인 키, 실제 `.env` 파일을 커밋하지 마세요. 민감한 인프라 주소도 공개해도 되는지 검토한 뒤 기록합니다.
+
+## Current setup status
+
+See [docs/migration-status.md](docs/migration-status.md) for the installed cluster and service migration inventory.

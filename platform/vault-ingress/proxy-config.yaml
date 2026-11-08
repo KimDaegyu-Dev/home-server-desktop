@@ -34,3 +34,4 @@ data:
           proxy_send_timeout 300s;
         }
       }
+    }

@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault-upstream-proxy
+  namespace: vault-access
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vault-upstream-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vault-upstream-proxy
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: nginx:1.31.8-alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - nginx
+            - -g
+            - daemon off;
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: vault-ca
+              mountPath: /etc/vault-ca
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: vault-upstream-proxy
+        - name: vault-ca
+          secret:
+            secretName: vault-ca
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-upstream-proxy
+  namespace: vault-access
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: vault-upstream-proxy
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

@@ -54,7 +54,11 @@ spec:
                   number: 8080
 ```
 
-The repository includes this pattern for the Argo CD web service. Read the generated MagicDNS address from the Ingress `ADDRESS` field. The operator provisions HTTPS certificates and a proxy for each standalone Ingress. This WSL cluster is a single node, so it starts without a multi-replica ProxyGroup; a ProxyGroup can later consolidate proxies if service count grows.
+The repository includes this pattern for the Argo CD web service. Vault is a systemd service outside K3s, so its L7 Ingress points to a small in-cluster NGINX bridge. The bridge verifies Vault's private CA and keeps TLS enabled for the connection to `vault.home.arpa:8200`; Tailscale terminates the external HTTPS connection with its MagicDNS certificate.
+
+The configured tailnet hostnames are `argocd` and `vault`. Their full `https://…ts.net` addresses appear in `kubectl get ingress -A` after the Operator has authenticated and issued certificates. Vault clients outside the cluster should set `VAULT_ADDR` to the full Tailscale HTTPS address. In-cluster VSO continues to connect directly to `https://vault.home.arpa:8200`.
+
+Read the generated MagicDNS address from the Ingress `ADDRESS` field. The operator provisions HTTPS certificates and a proxy for each standalone Ingress. This WSL cluster is a single node, so it starts without a multi-replica ProxyGroup; a ProxyGroup can later consolidate proxies if service count grows.
 
 ## References
 

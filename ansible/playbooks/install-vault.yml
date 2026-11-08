@@ -296,6 +296,32 @@
         'created' in vault_ca_secret.stdout or
         'configured' in vault_ca_secret.stdout
 
+    - name: Ensure the Vault ingress namespace exists
+      ansible.builtin.shell: >-
+        /usr/local/bin/k3s kubectl create namespace vault-access
+        --dry-run=client -o yaml |
+        /usr/local/bin/k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
+      register: vault_ingress_namespace
+      changed_when: >-
+        'created' in vault_ingress_namespace.stdout or
+        'configured' in vault_ingress_namespace.stdout
+
+    - name: Publish the public Vault CA certificate to the ingress namespace
+      ansible.builtin.shell: >-
+        /usr/local/bin/k3s kubectl create secret generic vault-ca
+        --namespace vault-access
+        --from-file=ca.crt={{ vault_ca_cert }}
+        --dry-run=client -o yaml |
+        /usr/local/bin/k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
+      register: vault_ingress_ca_secret
+      changed_when: >-
+        'created' in vault_ingress_ca_secret.stdout or
+        'configured' in vault_ingress_ca_secret.stdout
+
     - name: Report the Vault endpoint and initialization state
       ansible.builtin.debug:
         msg: >-

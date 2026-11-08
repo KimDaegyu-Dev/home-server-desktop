@@ -6,3 +6,4 @@ resources:
   - tailscale-credentials.yaml
   - tailscale-operator.yaml
   - tailscale-ingress.yaml
+  - vault-ingress.yaml

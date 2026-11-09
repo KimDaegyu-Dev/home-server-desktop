@@ -316,7 +316,6 @@ spec:
               volumeMounts:
                 - name: data
                   mountPath: /data
-                  readOnly: true
                 - name: backups
                   mountPath: /backups
                 - name: runtime-config

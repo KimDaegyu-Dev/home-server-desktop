@@ -31,6 +31,47 @@
       register: argocd_install
       changed_when: "'created' in argocd_install.stdout or 'configured' in argocd_install.stdout"
 
+    - name: Configure Argo CD for TLS termination at the Tailscale Ingress
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - patch
+          - configmap
+          - argocd-cmd-params-cm
+          - --namespace=argocd
+          - --type=merge
+          - --patch
+          - '{"data":{"server.insecure":"true"}}'
+      register: argocd_http_backend
+      changed_when: >-
+        'patched' in argocd_http_backend.stdout and
+        'no change' not in argocd_http_backend.stdout
+
+    - name: Restart Argo CD server to load its HTTP backend setting
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - restart
+          - deployment/argocd-server
+          - --namespace=argocd
+      when: argocd_http_backend.changed
+      changed_when: true
+
+    - name: Wait for Argo CD server rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/argocd-server
+          - --namespace=argocd
+          - --timeout=180s
+      changed_when: false
+
     - name: Apply the environment's root Application
       ansible.builtin.command:
         argv:

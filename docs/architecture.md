@@ -17,4 +17,6 @@ Git contains the repeatable configuration. Vault data, init keys, root tokens, k
 
 Ansible does not install the Vault server. Argo CD installs the HashiCorp Vault chart and manages its configuration. Vault remains manually initialized and Shamir-unsealed; Kubernetes auth is configured after initialization so Vault can use its in-cluster ServiceAccount and Kubernetes API Service. VSO then syncs narrowly scoped KV values into Kubernetes Secrets.
 
+The Tailscale Operator terminates HTTPS for the Argo CD and Vault Ingresses. Argo CD's backend therefore runs in insecure HTTP mode inside the cluster; the public-facing connection remains HTTPS over the tailnet. The `bootstrap-argocd.yml` playbook applies this server setting and restarts the server when it changes.
+
 K3s uses its bundled containerd runtime. Docker Desktop image cache and named volumes are not shared with K3s. App images must be published to a registry, and persistent data must be migrated using per-application backup and restore procedures.

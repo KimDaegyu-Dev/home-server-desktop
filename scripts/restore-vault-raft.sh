@@ -35,17 +35,33 @@ k3s kubectl cp "${snapshot_path}" vault/vault-0:/tmp/vault-raft-source.snap
 k3s kubectl exec -n vault vault-0 -- vault operator raft snapshot inspect /tmp/vault-raft-source.snap >/dev/null
 k3s kubectl exec -n vault vault-0 -- sh -c 'umask 077; vault operator init -key-shares=1 -key-threshold=1 -format=json > /tmp/vault-destination-init.json'
 
+key_file="$(mktemp /dev/shm/vault-unseal.XXXXXX)"
+token_file="$(mktemp /dev/shm/vault-root-token.XXXXXX)"
+chmod 0600 "${key_file}" "${token_file}"
+python3 - "${key_file}" "${token_file}" <<'PY'
+import json
+import subprocess
+import sys
+
+init_json = subprocess.check_output([
+    "k3s", "kubectl", "exec", "-n", "vault", "vault-0", "--",
+    "cat", "/tmp/vault-destination-init.json",
+])
+result = json.loads(init_json)
+for path, value in zip(sys.argv[1:], (result["unseal_keys_b64"][0], result["root_token"])):
+    with open(path, "w", encoding="utf-8") as secret_file:
+        secret_file.write(value)
+PY
+k3s kubectl cp "${key_file}" vault/vault-0:/tmp/vault-temporary-key
+k3s kubectl cp "${token_file}" vault/vault-0:/tmp/vault-temporary-root-token
+rm -f "${key_file}" "${token_file}"
+
 remote_restore_script='set -eu
-init_file=/tmp/vault-destination-init.json
-snapshot_file=/tmp/vault-raft-source.snap
-key="$(sed -n '\''/"unseal_keys_b64": \[/,/]/s/^[[:space:]]*"\([^"]*\)".*/\1/p'\'' "$init_file" | head -n 1)"
-token="$(sed -n '\''s/.*"root_token":[[:space:]]*"\([^"]*\)".*/\1/p'\'' "$init_file")"
-if [ -z "$key" ] || [ -z "$token" ]; then
-  echo "Could not read the temporary initialization output." >&2
-  exit 1
-fi
+trap "rm -f /tmp/vault-temporary-key /tmp/vault-temporary-root-token" EXIT
+key="$(cat /tmp/vault-temporary-key)"
+token="$(cat /tmp/vault-temporary-root-token)"
 vault operator unseal "$key" >/dev/null
-VAULT_TOKEN="$token" vault operator raft snapshot restore -force "$snapshot_file"
+VAULT_TOKEN="$token" vault operator raft snapshot restore -force /tmp/vault-raft-source.snap
 unset key token'
 
 k3s kubectl exec -n vault vault-0 -- sh -c "${remote_restore_script}"

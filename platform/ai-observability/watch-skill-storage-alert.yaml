@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: watch-skill-storage
+  namespace: monitoring
+spec:
+  groups:
+    - name: watch-skill.storage
+      rules:
+        - alert: WatchSkillPersistentVolumeNearlyFull
+          expr: (kubelet_volume_stats_used_bytes{namespace="watch-skill"} / kubelet_volume_stats_capacity_bytes{namespace="watch-skill"}) > 0.8
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Watch Skill storage volume is over 80% full
+            description: "PVC {{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace }} is {{ $value | humanizePercentage }} full. Review cached media and increase or clean storage before indexing more videos."

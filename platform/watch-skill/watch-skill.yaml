@@ -1,0 +1,404 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: watch-skill-data
+  namespace: watch-skill
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: watch-skill-backups
+  namespace: watch-skill
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: watch-skill
+  namespace: watch-skill
+  labels:
+    app.kubernetes.io/name: watch-skill
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: watch-skill
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: watch-skill
+    spec:
+      serviceAccountName: watch-skill-vault-auth
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: install-watch-skill
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          imagePullPolicy: IfNotPresent
+          command: [python3, -m, pip, install]
+          args:
+            - --disable-pip-version-check
+            - --no-cache-dir
+            - --require-hashes
+            - --target
+            - /opt/watch-skill/site
+            - -r
+            - /installer/requirements.lock
+          volumeMounts:
+            - name: python-packages
+              mountPath: /opt/watch-skill
+            - name: runtime-config
+              mountPath: /installer
+              readOnly: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+              ephemeral-storage: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+        - name: require-restored-index
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          command: [python3, -c]
+          args:
+            - import pathlib,sqlite3,sys; p=pathlib.Path('/data/index.db'); sys.exit(0 if p.is_file() and p.stat().st_size > 0 and sqlite3.connect(f'file:{p}?mode=ro',uri=True).execute('PRAGMA integrity_check').fetchone()[0] == 'ok' else 1)
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+      containers:
+        - name: watch-skill
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          imagePullPolicy: IfNotPresent
+          command: [/opt/watch-skill/site/bin/watch-skill]
+          args: [serve, --http, --host, 127.0.0.1, --port, "8747"]
+          env:
+            - name: PYTHONPATH
+              value: /opt/watch-skill/site
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: WATCHSKILL_DATA_DIR
+              value: /data
+            - name: WATCHSKILL_BIN_DIR
+              value: /data/bin
+            - name: WATCHSKILL_CACHE_MAX_BYTES
+              value: "2147483648"
+            - name: WATCHSKILL_VISION_STRONG_PROVIDER
+              value: custom
+            - name: WATCHSKILL_VISION_STRONG_MODEL
+              value: iq_3s
+            - name: WATCHSKILL_VISION_CHEAP_PROVIDER
+              value: custom
+            - name: WATCHSKILL_VISION_CHEAP_MODEL
+              value: iq_3s
+            - name: WATCHSKILL_CUSTOM_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: WATCHSKILL_CUSTOM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: watch-skill-credentials
+                  key: WATCHSKILL_CUSTOM_API_KEY
+          ports:
+            - name: mcp-internal
+              containerPort: 8747
+              protocol: TCP
+          volumeMounts:
+            - name: python-packages
+              mountPath: /opt/watch-skill
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - import socket; s=socket.create_connection(('127.0.0.1',8747),timeout=2); s.close()
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - import socket; s=socket.create_connection(('127.0.0.1',8747),timeout=2); s.close()
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - import socket; s=socket.create_connection(('127.0.0.1',8747),timeout=2); s.close()
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1500m
+              memory: 1536Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+        - name: mcp-auth-proxy
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          imagePullPolicy: IfNotPresent
+          command: [python3, /opt/runtime/auth-proxy.py]
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: WATCHSKILL_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: watch-skill-credentials
+                  key: WATCHSKILL_MCP_TOKEN
+          ports:
+            - name: mcp
+              containerPort: 8748
+              protocol: TCP
+          volumeMounts:
+            - name: runtime-config
+              mountPath: /opt/runtime
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: python-packages
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: runtime-config
+          configMap:
+            name: watch-skill-runtime
+            defaultMode: 0444
+            items:
+              - key: auth-proxy.py
+                path: auth-proxy.py
+              - key: backup-watch-skill.py
+                path: backup-watch-skill.py
+              - key: restore-watch-skill.py
+                path: restore-watch-skill.py
+              - key: requirements.lock
+                path: requirements.lock
+        - name: data
+          persistentVolumeClaim:
+            claimName: watch-skill-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: watch-skill
+  namespace: watch-skill
+  labels:
+    app.kubernetes.io/name: watch-skill
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: watch-skill
+  ports:
+    - name: mcp
+      port: 8748
+      targetPort: mcp
+      protocol: TCP
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: watch-skill-backup
+  namespace: watch-skill
+spec:
+  schedule: "47 3 * * *"
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+          containers:
+            - name: backup
+              image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+              imagePullPolicy: IfNotPresent
+              command: [python3, /runtime/backup-watch-skill.py]
+              env:
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                  readOnly: true
+                - name: backups
+                  mountPath: /backups
+                - name: runtime-config
+                  mountPath: /runtime
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+                readOnlyRootFilesystem: true
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: watch-skill-data
+            - name: backups
+              persistentVolumeClaim:
+                claimName: watch-skill-backups
+            - name: runtime-config
+              configMap:
+                name: watch-skill-runtime
+                defaultMode: 0444
+                items:
+                  - key: backup-watch-skill.py
+                    path: backup-watch-skill.py
+            - name: tmp
+              emptyDir:
+                sizeLimit: 1Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: watch-skill-access
+  namespace: watch-skill
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: watch-skill
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mcp
+      ports:
+        - protocol: TCP
+          port: 8748
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: litellm
+      ports:
+        - protocol: TCP
+          port: 4000
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443

@@ -99,6 +99,47 @@ with open(sys.argv[1], "w") as f: json.dump({"AI_MEMORY_AUTH_TOKEN": secrets.tok
 PY
 fi
 
+if vault_cmd kv get -format=json -mount=kv ai/watch-skill >"$tmp/watch-skill-current.json" 2>/dev/null; then
+  python3 - "$tmp/watch-skill-current.json" "$tmp/watch-skill-key.json" "$tmp/old-watch-skill-token" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f: values = json.load(f)["data"]["data"]
+key = values.get("WATCHSKILL_CUSTOM_API_KEY")
+if key not in (None, "pending-liteLLM-virtual-key") and (not isinstance(key, str) or not key.startswith("sk-")):
+    raise SystemExit("Existing Watch Skill LiteLLM credential is invalid; refusing to replace it.")
+with open(sys.argv[2], "w") as f: json.dump({"WATCHSKILL_CUSTOM_API_KEY": key or "pending-liteLLM-virtual-key"}, f)
+token = values.get("WATCHSKILL_MCP_TOKEN")
+if isinstance(token, str) and len(token) >= 32:
+    open(sys.argv[3], "w").write(token)
+PY
+else
+  python3 - "$tmp/watch-skill-key.json" <<'PY'
+import json, sys
+with open(sys.argv[1], "w") as f: json.dump({"WATCHSKILL_CUSTOM_API_KEY": "pending-liteLLM-virtual-key"}, f)
+PY
+fi
+
+if vault_cmd kv get -format=json -mount=kv mcp/watch-skill >"$tmp/watch-skill-mcp-current.json" 2>/dev/null; then
+  python3 - "$tmp/watch-skill-mcp-current.json" "$tmp/watch-skill-mcp.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f: values = json.load(f)["data"]["data"]
+token = values.get("WATCHSKILL_MCP_TOKEN")
+if not isinstance(token, str) or len(token) < 32:
+    raise SystemExit("Existing kv/mcp/watch-skill has no valid MCP token; refusing to replace partial data.")
+with open(sys.argv[2], "w") as f: json.dump({"WATCHSKILL_MCP_TOKEN": token}, f)
+PY
+elif [[ -s "$tmp/old-watch-skill-token" ]]; then
+  python3 - "$tmp/old-watch-skill-token" "$tmp/watch-skill-mcp.json" <<'PY'
+import json, sys
+token = open(sys.argv[1]).read().strip()
+with open(sys.argv[2], "w") as f: json.dump({"WATCHSKILL_MCP_TOKEN": token}, f)
+PY
+else
+  python3 - "$tmp/watch-skill-mcp.json" <<'PY'
+import json, secrets, sys
+with open(sys.argv[1], "w") as f: json.dump({"WATCHSKILL_MCP_TOKEN": secrets.token_urlsafe(48)}, f)
+PY
+fi
+
 if ! vault_cmd kv get -format=json -mount=kv authentik/sso-clients >"$tmp/sso-current.json" 2>/dev/null; then
   echo "Vault path kv/authentik/sso-clients is required before MCP SSO can be configured." >&2
   exit 1
@@ -120,10 +161,17 @@ cat >"$vault_policy_file" <<'POLICY'
 path "kv/data/mcp/searxng" { capabilities = ["read"] }
 path "kv/data/mcp/mcpproxy" { capabilities = ["read"] }
 path "kv/data/ai/ai-memory" { capabilities = ["read"] }
+path "kv/data/mcp/watch-skill" { capabilities = ["read"] }
 POLICY
 chmod 0600 "$vault_policy_file"
 
-for item in "$tmp/searxng.json:mcp/searxng" "$tmp/mcpproxy.json:mcp/mcpproxy" "$tmp/ai-memory.json:ai/ai-memory" "$tmp/sso-updated.json:authentik/sso-clients"; do
+watch_skill_policy_file="$tmp/watch-skill-vso.hcl"
+cat >"$watch_skill_policy_file" <<'POLICY'
+path "kv/data/ai/watch-skill" { capabilities = ["read"] }
+POLICY
+chmod 0600 "$watch_skill_policy_file"
+
+for item in "$tmp/searxng.json:mcp/searxng" "$tmp/watch-skill-mcp.json:mcp/watch-skill" "$tmp/mcpproxy.json:mcp/mcpproxy" "$tmp/ai-memory.json:ai/ai-memory" "$tmp/watch-skill-key.json:ai/watch-skill" "$tmp/sso-updated.json:authentik/sso-clients"; do
   payload_file="${item%%:*}"
   vault_path="${item#*:}"
   k3s kubectl cp "$payload_file" "vault/vault-0:$pod_payload" >/dev/null
@@ -132,6 +180,8 @@ done
 
 k3s kubectl cp "$vault_policy_file" "vault/vault-0:$pod_policy" >/dev/null
 vault_cmd policy write mcp-vso "$pod_policy" >/dev/null
+k3s kubectl cp "$watch_skill_policy_file" "vault/vault-0:$pod_policy" >/dev/null
+vault_cmd policy write watch-skill-vso "$pod_policy" >/dev/null
 vault_cmd write auth/kubernetes/role/searxng-vso \
   bound_service_account_names=search-vault-auth \
   bound_service_account_namespaces=search \
@@ -144,6 +194,10 @@ vault_cmd write auth/kubernetes/role/ai-memory-vso \
   bound_service_account_names=ai-memory-vault-auth \
   bound_service_account_namespaces=ai-memory \
   audience=vault token_policies=mcp-vso token_ttl=1h >/dev/null
+vault_cmd write auth/kubernetes/role/watch-skill-vso \
+  bound_service_account_names=watch-skill-vault-auth \
+  bound_service_account_namespaces=watch-skill \
+  audience=vault token_policies=watch-skill-vso token_ttl=1h >/dev/null
 
 if k3s kubectl -n authentik get vaultstaticsecret authentik-sso-clients >/dev/null 2>&1; then
   k3s kubectl -n authentik annotate vaultstaticsecret authentik-sso-clients "force-sync=$(date +%s)" --overwrite >/dev/null
@@ -161,5 +215,5 @@ if k3s kubectl -n authentik get vaultstaticsecret authentik-sso-clients >/dev/nu
   k3s kubectl -n authentik rollout status deployment/authentik-worker --timeout=180s >/dev/null
 fi
 
-echo "Stored MCP, SearXNG, ai-memory credentials, stable MCP OAuth signing key, and VSO roles in Vault."
-echo "Vault paths: kv/mcp/searxng, kv/mcp/mcpproxy, kv/ai/ai-memory, kv/authentik/sso-clients. Secret values were not printed."
+echo "Stored MCP, SearXNG, ai-memory, and Watch Skill bootstrap credentials, stable MCP OAuth signing key, and VSO roles in Vault."
+echo "Vault paths: kv/mcp/searxng, kv/mcp/watch-skill, kv/mcp/mcpproxy, kv/ai/ai-memory, kv/ai/watch-skill, kv/authentik/sso-clients. Secret values were not printed."

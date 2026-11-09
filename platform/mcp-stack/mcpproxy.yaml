@@ -15,7 +15,7 @@ spec:
       labels:
         app.kubernetes.io/name: mcpproxy
       annotations:
-        checksum-mcpproxy-config: "66f8a85b75b28e616410467212da9ccd3243981d8f4e0e61b165039e3c29e019"
+        checksum-mcpproxy-config: "d3c316fbc775f5510117454590c7276fe3acd787c541cbc924a8a473323cf851"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -76,6 +76,11 @@ spec:
                 secretKeyRef:
                   name: ai-memory-backend-credentials
                   key: AI_MEMORY_AUTH_TOKEN
+            - name: WATCHSKILL_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: watch-skill-backend-credentials
+                  key: WATCHSKILL_MCP_TOKEN
           volumeMounts:
             - name: bin
               mountPath: /opt/bin

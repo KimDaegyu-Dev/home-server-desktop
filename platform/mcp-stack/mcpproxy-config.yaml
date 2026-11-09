@@ -43,6 +43,12 @@ data:
         transport: streamable-http
         url: http://kanzo.kanzo.svc.cluster.local:4242/mcp
         auth: none
+      watchskill:
+        transport: streamable-http
+        url: http://watch-skill.watch-skill.svc.cluster.local:8748/mcp
+        auth: static
+        headers:
+          Authorization: Bearer ${WATCHSKILL_MCP_TOKEN}
       searxng:
         transport: stdio
         command: [python3, /opt/mcp-servers/searxng-mcp.py]
@@ -94,6 +100,9 @@ data:
         - list_tasks
         - next_task
         - update_task
+        - watch_video
+        - ask_video
+        - get_moment
       denied_tools: []
       approval_tools: []
       on_rug_pull: kill

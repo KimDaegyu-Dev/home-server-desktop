@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - strata-bridge-service.yaml
   - langfuse-storage-alert.yaml
+  - watch-skill-storage-alert.yaml
   - langfuse-ingress.yaml
   - litellm-ingress.yaml
 configMapGenerator:

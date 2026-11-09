@@ -6,6 +6,7 @@ metadata:
   labels:
     sourceType: helm
     serverSideApply: "true"
+    skipCrds: "true"
     stage: 50-monitoring-stack
   annotations:
     argocd.argoproj.io/sync-wave: "10"

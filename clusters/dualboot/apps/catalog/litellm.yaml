@@ -13,7 +13,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: ghcr.io/berriai/litellm-helm
+    repoURL: ghcr.io/berriai
     chart: litellm-helm
     targetRevision: "1.106.7"
     helm:

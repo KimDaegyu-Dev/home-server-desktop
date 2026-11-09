@@ -103,7 +103,18 @@ clickhouse_password="$(openssl rand -hex 32)"
 valkey_password="$(openssl rand -hex 32)"
 s3_user="$(openssl rand -hex 16)"
 s3_password="$(openssl rand -hex 32)"
-s3_config="$(S3_USER="$s3_user" S3_PASSWORD="$s3_password" python3 -c 'import json,os; print(json.dumps({"identities":[{"name":os.environ["S3_USER"],"credentials":[{"accessKey":os.environ["S3_USER"],"secretKey":os.environ["S3_PASSWORD"]}],"actions":["Admin","Read","Write","List","Tagging"]}]},separators=(",",":"))')"
+s3_config="$(S3_USER="$s3_user" S3_PASSWORD="$s3_password" python3 <<'PY'
+import json, os
+config = {
+    "identities": [{
+        "name": os.environ["S3_USER"],
+        "credentials": [{"accessKey": os.environ["S3_USER"], "secretKey": os.environ["S3_PASSWORD"]}],
+        "actions": ["Admin", "Read", "Write", "List", "Tagging"],
+    }]
+}
+print(json.dumps(config, separators=(",", ":")))
+PY
+)"
 langfuse_client="$(openssl rand -hex 32)"
 litellm_client="$(openssl rand -hex 32)"
 litellm_master="sk-$(openssl rand -hex 32)"

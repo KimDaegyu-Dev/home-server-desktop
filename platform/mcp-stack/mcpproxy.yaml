@@ -15,7 +15,7 @@ spec:
       labels:
         app.kubernetes.io/name: mcpproxy
       annotations:
-        checksum-mcpproxy-config: "d3c316fbc775f5510117454590c7276fe3acd787c541cbc924a8a473323cf851"
+        checksum-mcpproxy-config: "fd3fcc909b79561ca7f53ffff12eca5cf2aeec4a05284cd1422ea1b624917804"
     spec:
       automountServiceAccountToken: false
       securityContext:

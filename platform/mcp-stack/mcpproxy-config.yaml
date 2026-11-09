@@ -43,6 +43,8 @@ data:
         transport: streamable-http
         url: http://kanzo.kanzo.svc.cluster.local:4242/mcp
         auth: none
+        headers:
+          Host: localhost:4242
       watchskill:
         transport: streamable-http
         url: http://watch-skill.watch-skill.svc.cluster.local:8748/mcp
@@ -83,7 +85,6 @@ data:
         - memory_explore
         - memory_read_page
         - memory_read_session_observations
-        - memory_install_self_routing
         - query_graph
         - get_node
         - get_neighbors

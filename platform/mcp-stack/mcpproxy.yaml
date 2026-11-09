@@ -81,6 +81,11 @@ spec:
                 secretKeyRef:
                   name: watch-skill-backend-credentials
                   key: WATCHSKILL_MCP_TOKEN
+            - name: AGENT_BROWSER_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-agent-browser-credentials
+                  key: AGENT_BROWSER_MCP_TOKEN
           volumeMounts:
             - name: bin
               mountPath: /opt/bin

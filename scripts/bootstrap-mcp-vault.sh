@@ -162,6 +162,7 @@ path "kv/data/mcp/searxng" { capabilities = ["read"] }
 path "kv/data/mcp/mcpproxy" { capabilities = ["read"] }
 path "kv/data/ai/ai-memory" { capabilities = ["read"] }
 path "kv/data/mcp/watch-skill" { capabilities = ["read"] }
+path "kv/data/mcp/agent-browser" { capabilities = ["read"] }
 POLICY
 chmod 0600 "$vault_policy_file"
 

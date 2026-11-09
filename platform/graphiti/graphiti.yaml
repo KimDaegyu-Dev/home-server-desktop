@@ -1,0 +1,419 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: graphiti
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: graphiti-db
+  namespace: graphiti
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: graphiti-model-cache
+  namespace: graphiti
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: graphiti-backups
+  namespace: graphiti
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphiti-db
+  namespace: graphiti
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: graphiti-db
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: graphiti-db
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: falkordb
+          image: falkordb/falkordb-server:6.0.0@sha256:d90c2bccbd28fdae42aafd93c618a4347a4ee311c0e7c3b9262def0f463ee567
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: FALKORDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: graphiti-credentials
+                  key: FALKORDB_PASSWORD
+            - name: REDIS_ARGS
+              value: --requirepass $(FALKORDB_PASSWORD) --appendonly yes --appendfsync everysec
+            - name: FALKORDB_ARGS
+              value: THREAD_COUNT 2 CACHE_SIZE 10 TIMEOUT_MAX 30000 TIMEOUT_DEFAULT 10000
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          startupProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: graphiti-db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphiti-db
+  namespace: graphiti
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: graphiti-db
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphiti
+  namespace: graphiti
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: graphiti
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: graphiti
+    spec:
+      serviceAccountName: graphiti-vault-auth
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: graphiti
+          image: zepai/knowledge-graph-mcp:1.1.3-graphiti-0.31.2-standalone@sha256:288b79e987adc71d1f55f9f44d9a62fb0422a80eb6870b0e32abb9ad85c12d69
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: graphiti-credentials
+                  key: OPENAI_API_KEY
+            - name: FALKORDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: graphiti-credentials
+                  key: FALKORDB_PASSWORD
+            - name: OPENAI_API_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: MODEL_NAME
+              value: iq_3s
+            - name: FALKORDB_URI
+              value: redis://graphiti-db.graphiti.svc.cluster.local:6379
+            - name: GRAPHITI_GROUP_ID
+              value: home-server-candidates
+            - name: GRAPHITI_TELEMETRY_ENABLED
+              value: "false"
+            - name: SEMAPHORE_LIMIT
+              value: "1"
+            - name: HF_HOME
+              value: /model-cache/huggingface
+            - name: XDG_CACHE_HOME
+              value: /model-cache
+            - name: HOME
+              value: /model-cache/home
+          ports:
+            - name: http
+              containerPort: 8000
+          volumeMounts:
+            - name: config
+              mountPath: /app/mcp/config/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: model-cache
+              mountPath: /model-cache
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              cpu: 2
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: config
+          configMap:
+            name: graphiti-config
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: graphiti-model-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphiti
+  namespace: graphiti
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: graphiti
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: graphiti-server-restrict
+  namespace: graphiti
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: graphiti
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mcp
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mcpproxy
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: graphiti-db
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: litellm
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: litellm
+      ports:
+        - protocol: TCP
+          port: 4000
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: graphiti-db-restrict
+  namespace: graphiti
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: graphiti-db
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: graphiti
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: graphiti-backup
+      ports:
+        - protocol: TCP
+          port: 6379
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: graphiti-backup-restrict
+  namespace: graphiti
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: graphiti-backup
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: graphiti-db
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: graphiti-backup
+  namespace: graphiti
+spec:
+  schedule: "17 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: graphiti-backup
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: graphiti-backup
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          containers:
+            - name: backup
+              image: falkordb/falkordb-server:6.0.0@sha256:d90c2bccbd28fdae42aafd93c618a4347a4ee311c0e7c3b9262def0f463ee567
+              imagePullPolicy: IfNotPresent
+              command: [/bin/sh, -ec]
+              args:
+                - >-
+                  export REDISCLI_AUTH="$FALKORDB_PASSWORD";
+                  stamp="$(date -u +%Y%m%dT%H%M%SZ)";
+                  redis-cli -h graphiti-db -p 6379 --no-auth-warning --rdb "/tmp/graphiti-${stamp}.rdb";
+                  test -s "/tmp/graphiti-${stamp}.rdb";
+                  tar -czf "/backups/graphiti-${stamp}.rdb.tar.gz" -C /tmp "graphiti-${stamp}.rdb";
+                  sha256sum "/backups/graphiti-${stamp}.rdb.tar.gz" > "/backups/graphiti-${stamp}.rdb.tar.gz.sha256";
+                  find /backups -name 'graphiti-*.rdb.tar.gz*' -type f -mtime +14 -delete
+              env:
+                - name: FALKORDB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: graphiti-credentials
+                      key: FALKORDB_PASSWORD
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: graphiti-backups

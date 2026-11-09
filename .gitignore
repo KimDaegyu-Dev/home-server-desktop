@@ -12,6 +12,7 @@ data/**
 *.sqlite
 *.db
 .venv/
+.codex/
 .ansible/
 __pycache__/
 *.retry

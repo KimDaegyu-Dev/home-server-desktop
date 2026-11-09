@@ -1,0 +1,44 @@
+server:
+  transport: http
+  host: 0.0.0.0
+  port: 8000
+
+llm:
+  provider: openai
+  model: ${MODEL_NAME:iq_3s}
+  max_tokens: 2048
+  structured_output_mode: json_object
+  providers:
+    openai:
+      api_key: ${OPENAI_API_KEY}
+      api_url: ${OPENAI_API_URL:http://litellm.litellm.svc.cluster.local:4000/v1}
+
+embedder:
+  provider: sentence_transformers
+  model: all-MiniLM-L6-v2
+  dimensions: 384
+
+database:
+  provider: falkordb
+  providers:
+    falkordb:
+      uri: ${FALKORDB_URI:redis://graphiti-db.graphiti.svc.cluster.local:6379}
+      password: ${FALKORDB_PASSWORD}
+      database: home_server_candidates
+
+graphiti:
+  group_id: home-server-candidates
+  user_id: home-server
+  entity_types:
+    - name: Preference
+      description: User-approved preferences; generated or inferred preferences remain candidates.
+    - name: Requirement
+      description: Explicit project requirements, preserving source and timestamp.
+    - name: Procedure
+      description: Procedures supported by a cited source.
+    - name: Event
+      description: Time-bounded event with source and event time.
+    - name: Document
+      description: Source document or repository artifact.
+    - name: Topic
+      description: Topic only when a more specific entity type does not fit.

@@ -104,6 +104,14 @@
       register: litellm_headroom_image
       changed_when: "'Imported ' in litellm_headroom_image.stdout"
 
+    - name: Build and import the pinned Agent Browser image before Argo sync
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - "{{ home_repo_root }}/scripts/build-agent-browser.sh"
+      register: agent_browser_image
+      changed_when: "'Imported ' in agent_browser_image.stdout"
+
     - name: Apply the environment's root Application
       ansible.builtin.command:
         argv:

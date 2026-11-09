@@ -51,6 +51,16 @@ data:
         auth: static
         headers:
           Authorization: Bearer ${WATCHSKILL_MCP_TOKEN}
+      graphiti:
+        transport: streamable-http
+        url: http://graphiti.graphiti.svc.cluster.local:8000/mcp/
+        auth: none
+      agentbrowser:
+        transport: streamable-http
+        url: http://agent-browser.agent-browser.svc.cluster.local:8080/mcp
+        auth: static
+        headers:
+          Authorization: Bearer ${AGENT_BROWSER_MCP_TOKEN}
       searxng:
         transport: stdio
         command: [python3, /opt/mcp-servers/searxng-mcp.py]
@@ -104,6 +114,39 @@ data:
         - watch_video
         - ask_video
         - get_moment
+        - graphiti_search_nodes
+        - graphiti_search_memory_facts
+        - graphiti_get_episode_entities
+        - graphiti_get_entity_edge
+        - graphiti_get_episodes
+        - graphiti_get_status
+        - agentbrowser_agent_browser_open
+        - agentbrowser_agent_browser_read
+        - agentbrowser_agent_browser_back
+        - agentbrowser_agent_browser_forward
+        - agentbrowser_agent_browser_reload
+        - agentbrowser_agent_browser_snapshot
+        - agentbrowser_agent_browser_click
+        - agentbrowser_agent_browser_fill
+        - agentbrowser_agent_browser_type
+        - agentbrowser_agent_browser_press
+        - agentbrowser_agent_browser_check
+        - agentbrowser_agent_browser_uncheck
+        - agentbrowser_agent_browser_select
+        - agentbrowser_agent_browser_scroll
+        - agentbrowser_agent_browser_wait_ms
+        - agentbrowser_agent_browser_wait_for_selector
+        - agentbrowser_agent_browser_wait_for_text
+        - agentbrowser_agent_browser_wait_for_load
+        - agentbrowser_agent_browser_screenshot
+        - agentbrowser_agent_browser_get_text
+        - agentbrowser_agent_browser_get_url
+        - agentbrowser_agent_browser_get_title
+        - agentbrowser_agent_browser_tab_new
+        - agentbrowser_agent_browser_tab_list
+        - agentbrowser_agent_browser_tab_switch
+        - agentbrowser_agent_browser_tab_close
+        - agentbrowser_agent_browser_close
       denied_tools: []
       approval_tools: []
       on_rug_pull: kill

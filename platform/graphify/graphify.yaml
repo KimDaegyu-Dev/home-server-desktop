@@ -32,7 +32,7 @@ spec:
       labels:
         app.kubernetes.io/name: graphify
       annotations:
-        graphify.io/source-revision: "7d3a92a3ad8fc2a2f6a258f1918d6ae16f31241d"
+        graphify.io/source-revision: "d8dd891b4d6af6e8fcfb85ac0939b168af33a5bf"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -53,7 +53,7 @@ spec:
               exec python3 /opt/graphify/graphify-build.py
           env:
             - name: GRAPHIFY_SOURCE_REVISION
-              value: 7d3a92a3ad8fc2a2f6a258f1918d6ae16f31241d
+              value: d8dd891b4d6af6e8fcfb85ac0939b168af33a5bf
             - name: PIP_NO_CACHE_DIR
               value: "1"
             - name: PYTHONDONTWRITEBYTECODE

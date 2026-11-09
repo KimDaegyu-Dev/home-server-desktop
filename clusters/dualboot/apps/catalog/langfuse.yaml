@@ -49,7 +49,7 @@ spec:
                   name: langfuse-auth
                   key: AUTH_AUTHENTIK_CLIENT_SECRET
             - name: AUTH_AUTHENTIK_ISSUER
-              value: https://authentik.tail5389e9.ts.net/application/o/langfuse/
+              value: https://authentik.tail5389e9.ts.net/application/o/langfuse
           ingress:
             enabled: false
           web:

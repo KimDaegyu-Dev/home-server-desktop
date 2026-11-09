@@ -14,6 +14,12 @@ command -v k3s >/dev/null || { echo "Run inside the K3s host or install k3s CLI.
 command -v curl >/dev/null || { echo "curl is required." >&2; exit 1; }
 
 k3s kubectl kustomize "$repo_root/platform/mcp-stack" >/dev/null
+config_hash="$(sha256sum "$repo_root/platform/mcp-stack/mcpproxy-config.yaml" | awk '{print $1}')"
+declared_hash="$(sed -n 's/^[[:space:]]*checksum-mcpproxy-config: "\([0-9a-f]*\)"/\1/p' "$repo_root/platform/mcp-stack/mcpproxy.yaml")"
+[[ "$config_hash" == "$declared_hash" ]] || {
+    echo "MCPProxy config checksum annotation is stale; update mcpproxy.yaml." >&2
+    exit 1
+}
 python3 - "$repo_root/platform/mcp-stack/searxng-mcp.py" <<'PY'
 import ast, json, subprocess, sys
 path = sys.argv[1]

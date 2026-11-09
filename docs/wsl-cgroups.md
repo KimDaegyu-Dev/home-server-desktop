@@ -14,7 +14,7 @@ Expected output: `cgroup2fs`.
 
 ## 메모리 회수
 
-`wsl/.wslconfig`는 `[experimental] autoMemoryReclaim=gradual`을 설정합니다. 이는 WSL 안에서 사용하지 않는 파일 캐시를 천천히 Windows로 반환해, Windows에서 Strata 추론 모델을 실행할 때 캐시가 메모리를 오래 점유하지 않게 합니다. Kubernetes 파드의 실제 작업 메모리나 모델 메모리 자체에는 상한을 두지 않습니다.
+`wsl/.wslconfig`는 WSL VM의 최대 메모리를 32GB로 제한하고 `[experimental] autoMemoryReclaim=gradual`을 설정합니다. 이는 현재 K3s 노드의 약 14GiB 사용량에 여유를 두면서 WSL이 메모리를 계속 키우는 것을 막고, 사용하지 않는 파일 캐시는 Windows로 천천히 반환합니다. 이 제한은 Windows 호스트의 모든 WSL2 배포판에 적용됩니다. Kubernetes에서 실제로 사용하는 메모리와 Strata 모델 메모리 자체를 제한하지는 않습니다.
 
 설정을 바꾼 뒤 WSL VM이 완전히 재시작되어야 적용됩니다. `wsl --shutdown`은 모든 WSL 배포판을 종료하므로 K3s 점검 시간에 실행해야 합니다. 재기동 후 Vault는 Shamir 방식으로 수동 unseal합니다.
 

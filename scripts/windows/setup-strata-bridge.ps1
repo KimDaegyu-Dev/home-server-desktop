@@ -80,6 +80,9 @@ while ($listener.IsListening) {
     $context = $null
     $request = $null
     $response = $null
+    $bodyStream = $null
+    $upstreamStream = $null
+    $responseStarted = $false
     try {
         $context = $listener.GetContext()
         if ($context.Request.Url.AbsolutePath -eq '/healthz') {
@@ -107,9 +110,33 @@ while ($listener.IsListening) {
             $context.Response.Close()
             continue
         }
+        $requestBytes = [byte[]]@()
+        $requestTooLarge = $false
+        if ($context.Request.HasEntityBody) {
+            $bodyStream = [IO.MemoryStream]::new()
+            $buffer = [byte[]]::new(65536)
+            while (($read = $context.Request.InputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                if (($bodyStream.Length + $read) -gt 33554432) {
+                    $context.Response.StatusCode = 413
+                    $context.Response.Close()
+                    $requestTooLarge = $true
+                    break
+                }
+                $bodyStream.Write($buffer, 0, $read)
+            }
+            $requestBytes = $bodyStream.ToArray()
+        }
+        if ($requestTooLarge) { continue }
+        $isStreaming = $false
+        if ($context.Request.ContentType -match 'application/json' -and $requestBytes.Length -gt 0) {
+            try {
+                $requestPayload = [Text.Encoding]::UTF8.GetString($requestBytes) | ConvertFrom-Json
+                $isStreaming = $requestPayload.stream -eq $true
+            } catch { }
+        }
         $target = [Uri]::new("http://127.0.0.1:8081$($context.Request.Url.PathAndQuery)")
         $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new($context.Request.HttpMethod), $target)
-        if ($context.Request.HasEntityBody) { $request.Content = [Net.Http.StreamContent]::new($context.Request.InputStream) }
+        if ($context.Request.HasEntityBody) { $request.Content = [Net.Http.ByteArrayContent]::new($requestBytes) }
         foreach ($headerName in $context.Request.Headers.AllKeys) {
             if ($headerName -in @('Authorization','Host','Connection','Transfer-Encoding','Content-Length')) { continue }
             $headerValue = $context.Request.Headers[$headerName]
@@ -117,7 +144,10 @@ while ($listener.IsListening) {
                 [void]$request.Content.Headers.TryAddWithoutValidation($headerName, $headerValue)
             }
         }
-        $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $completionOption = if ($isStreaming) { [Net.Http.HttpCompletionOption]::ResponseHeadersRead } else { [Net.Http.HttpCompletionOption]::ResponseContentRead }
+        $response = $client.SendAsync($request, $completionOption).GetAwaiter().GetResult()
+        $responseBytes = $null
+        if (-not $isStreaming) { $responseBytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult() }
         $context.Response.StatusCode = [int]$response.StatusCode
         foreach ($header in $response.Headers) {
             if ($header.Key -notin @('Transfer-Encoding','Connection','Keep-Alive','Date','Server')) { $context.Response.Headers[$header.Key] = [string]::Join(',', $header.Value) }
@@ -126,15 +156,35 @@ while ($listener.IsListening) {
             if ($header.Key -eq 'Content-Type') { $context.Response.ContentType = [string]::Join(',', $header.Value); continue }
             if ($header.Key -notin @('Transfer-Encoding','Connection','Keep-Alive','Content-Length')) { $context.Response.Headers[$header.Key] = [string]::Join(',', $header.Value) }
         }
-        $contentLength = $response.Content.Headers.ContentLength
-        if ($null -ne $contentLength) { $context.Response.ContentLength64 = [long]$contentLength }
-        else { $context.Response.SendChunked = $true }
-        $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
-        $stream.CopyToAsync($context.Response.OutputStream).GetAwaiter().GetResult()
+        if ($isStreaming) {
+            $context.Response.SendChunked = $true
+            $responseStarted = $true
+            $upstreamStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+            $upstreamStream.CopyToAsync($context.Response.OutputStream).GetAwaiter().GetResult()
+        } else {
+            $context.Response.ContentLength64 = [long]$responseBytes.Length
+            $responseStarted = $true
+            if ($responseBytes.Length -gt 0) { $context.Response.OutputStream.Write($responseBytes, 0, $responseBytes.Length) }
+        }
+        $context.Response.Close()
     } catch {
         try { Add-Content -LiteralPath $logPath -Value "$(Get-Date -Format o) $($_.Exception.GetType().FullName): $($_.Exception.Message)" -Encoding UTF8 } catch {}
-        if ($null -ne $context) { try { $context.Response.StatusCode = 502; $context.Response.Close() } catch {} }
+        if ($null -ne $context) {
+            try {
+                if (-not $responseStarted) {
+                    $errorBytes = [Text.Encoding]::UTF8.GetBytes('{"error":{"type":"bridge_upstream_error","message":"The upstream response was incomplete."}}')
+                    $context.Response.StatusCode = 502
+                    $context.Response.ContentType = 'application/json; charset=utf-8'
+                    $context.Response.ContentLength64 = [long]$errorBytes.Length
+                    $responseStarted = $true
+                    $context.Response.OutputStream.Write($errorBytes, 0, $errorBytes.Length)
+                }
+                $context.Response.Close()
+            } catch {}
+        }
     } finally {
+        if ($null -ne $upstreamStream) { $upstreamStream.Dispose() }
+        if ($null -ne $bodyStream) { $bodyStream.Dispose() }
         if ($null -ne $response) { $response.Dispose() }
         if ($null -ne $request) { $request.Dispose() }
     }
@@ -159,7 +209,7 @@ $deadline = (Get-Date).AddSeconds(20)
 $bridgeReady = $false
 do {
     Start-Sleep -Milliseconds 500
-    try { $bridgeReady = (Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 2).StatusCode -eq 200 } catch { }
+    try { $bridgeReady = (Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch { }
 } while (-not $bridgeReady -and (Get-Date) -lt $deadline)
 if (-not $bridgeReady) { throw "Bridge did not become healthy. Check $logPath." }
 

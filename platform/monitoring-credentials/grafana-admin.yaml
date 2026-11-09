@@ -1,0 +1,18 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: grafana-admin
+  namespace: monitoring
+spec:
+  vaultAuthRef: monitoring
+  mount: kv
+  path: monitoring/grafana
+  type: kv-v2
+  refreshAfter: 1h
+  hmacSecretData: true
+  destination:
+    create: true
+    name: grafana-admin
+    overwrite: true
+    transformation:
+      excludeRaw: true

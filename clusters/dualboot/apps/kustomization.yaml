@@ -12,3 +12,6 @@ resources:
   - authentik-postgresql.yaml
   - authentik.yaml
   - authentik-ingress.yaml
+  - monitoring-credentials.yaml
+  - monitoring-stack.yaml
+  - monitoring-ingress.yaml

@@ -4,6 +4,8 @@ resources:
   - langfuse-exporter-secret.yaml
   - strata-bridge-service.yaml
   - langfuse-storage-alert.yaml
+  - langfuse-ingress.yaml
+  - litellm-ingress.yaml
 configMapGenerator:
   - name: grafana-ai-dashboard
     namespace: monitoring

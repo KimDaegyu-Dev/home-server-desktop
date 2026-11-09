@@ -7,5 +7,3 @@ resources:
   - grafana.yaml
   - prometheus.yaml
   - grafana-mcp.yaml
-  - langfuse.yaml
-  - litellm.yaml

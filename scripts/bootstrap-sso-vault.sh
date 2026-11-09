@@ -114,7 +114,7 @@ if [[ "${mode}" == "rotate-secrets" ]]; then
   vault_cmd kv put -mount=kv authentik/sso-clients "@${pod_clients}" >/dev/null
   vault_cmd kv put -mount=kv monitoring/grafana-oidc "@${pod_grafana}" >/dev/null
   echo "Rotated the Authentik OIDC client secrets in Vault."
-  exit 0
+  mode="all"
 fi
 
 if vault_cmd kv metadata get -mount=kv authentik/sso-clients >/dev/null 2>&1; then
@@ -206,6 +206,31 @@ chmod 0600 "${argocd_patch_file}"
 printf '%s' "${argocd_secret}" | python3 -c 'import json,sys; json.dump({"stringData":{"oidc.authentik.clientSecret":sys.stdin.read()}},open(sys.argv[1],"w"))' "${argocd_patch_file}"
 k3s kubectl -n argocd patch secret argocd-secret --type=merge --patch-file="${argocd_patch_file}" >/dev/null
 
+for item in "authentik authentik-sso-clients authentik-sso-clients" "monitoring grafana-oidc grafana-oidc"; do
+  read -r namespace secret resource <<<"${item}"
+  k3s kubectl -n "${namespace}" delete secret "${secret}" --ignore-not-found >/dev/null
+  ready=""
+  for _ in {1..60}; do
+    ready="$(k3s kubectl -n "${namespace}" get vaultstaticsecret "${resource}" -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+    if [[ "${ready}" == "True" ]] && k3s kubectl -n "${namespace}" get secret "${secret}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+  if [[ "${ready}" != "True" ]] || ! k3s kubectl -n "${namespace}" get secret "${secret}" >/dev/null 2>&1; then
+    echo "Vault Secrets Operator did not refresh ${namespace}/${secret}." >&2
+    exit 1
+  fi
+done
+
+k3s kubectl -n authentik rollout restart deployment/authentik-worker >/dev/null
+k3s kubectl -n authentik rollout status deployment/authentik-worker --timeout=120s >/dev/null
+k3s kubectl -n authentik exec deployment/authentik-worker -- python manage.py shell -c 'import os; from authentik.providers.oauth2.models import OAuth2Provider; pairs=[("grafana","AUTHENTIK_OIDC_GRAFANA_CLIENT_SECRET"),("argocd","AUTHENTIK_OIDC_ARGOCD_CLIENT_SECRET"),("vault","AUTHENTIK_OIDC_VAULT_CLIENT_SECRET")]; [(setattr(p,"client_secret",os.environ[env]),p.save()) for client,env in pairs for p in [OAuth2Provider.objects.get(client_id=client)]]' >/dev/null
+k3s kubectl -n monitoring rollout restart deployment/monitoring-grafana >/dev/null
+k3s kubectl -n monitoring rollout status deployment/monitoring-grafana --timeout=180s >/dev/null
+k3s kubectl -n argocd rollout restart deployment/argocd-server >/dev/null
+k3s kubectl -n argocd rollout status deployment/argocd-server --timeout=180s >/dev/null
+
 echo "Stored Authentik OIDC client secrets in Vault, configured Vault OIDC, and provisioned Argo CD's OIDC secret."
-echo "The Authentik and Grafana OAuth clients are reconciled by the GitOps blueprint and Vault Secrets Operator."
+echo "Refreshed the Authentik providers, Grafana, and Argo CD from Vault-backed OIDC secrets."
 echo "Vault retains its local token login as a recovery path."

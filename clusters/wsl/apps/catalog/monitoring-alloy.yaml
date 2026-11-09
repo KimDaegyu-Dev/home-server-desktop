@@ -50,8 +50,8 @@ spec:
 
               otelcol.auth.basic "langfuse" {
                 client_auth {
-                  username = sys.env("LANGFUSE_PUBLIC_KEY")
-                  password = sys.env("LANGFUSE_SECRET_KEY")
+                  username = coalesce(sys.env("LANGFUSE_PUBLIC_KEY"), "pending-vault-sync")
+                  password = coalesce(sys.env("LANGFUSE_SECRET_KEY"), "pending-vault-sync")
                 }
               }
 

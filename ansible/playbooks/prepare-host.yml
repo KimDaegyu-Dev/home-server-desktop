@@ -22,6 +22,38 @@
         update_cache: true
         cache_valid_time: 3600
 
+    - name: Persist a 1500-byte WSL virtual NIC MTU before K3s starts
+      when: home_environment == "wsl"
+      block:
+        - name: Install the WSL network MTU systemd unit
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/home-server-wsl-mtu.service
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              [Unit]
+              Description=Set WSL2 virtual NIC MTU for Kubernetes Tailscale ingress
+              Wants=network-online.target
+              After=network-online.target
+              Before=k3s.service
+
+              [Service]
+              Type=oneshot
+              ExecStart=/usr/sbin/ip link set dev eth0 mtu 1500
+              RemainAfterExit=yes
+
+              [Install]
+              WantedBy=multi-user.target
+          register: wsl_mtu_unit
+
+        - name: Enable and apply the WSL network MTU unit
+          ansible.builtin.systemd_service:
+            name: home-server-wsl-mtu.service
+            enabled: true
+            state: started
+            daemon_reload: true
+
     - name: Create the K3s local persistent-volume directory
       ansible.builtin.file:
         path: "{{ k3s_storage_path }}"

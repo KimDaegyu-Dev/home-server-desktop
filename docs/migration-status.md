@@ -18,6 +18,7 @@ Updated: 2026-11-09
 - The old systemd Vault package and service are removed, along with `/var/lib/vault`, `/etc/vault.d`, the old CoreDNS/host aliases, TLS bridge, and `vault-access` namespace. The guarded Ansible playbook completed successfully after checking Vault unsealed status, VSO readiness, and the new Ingress address.
 - Auto Unseal is not configured. Vault continues to use Shamir 3-of-5 and requires manual unseal after a Vault pod or WSL restart.
 - VSO connects to `http://vault.vault.svc:8200`; the Vault Ingress points directly to the in-cluster Service. Argo CD has pruned the former NGINX bridge and disabled Vault Injector resources.
+- A WSL2 MTU of 1280 caused Tailscale HTTPS handshakes to time out even though ping and backend checks worked. `prepare-host.yml` now enables `home-server-wsl-mtu.service` to set WSL `eth0` to 1500 before K3s starts; Flannel and the Tailscale proxy Pods use MTU 1450. From Windows, both MagicDNS Ingress URLs now return HTTP 200.
 - The protected Raft snapshot and original init material remain outside Git at the paths above. See [`vault.md`](vault.md) for the migration sequence and recovery details; do not repeat the restore against the active cluster.
 
 ## Tailscale prerequisite

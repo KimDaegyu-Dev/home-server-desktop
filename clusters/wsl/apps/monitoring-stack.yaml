@@ -71,3 +71,4 @@ spec:
       prune: false
     syncOptions:
       - CreateNamespace=true
+      - ServerSideApply=true

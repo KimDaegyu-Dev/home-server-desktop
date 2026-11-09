@@ -16,7 +16,6 @@ if not (source / "index.db").is_file() or (source / "index.db").stat().st_size =
 
 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 backup_dir.mkdir(parents=True, exist_ok=True)
-os.chmod(backup_dir, 0o700)
 final_path = backup_dir / f"watch-skill-{stamp}.tar.gz"
 
 with tempfile.TemporaryDirectory(prefix="watch-skill-backup-", dir="/tmp") as tmp_name:

@@ -10,6 +10,7 @@ $ruleName = 'HomeServer-Strata-Bridge-WSL'
 $installDir = Join-Path $env:ProgramData 'HomeServer\StrataBridge'
 $tokenPath = Join-Path $installDir 'token.xml'
 $serverPath = Join-Path $installDir 'bridge.ps1'
+$logPath = Join-Path $installDir 'bridge.log'
 
 $wslAddressOutput = & wsl.exe -d Ubuntu -- ip -o -4 addr show dev eth0 scope global
 $wslExitCode = $LASTEXITCODE
@@ -48,7 +49,7 @@ $token | Export-Clixml -LiteralPath $tokenPath
 
 $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existingTask -and $existingTask.State -eq 'Running') {
-    Stop-ScheduledTask -TaskName $taskName
+    Stop-ScheduledTask -TaskName $taskName -Confirm:$false
     $stopDeadline = (Get-Date).AddSeconds(10)
     do {
         Start-Sleep -Milliseconds 200
@@ -87,7 +88,15 @@ while ($listener.IsListening) {
         }
         $authorization = $context.Request.Headers['Authorization']
         $provided = if ($authorization -match '^Bearer (.+)$') { [Text.Encoding]::UTF8.GetBytes($Matches[1]) } else { [byte[]]@() }
-        if ($provided.Length -ne $expected.Length -or -not [Security.Cryptography.CryptographicOperations]::FixedTimeEquals($provided, $expected)) {
+        $authorized = $false
+        if ($provided.Length -eq $expected.Length) {
+            $difference = 0
+            for ($index = 0; $index -lt $expected.Length; $index++) {
+                $difference = $difference -bor ($provided[$index] -bxor $expected[$index])
+            }
+            $authorized = $difference -eq 0
+        }
+        if (-not $authorized) {
             $context.Response.StatusCode = 401
             $context.Response.Close()
             continue

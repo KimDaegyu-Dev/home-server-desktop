@@ -40,10 +40,20 @@ spec:
                 }
               }
 
+              local.file "langfuse_public_key" {
+                filename  = "/etc/alloy/langfuse-secrets/publicKey"
+                is_secret = true
+              }
+
+              local.file "langfuse_secret_key" {
+                filename  = "/etc/alloy/langfuse-secrets/secretKey"
+                is_secret = true
+              }
+
               otelcol.auth.basic "langfuse" {
                 client_auth {
-                  username_file = "/etc/alloy/langfuse-secrets/publicKey"
-                  password_file = "/etc/alloy/langfuse-secrets/secretKey"
+                  username = local.file.langfuse_public_key.content
+                  password = local.file.langfuse_secret_key.content
                 }
               }
 

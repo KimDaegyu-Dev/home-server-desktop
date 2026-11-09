@@ -1,0 +1,128 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-memory-data
+  namespace: ai-memory
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-memory
+  namespace: ai-memory
+  labels:
+    app.kubernetes.io/name: ai-memory
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-memory
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-memory
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: require-restored-source
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          command: [python3, -c]
+          args:
+            - import os,sys; sys.exit(0 if os.path.getsize('/data/db/memory.sqlite') > 0 and all(os.path.isdir('/data/'+name) for name in ('wiki','models')) else 1)
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+      containers:
+        - name: ai-memory
+          image: docker.io/akitaonrails/ai-memory@sha256:6d107f95f7c4a79d3b2de789baf2013a3b20ddabdf12da83ca4c56f85b84b0c8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 49374
+              protocol: TCP
+          env:
+            - name: AI_MEMORY_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-memory-credentials
+                  key: AI_MEMORY_AUTH_TOKEN
+            - name: AI_MEMORY_ALLOWED_HOSTS
+              value: ai-memory,ai-memory.ai-memory.svc,ai-memory.ai-memory.svc.cluster.local,localhost,127.0.0.1
+            - name: RUST_LOG
+              value: warn
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 192Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ai-memory-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-memory
+  namespace: ai-memory
+  labels:
+    app.kubernetes.io/name: ai-memory
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ai-memory
+  ports:
+    - name: http
+      port: 49374
+      targetPort: http
+      protocol: TCP

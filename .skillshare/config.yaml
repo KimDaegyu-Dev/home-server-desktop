@@ -1,0 +1,6 @@
+mcp:
+  targets:
+    - codex
+  servers:
+    home-server:
+      url: https://mcp.tail5389e9.ts.net/mcp

@@ -83,6 +83,22 @@ with open(sys.argv[1], "w") as f:
 PY
 fi
 
+if vault_cmd kv get -format=json -mount=kv ai/ai-memory >"$tmp/ai-memory-current.json" 2>/dev/null; then
+  python3 - "$tmp/ai-memory-current.json" "$tmp/ai-memory.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f: values = json.load(f)["data"]["data"]
+token = values.get("AI_MEMORY_AUTH_TOKEN")
+if not isinstance(token, str) or len(token) < 32:
+    raise SystemExit("Existing kv/ai/ai-memory has no valid AI_MEMORY_AUTH_TOKEN; refusing to replace partial data.")
+with open(sys.argv[2], "w") as f: json.dump({"AI_MEMORY_AUTH_TOKEN": token}, f)
+PY
+else
+  python3 - "$tmp/ai-memory.json" <<'PY'
+import json, secrets, sys
+with open(sys.argv[1], "w") as f: json.dump({"AI_MEMORY_AUTH_TOKEN": secrets.token_urlsafe(48)}, f)
+PY
+fi
+
 if ! vault_cmd kv get -format=json -mount=kv authentik/sso-clients >"$tmp/sso-current.json" 2>/dev/null; then
   echo "Vault path kv/authentik/sso-clients is required before MCP SSO can be configured." >&2
   exit 1
@@ -103,10 +119,11 @@ vault_policy_file="$tmp/mcp-vso.hcl"
 cat >"$vault_policy_file" <<'POLICY'
 path "kv/data/mcp/searxng" { capabilities = ["read"] }
 path "kv/data/mcp/mcpproxy" { capabilities = ["read"] }
+path "kv/data/ai/ai-memory" { capabilities = ["read"] }
 POLICY
 chmod 0600 "$vault_policy_file"
 
-for item in "$tmp/searxng.json:mcp/searxng" "$tmp/mcpproxy.json:mcp/mcpproxy" "$tmp/sso-updated.json:authentik/sso-clients"; do
+for item in "$tmp/searxng.json:mcp/searxng" "$tmp/mcpproxy.json:mcp/mcpproxy" "$tmp/ai-memory.json:ai/ai-memory" "$tmp/sso-updated.json:authentik/sso-clients"; do
   payload_file="${item%%:*}"
   vault_path="${item#*:}"
   k3s kubectl cp "$payload_file" "vault/vault-0:$pod_payload" >/dev/null
@@ -122,6 +139,10 @@ vault_cmd write auth/kubernetes/role/searxng-vso \
 vault_cmd write auth/kubernetes/role/mcpproxy-vso \
   bound_service_account_names=mcp-vault-auth \
   bound_service_account_namespaces=mcp \
+  audience=vault token_policies=mcp-vso token_ttl=1h >/dev/null
+vault_cmd write auth/kubernetes/role/ai-memory-vso \
+  bound_service_account_names=ai-memory-vault-auth \
+  bound_service_account_namespaces=ai-memory \
   audience=vault token_policies=mcp-vso token_ttl=1h >/dev/null
 
 if k3s kubectl -n authentik get vaultstaticsecret authentik-sso-clients >/dev/null 2>&1; then
@@ -140,5 +161,5 @@ if k3s kubectl -n authentik get vaultstaticsecret authentik-sso-clients >/dev/nu
   k3s kubectl -n authentik rollout status deployment/authentik-worker --timeout=180s >/dev/null
 fi
 
-echo "Stored MCP and SearXNG credentials, stable MCP OAuth signing key, and VSO roles in Vault."
-echo "Vault paths: kv/mcp/searxng, kv/mcp/mcpproxy, kv/authentik/sso-clients. Secret values were not printed."
+echo "Stored MCP, SearXNG, ai-memory credentials, stable MCP OAuth signing key, and VSO roles in Vault."
+echo "Vault paths: kv/mcp/searxng, kv/mcp/mcpproxy, kv/ai/ai-memory, kv/authentik/sso-clients. Secret values were not printed."

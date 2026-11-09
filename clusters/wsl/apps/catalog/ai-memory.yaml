@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ai-memory
+  namespace: argocd
+  labels:
+    sourceType: git
+    serverSideApply: "false"
+    stage: 74-ai-memory
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/KimDaegyu-Dev/home-server-desktop.git
+    targetRevision: main
+    path: platform/ai-memory
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ai-memory

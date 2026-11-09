@@ -7,8 +7,9 @@ Agent client
   -> https://mcp.tail5389e9.ts.net/mcp (Tailnet HTTPS, OAuth login through Authentik)
   -> MCPProxy (single replica, tool allowlist, OTel spans)
        -> SearXNG MCP adapter -> private SearXNG JSON API -> public search engines
-       -> Context7 / project-memory / code-graph / task / browser / watch tools (to be added)
-       -> existing Grafana MCP and LiteLLM endpoints (to be added)
+       -> Context7 documentation lookup
+       -> ai-memory read-only MCP tools
+       -> existing Grafana MCP (approved dashboard and Prometheus tools)
   -> Alloy -> Prometheus metrics and Langfuse traces
 ```
 
@@ -28,7 +29,7 @@ The MCP ingress is Tailnet-only through Tailscale Operator and uses the hostname
 
 | Service | Source of truth | Data written | Persistence / backup decision | Exposure |
 | --- | --- | --- | --- | --- |
-| ai-memory | Existing local AI Memory workspace and staged import | Curated user/project memories, token-protected API | Preserve current staged import and origin; do not reindex or overwrite until a source-vs-import count/hash comparison is complete. Back up the database and source documents. | MCPProxy only, after read/write scopes and review flow are verified. |
+| ai-memory | Existing WSL `/home/eorbr/ai-memory/ai-memory/data` plus checked backup | Existing SQLite, wiki, model files, bearer-protected MCP | Source stopped and archived before migration; PVC import uses per-file SHA-256 comparison. Source and archive remain intact. New PVC is 2Gi. | MCPProxy only; read-only tool allowlist until a reviewed-write flow is implemented. |
 | Graphiti | Approved project and interaction events | Temporal entity and relationship graph; inferred facts must be candidates until reviewed | PVC for graph DB, separate encrypted snapshots, restore test. Begin with read/search tools only; no delete/clear/confirm tool through MCPProxy. | ClusterIP only. The reference MCP server has no native auth, so never expose it directly. |
 | Graphify | Git repositories selected by the user | Rebuildable static code graph, no private keys or generated build outputs | Generated graph is rebuildable from pinned commits. Store a shallow read-only checkout and graph artifact on a bounded PVC; record source commit IDs. | ClusterIP only; read-only queries through MCPProxy. |
 | Snowball | Existing Compose source and named-volume data | Research documents, ontology/index data in Fuseki, Neo4j, Qdrant and custom APIs | Source path and Docker volume export are not yet located. Preserve the old data first; do not deploy replacements or prune the originals until checksums, counts, and restore are verified. | No ingress until service inventory and access controls are known. |
@@ -59,9 +60,13 @@ Each tool addition must pass the following before it is put on the gateway allow
 2. Commit/push the manifests. Wait for `ai-credentials` to create the service accounts and VaultAuth objects, then verify both new VaultStaticSecrets are `Ready=True`.
 3. Wait for `mcp-stack` to become `Synced / Healthy`; verify SearXNG `/healthz`, JSON API search, MCPProxy `/healthz`, `/metrics`, OAuth metadata, and exactly the single allowed search tool.
 4. Confirm the Tailnet Ingress address, complete Authentik OAuth from a real client, and sync the single endpoint into Windows and WSL clients with Skillshare.
-5. Context7 and Grafana MCP are already configured as backends. Add project memory and code graph one backend at a time, each with the narrowest Vault policy and explicit tool allowlist.
-6. Locate Snowball's original Compose and named-volume data before migrating it. Keep source volumes intact through backup, import, count/hash comparison, query verification, and restore test.
+5. Context7 and Grafana MCP are already configured as backends. ai-memory is now configured as a ClusterIP backend; run the Vault bootstrap to create/reuse its bearer token, then run `sudo bash scripts/migrate-ai-memory-to-k3s.sh` from WSL after the app PVC is Bound. The script refuses an active source process, imports into a staging directory, compares file checksums, and leaves the original tree and pre-migration archive untouched. Only its read-only tools are currently allowed through MCPProxy; do not expose write tools until the admission/review policy is verified end to end.
+6. Locate Snowball's original Compose and named-volume data before migrating it. Keep source volumes intact through backup, import, count/hash comparison, query verification, and restore test. Graphiti, Graphify, browser automation, watch-skill, and Kanzo remain unconfigured and must be added after their sources, data, and access model have been verified.
 
 ## Skillshare client configuration
 
-Skillshare is a local CLI that writes native MCP client config; it is not the MCP gateway. Keep the portable MCP entry and approved skills in a Skillshare config repository. Each Windows/WSL agent host installs Skillshare and runs `skillshare sync --all`; credentials are environment references or the client's OAuth session, never repository values. Use a `find-skills` skill to discover and review community skills, but require explicit human approval before installation. A separate Skillshare HTTP MCP server is unnecessary for clients on the same workstation and would duplicate skill listings.
+Skillshare is a local CLI that writes native MCP client config; it is not the MCP gateway. Its pinned release and verified installers are in `versions.yml` and `scripts/install-skillshare.*`. The tracked project config is `.skillshare/config.yaml`, and approved skills live under `.skillshare/skills/`. The initial `home-server` entry targets Codex and contains only the Tailnet MCP URL; Authentik OAuth is handled by the client and no credential is stored in Git.
+
+Install on Windows with `.\scripts\install-skillshare.ps1`, or in WSL/Linux with `bash scripts/install-skillshare.sh`. Preview changes with `skillshare sync mcp --project --dry-run --json`; apply with `skillshare sync mcp --project`. Skillshare writes the project-scoped `.codex/config.toml`; Codex must trust the repository before project MCP servers load. Do not remove the pre-existing local gateway or direct Grafana entries until their remaining tools have been migrated and checked through MCPProxy. Then remove those direct entries through Skillshare and verify that clients list only MCPProxy.
+
+Only reviewed skills belong under `.skillshare/skills/`. Use the included `home-server-mcp` skill for source citations and the rule that inferred facts remain review candidates until the user confirms them. Discover external skills with a `find-skills` workflow, inspect their source and permissions, and add them only after human approval. Skillshare MCP checks can confirm URL reachability and the OAuth challenge, but Skillshare does not perform the browser sign-in; a user-authorized client must complete OAuth before tool calls can be verified.

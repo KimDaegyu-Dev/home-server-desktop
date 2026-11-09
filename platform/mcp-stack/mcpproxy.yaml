@@ -15,7 +15,7 @@ spec:
       labels:
         app.kubernetes.io/name: mcpproxy
       annotations:
-        checksum-mcpproxy-config: "95a62dbfeb49424b09b3bd1c4ce43e8a0bddd0d5fb198e63775da6d4379b4496"
+        checksum-mcpproxy-config: "a0d6b57969fe1334211a97c5315a1cf20a39ab52215ba13b18400ee09903f713"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -71,6 +71,11 @@ spec:
                 secretKeyRef:
                   name: grafana-mcp-credentials
                   key: mcp_server_token
+            - name: AI_MEMORY_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-memory-backend-credentials
+                  key: AI_MEMORY_AUTH_TOKEN
           volumeMounts:
             - name: bin
               mountPath: /opt/bin

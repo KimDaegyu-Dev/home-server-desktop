@@ -16,6 +16,8 @@ spec:
       values: |
         global:
           tlsDisable: true
+        injector:
+          enabled: false
         server:
           image:
             repository: hashicorp/vault

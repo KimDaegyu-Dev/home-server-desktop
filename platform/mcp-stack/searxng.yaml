@@ -16,6 +16,12 @@ spec:
         app.kubernetes.io/name: searxng
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 977
+        runAsGroup: 977
+        fsGroup: 977
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: searxng
           image: ghcr.io/searxng/searxng:2026.11.8-74418092d@sha256:7add5ffe7933e6b46aa3a26bed8a0c342c9a45ec331d9a8cf145e46b04b24f36
@@ -29,6 +35,8 @@ spec:
               value: "8080"
             - name: SEARXNG_BIND_ADDRESS
               value: "0.0.0.0"
+            - name: FORCE_OWNERSHIP
+              value: "false"
             - name: SEARXNG_SECRET
               valueFrom:
                 secretKeyRef:

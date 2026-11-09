@@ -14,4 +14,5 @@ resources:
   - authentik-ingress.yaml
   - monitoring-credentials.yaml
   - monitoring-stack.yaml
+  - monitoring-alloy.yaml
   - monitoring-ingress.yaml

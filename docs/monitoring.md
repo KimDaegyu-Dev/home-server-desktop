@@ -2,6 +2,8 @@
 
 Argo CD installs the Prometheus Community `kube-prometheus-stack` chart. It includes Prometheus Operator, Prometheus, Alertmanager, Grafana, node-exporter, kube-state-metrics, and Kubernetes dashboards/rules. Prometheus retains up to 30 days and 18 GB of samples on a 20 GiB local-path PVC. Grafana uses a 5 GiB PVC; Alertmanager uses 2 GiB. WSL disables node-exporter's host mount propagation, which WSL2 does not support; it still scrapes kubelet/cAdvisor and Kubernetes state metrics. The Linux dual-boot profile uses the chart's normal node-exporter mounts.
 
+Grafana Alloy runs as a single Deployment and accepts application OTLP metrics on the internal `alloy.monitoring.svc:4317` (gRPC) and `alloy.monitoring.svc:4318` (HTTP) service. It converts them to Prometheus metrics and forwards them to Prometheus's remote-write receiver. Those endpoints are ClusterIP-only and are not exposed through Tailscale. Applications can be instrumented to send metrics there as they are migrated; no log or trace backend is deployed yet.
+
 ## Bootstrap Grafana credentials
 
 1. Push GitOps manifests and wait for the `monitoring-credentials` Application to create the namespace, VaultAuth, and `monitoring-vault-auth` ServiceAccount.

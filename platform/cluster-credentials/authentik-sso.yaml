@@ -189,3 +189,39 @@ entries:
       name: LiteLLM
       provider: !KeyOf litellm-oauth-provider
       policy_engine_mode: any
+
+  - model: authentik_providers_oauth2.oauth2provider
+    id: mcpproxy-oauth-provider
+    identifiers:
+      name: MCP Gateway OIDC
+    attrs:
+      name: MCP Gateway OIDC
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      grant_types:
+        - authorization_code
+        - refresh_token
+      client_id: mcp-proxy
+      client_secret: !Env AUTHENTIK_OIDC_MCPPROXY_CLIENT_SECRET
+      redirect_uris:
+        - matching_mode: strict
+          url: https://mcp.tail5389e9.ts.net/callback
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
+      issuer_mode: per_provider
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Internal JWT Certificate"]]
+      include_claims_in_id_token: true
+      sub_mode: hashed_user_id
+    state: present
+  - model: authentik_core.application
+    id: mcpproxy-oauth-application
+    identifiers:
+      slug: mcp-proxy
+    attrs:
+      name: MCP Gateway
+      provider: !KeyOf mcpproxy-oauth-provider
+      policy_engine_mode: any

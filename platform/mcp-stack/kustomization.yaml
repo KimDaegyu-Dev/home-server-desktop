@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - searxng-settings.yaml
+  - searxng.yaml
+  - mcpproxy-config.yaml
+  - mcpproxy.yaml
+  - mcpproxy-ingress.yaml
+configMapGenerator:
+  - name: searxng-mcp
+    namespace: mcp
+    files:
+      - searxng-mcp.py
+generatorOptions:
+  disableNameSuffixHash: true

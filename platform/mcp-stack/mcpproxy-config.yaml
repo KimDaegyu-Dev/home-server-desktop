@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcpproxy-config
+  namespace: mcp
+data:
+  config.yaml: |
+    listen: 0.0.0.0:8080
+    inbound:
+      mode: anonymous
+    auth_server:
+      issuer: https://mcp.tail5389e9.ts.net
+      signing_key_file: /var/run/mcpproxy/authserver.pem
+      access_token_ttl: 1h
+      upstream:
+        issuer: https://authentik.tail5389e9.ts.net/application/o/mcp-proxy/
+        client_id: mcp-proxy
+        client_secret: ${AUTHENTIK_OIDC_CLIENT_SECRET}
+        scopes: [openid, email, profile]
+    backends:
+      searxng:
+        transport: stdio
+        command: [python3, /opt/mcp-servers/searxng-mcp.py]
+        env:
+          SEARXNG_BASE_URL: http://searxng.search.svc.cluster.local:8080
+    policy:
+      allowed_tools: [searxng_search]
+      denied_tools: []
+      approval_tools: []
+      on_rug_pull: kill
+      max_result_kb: 256
+      max_calls_per_session: 100
+    telemetry:
+      prometheus_path: /metrics
+      otlp_endpoint: alloy.monitoring.svc.cluster.local:4317
+      service_name: mcpproxy

@@ -75,6 +75,12 @@ spec:
                   name: authentik-sso-clients
                   key: litellm_client_secret
                   optional: true
+            - name: AUTHENTIK_OIDC_MCPPROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: mcpproxy_client_secret
+                  optional: true
         worker:
           replicas: 1
           env:
@@ -114,6 +120,12 @@ spec:
                 secretKeyRef:
                   name: authentik-sso-clients
                   key: litellm_client_secret
+                  optional: true
+            - name: AUTHENTIK_OIDC_MCPPROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: mcpproxy_client_secret
                   optional: true
   destination:
     server: https://kubernetes.default.svc

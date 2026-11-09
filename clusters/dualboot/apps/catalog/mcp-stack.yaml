@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mcp-stack
+  namespace: argocd
+  labels:
+    sourceType: git
+    serverSideApply: "false"
+    stage: 76-mcp-stack
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/KimDaegyu-Dev/home-server-desktop.git
+    targetRevision: main
+    path: platform/mcp-stack
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mcp
+  syncPolicy:
+    automated:
+      enabled: true
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true

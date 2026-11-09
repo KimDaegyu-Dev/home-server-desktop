@@ -1,0 +1,163 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcpproxy
+  namespace: mcp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcpproxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcpproxy
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: fetch-mcpproxy
+          image: alpine:3.22
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - >-
+              wget -q -O /tmp/mcpproxy.tar.gz
+              https://github.com/hoophq/mcpproxy/releases/download/v0.1.7/mcpproxy_0.1.7_linux_amd64.tar.gz;
+              echo '3a6e794321ded9cd71c467e426407fa24b1dad26b0d9040f81a12fce3f166b7d  /tmp/mcpproxy.tar.gz' | sha256sum -c -;
+              tar -xzf /tmp/mcpproxy.tar.gz -C /opt/bin ./mcpproxyd ./configcheck;
+              chmod 0555 /opt/bin/mcpproxyd /opt/bin/configcheck
+          volumeMounts:
+            - name: bin
+              mountPath: /opt/bin
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: mcpproxy
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - >-
+              /opt/bin/configcheck /etc/mcpproxy/config.yaml;
+              exec /opt/bin/mcpproxyd -config /etc/mcpproxy/config.yaml
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: MCPPROXY_STATE_DIR
+              value: /tmp/mcpproxy
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: AUTHENTIK_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mcpproxy-credentials
+                  key: authentik_client_secret
+          volumeMounts:
+            - name: bin
+              mountPath: /opt/bin
+              readOnly: true
+            - name: search-mcp
+              mountPath: /opt/mcp-servers
+              readOnly: true
+            - name: config
+              mountPath: /etc/mcpproxy
+              readOnly: true
+            - name: signing-key
+              mountPath: /var/run/mcpproxy
+              readOnly: true
+            - name: state
+              mountPath: /tmp/mcpproxy
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: bin
+          emptyDir: {}
+        - name: search-mcp
+          configMap:
+            name: searxng-mcp
+            defaultMode: 0444
+        - name: config
+          configMap:
+            name: mcpproxy-config
+        - name: signing-key
+          secret:
+            secretName: mcpproxy-credentials
+            defaultMode: 0440
+            items:
+              - key: authserver.pem
+                path: authserver.pem
+        - name: state
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcpproxy
+  namespace: mcp
+  labels:
+    app.kubernetes.io/name: mcpproxy
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mcpproxy
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mcpproxy
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [mcp]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcpproxy
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

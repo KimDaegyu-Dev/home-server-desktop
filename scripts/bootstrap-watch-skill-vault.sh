@@ -99,6 +99,7 @@ done
 
 cat >"$tmp/watch-skill-policy.hcl" <<'POLICY'
 path "kv/data/ai/watch-skill" { capabilities = ["read"] }
+path "kv/data/mcp/watch-skill" { capabilities = ["read"] }
 POLICY
 chmod 0600 "$tmp/watch-skill-policy.hcl"
 k3s kubectl cp "$tmp/watch-skill-policy.hcl" "vault/vault-0:$pod_policy" >/dev/null

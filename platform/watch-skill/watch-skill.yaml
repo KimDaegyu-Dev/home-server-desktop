@@ -195,7 +195,7 @@ spec:
             - name: WATCHSKILL_MCP_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: watch-skill-credentials
+                  name: watch-skill-mcp-credentials
                   key: WATCHSKILL_MCP_TOKEN
           ports:
             - name: mcp

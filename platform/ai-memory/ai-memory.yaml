@@ -80,17 +80,26 @@ spec:
             httpGet:
               path: /healthz
               port: http
+              httpHeaders:
+                - name: Host
+                  value: ai-memory.ai-memory.svc.cluster.local
             periodSeconds: 5
             failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
+              httpHeaders:
+                - name: Host
+                  value: ai-memory.ai-memory.svc.cluster.local
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
+              httpHeaders:
+                - name: Host
+                  value: ai-memory.ai-memory.svc.cluster.local
             periodSeconds: 20
           resources:
             requests:

@@ -19,6 +19,7 @@ resources:
   - grafana-mcp-credentials.yaml
 configMapGenerator:
   - name: authentik-sso-blueprints
+    namespace: authentik
     files:
       - authentik-sso.yaml
 generatorOptions:

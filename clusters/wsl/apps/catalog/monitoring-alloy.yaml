@@ -20,11 +20,9 @@ spec:
       values: |
         alloy:
           enableReporting: false
-          mounts:
-            extra:
-              - name: langfuse-exporter
-                mountPath: /etc/alloy/langfuse-secrets
-                readOnly: true
+          envFrom:
+            - secretRef:
+                name: langfuse-exporter
           configMap:
             content: |
               otelcol.receiver.otlp "default" {
@@ -40,20 +38,10 @@ spec:
                 }
               }
 
-              local.file "langfuse_public_key" {
-                filename  = "/etc/alloy/langfuse-secrets/publicKey"
-                is_secret = true
-              }
-
-              local.file "langfuse_secret_key" {
-                filename  = "/etc/alloy/langfuse-secrets/secretKey"
-                is_secret = true
-              }
-
               otelcol.auth.basic "langfuse" {
                 client_auth {
-                  username = local.file.langfuse_public_key.content
-                  password = local.file.langfuse_secret_key.content
+                  username = sys.env("publicKey")
+                  password = sys.env("secretKey")
                 }
               }
 
@@ -85,12 +73,6 @@ spec:
         controller:
           type: deployment
           replicas: 1
-          volumes:
-            extra:
-              - name: langfuse-exporter
-                secret:
-                  secretName: langfuse-exporter
-                  optional: true
         service:
           enabled: true
           type: ClusterIP

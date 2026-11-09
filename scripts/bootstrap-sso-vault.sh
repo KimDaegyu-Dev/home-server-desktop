@@ -180,9 +180,13 @@ path "*" {
   capabilities = ["create", "read", "update", "delete", "list", "sudo"]
 }
 POLICY
-vault_cmd policy write home-server-oidc-admin "${policy_file}" >/dev/null
+pod_policy="/tmp/vault-oidc-admin-$(date +%s)-$$.hcl"
+k3s kubectl cp "${policy_file}" "vault/vault-0:${pod_policy}"
+vault_cmd policy write home-server-oidc-admin "${pod_policy}" >/dev/null
 rm -f "${policy_file}"
 policy_file=""
+k3s kubectl exec -n vault vault-0 -- rm -f "${pod_policy}" >/dev/null 2>&1 || true
+pod_policy=""
 vault_cmd write auth/oidc/role/home-server-admin \
   role_type=oidc \
   user_claim=preferred_username \

@@ -52,7 +52,7 @@ spec:
               exec /opt/bin/mcpproxyd -config /etc/mcpproxy/config.yaml
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 8081
               protocol: TCP
           env:
             - name: MCPPROXY_STATE_DIR
@@ -107,6 +107,54 @@ spec:
             capabilities:
               drop: [ALL]
             readOnlyRootFilesystem: true
+        - name: oauth-proxy
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          imagePullPolicy: IfNotPresent
+          command: [python3, /opt/mcpproxy/oauth-proxy.py]
+          ports:
+            - name: http-proxy
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: MCP_PUBLIC_URL
+              value: https://mcp.tail5389e9.ts.net
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          volumeMounts:
+            - name: config
+              mountPath: /opt/mcpproxy
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http-proxy
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http-proxy
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http-proxy
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
       volumes:
         - name: bin
           emptyDir: {}
@@ -141,7 +189,7 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: http
+      targetPort: http-proxy
       protocol: TCP
 ---
 apiVersion: monitoring.coreos.com/v1

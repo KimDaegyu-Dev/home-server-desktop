@@ -14,9 +14,13 @@ llm:
       api_url: ${OPENAI_API_URL:http://litellm.litellm.svc.cluster.local:4000/v1}
 
 embedder:
-  provider: sentence_transformers
-  model: all-MiniLM-L6-v2
+  provider: openai
+  model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
   dimensions: 384
+  providers:
+    openai:
+      api_key: local
+      api_url: http://graphiti-embedder.graphiti.svc.cluster.local:8081/v1
 
 database:
   provider: falkordb

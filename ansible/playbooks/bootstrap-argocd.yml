@@ -112,6 +112,14 @@
       register: agent_browser_image
       changed_when: "'Imported ' in agent_browser_image.stdout"
 
+    - name: Build and import the pinned multilingual Graphiti embedder before Argo sync
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - "{{ home_repo_root }}/scripts/build-graphiti-embedder.sh"
+      register: graphiti_embedder_image
+      changed_when: "'Imported ' in graphiti_embedder_image.stdout"
+
     - name: Apply the environment's root Application
       ansible.builtin.command:
         argv:

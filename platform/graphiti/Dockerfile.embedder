@@ -1,0 +1,19 @@
+FROM python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+
+ARG FASTEMBED_VERSION
+
+RUN python -m pip install --no-cache-dir --disable-pip-version-check "fastembed==${FASTEMBED_VERSION}" \
+    && useradd --uid 10001 --create-home --shell /usr/sbin/nologin embedder
+
+COPY embedder_server.py /opt/graphiti/embedder_server.py
+RUN chmod 0555 /opt/graphiti/embedder_server.py
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TOKENIZERS_PARALLELISM=false \
+    OMP_NUM_THREADS=2 \
+    FASTEMBED_CACHE=/model-cache/fastembed
+
+USER 10001:10001
+EXPOSE 8081
+ENTRYPOINT ["python", "/opt/graphiti/embedder_server.py"]

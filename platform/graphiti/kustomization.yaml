@@ -3,6 +3,13 @@ kind: Kustomization
 resources:
   - graphiti.yaml
 configMapGenerator:
+  - name: graphiti-embedder
+    namespace: graphiti
+    files:
+      - embedder_server.py
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
   - name: graphiti-config
     namespace: graphiti
     files:

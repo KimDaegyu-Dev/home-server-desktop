@@ -174,6 +174,16 @@ for policy in graphiti agent-browser; do
   k3s kubectl cp "$tmp/${policy}-policy.hcl" "vault/vault-0:$pod_policy" >/dev/null
   vault_cmd policy write "${policy}-vso" "$pod_policy" >/dev/null
 done
+cat >"$tmp/mcp-vso-policy.hcl" <<'POLICY'
+path "kv/data/mcp/searxng" { capabilities = ["read"] }
+path "kv/data/mcp/mcpproxy" { capabilities = ["read"] }
+path "kv/data/ai/ai-memory" { capabilities = ["read"] }
+path "kv/data/mcp/watch-skill" { capabilities = ["read"] }
+path "kv/data/mcp/agent-browser" { capabilities = ["read"] }
+POLICY
+chmod 0600 "$tmp/mcp-vso-policy.hcl"
+k3s kubectl cp "$tmp/mcp-vso-policy.hcl" "vault/vault-0:$pod_policy" >/dev/null
+vault_cmd policy write mcp-vso "$pod_policy" >/dev/null
 vault_cmd write auth/kubernetes/role/graphiti-vso \
   bound_service_account_names=graphiti-vault-auth \
   bound_service_account_namespaces=graphiti \

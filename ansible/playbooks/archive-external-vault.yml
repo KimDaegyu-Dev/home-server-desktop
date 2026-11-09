@@ -1,0 +1,111 @@
+---
+- name: Retire the external systemd Vault after an in-cluster restore is verified
+  hosts: home_server
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require K3s before cleaning cluster-side bridge resources
+      ansible.builtin.command:
+        argv: [/usr/local/bin/k3s, kubectl, get, nodes]
+      changed_when: false
+
+    - name: Stop and disable the old systemd Vault service
+      ansible.builtin.systemd_service:
+        name: vault
+        state: stopped
+        enabled: false
+
+    - name: Remove the old host-side Vault DNS alias
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^.*\svault\.home\.arpa$'
+        state: absent
+
+    - name: Check for the old CoreDNS Vault alias
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - get
+          - configmap
+          - coredns-custom
+          - --namespace=kube-system
+          - -o
+          - jsonpath={.data.vault-home-arpa\.server}
+      register: old_coredns_alias
+      changed_when: false
+      failed_when: false
+
+    - name: Remove only the old Vault key from the shared CoreDNS ConfigMap
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - patch
+          - configmap
+          - coredns-custom
+          - --namespace=kube-system
+          - --type=json
+          - -p
+          - '[{"op":"remove","path":"/data/vault-home-arpa.server"}]'
+      when: old_coredns_alias.stdout | length > 0
+
+    - name: Restart CoreDNS after removing the host alias
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - restart
+          - deployment/coredns
+          - --namespace=kube-system
+      when: old_coredns_alias.stdout | length > 0
+
+    - name: Remove the old Vault Ingress bridge resources
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - delete
+          - "{{ item.kind }}"
+          - "{{ item.name }}"
+          - --namespace=vault-access
+          - --ignore-not-found=true
+      loop:
+        - { kind: ingress, name: vault }
+        - { kind: deployment, name: vault-upstream-proxy }
+        - { kind: service, name: vault-upstream-proxy }
+        - { kind: secret, name: vault-ca }
+      changed_when: "'deleted' in result.stdout"
+      register: result
+
+    - name: Remove the old Vault CA Secret used by VSO
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - delete
+          - secret
+          - vault-ca
+          - --namespace=vault-secrets-operator-system
+          - --ignore-not-found=true
+      register: old_vso_ca
+      changed_when: "'deleted' in old_vso_ca.stdout"
+
+    - name: Remove the now-unused old ingress namespace
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - delete
+          - namespace
+          - vault-access
+          - --ignore-not-found=true
+      register: old_ingress_namespace
+      changed_when: "'deleted' in old_ingress_namespace.stdout"
+
+    - name: Preserve the old Vault package, Raft directory, TLS material, and init file
+      ansible.builtin.debug:
+        msg: >-
+          The old service is disabled and its host DNS/CoreDNS/Ingress bridge is removed.
+          /var/lib/vault/data and /etc/vault.d were intentionally preserved for rollback.

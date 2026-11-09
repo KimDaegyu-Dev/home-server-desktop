@@ -1,6 +1,10 @@
-# 듀얼부팅 Ubuntu 재구축
+# Linux dual-boot 재현 절차
 
-Ubuntu 24.04 LTS와 Python 3.12를 준비합니다. 같은 Git 저장소와 플레이북을 사용하고 환경 프로필만 바꿉니다.
+듀얼부팅 Ubuntu에서도 WSL과 동일한 Ansible playbook과 Argo CD GitOps 구성을 사용합니다. 차이는 inventory가 정하는 데이터 경로와 노드 이름입니다.
+
+## Linux 호스트 준비
+
+Ubuntu 24.04 LTS 설치 후 systemd가 활성화되어 있는지 확인하고, 저장소를 가져옵니다.
 
 ```bash
 sudo apt-get update
@@ -15,6 +19,10 @@ ansible-playbook -i ansible/inventory/dualboot.yml ansible/playbooks/install-k3s
 ansible-playbook -i ansible/inventory/dualboot.yml ansible/playbooks/bootstrap-argocd.yml
 ```
 
-초기 저장소 경로는 `/srv/home-server-desktop/k3s-local-path`입니다. 별도 디스크를 쓸 경우 파일시스템이 먼저 마운트되도록 구성하고 Ansible에서 마운트 확인을 추가합니다.
+기본 K3s 로컬 볼륨 경로는 `/srv/home-server-desktop/k3s-local-path`입니다. 저장장치가 다르면 `ansible/inventory/dualboot.yml`의 `k3s_storage_path`를 수정해 사용합니다. 해당 경로와 Vault PVC는 Linux filesystem에서 백업해야 합니다.
 
-WSL의 local PV 디렉터리를 새 Linux에서 직접 사용하지 않습니다. 새 클러스터를 만들고 Argo CD로 앱을 배포한 다음 서비스별 백업을 복원합니다.
+Argo CD가 Git의 root Application을 읽으면 Vault chart, VSO, Tailscale Operator, Ingress를 설치합니다. 새 Vault는 [`vault.md`](vault.md)의 Fresh setup 절차로 초기화합니다. WSL 클러스터에서 Vault 데이터를 이전하는 경우에는 init을 반복하지 말고 snapshot migration 절차를 따릅니다.
+
+## WSL에서 듀얼부팅으로 데이터 이전
+
+Vault Raft snapshot, Vault init key shares, Vault root token, 애플리케이션 데이터는 Git에 저장하지 않습니다. 별도 암호화 백업으로 이동합니다. Vault snapshot을 restore한 뒤 원래 unseal shares로 unseal하고, VSO가 secret을 동기화하는지 확인합니다. Kubernetes PVC의 local-path 데이터는 노드 경로가 다르면 자동으로 따라오지 않으므로, 애플리케이션별 백업/복구 절차를 사용합니다.

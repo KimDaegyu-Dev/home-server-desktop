@@ -1,41 +1,64 @@
-# 외부 Vault 연결
+# Vault on K3s
 
-WSL에서는 Vault를 K3s 외부의 systemd 서비스로 실행합니다. Vault는 HashiCorp APT 저장소의 고정 버전과 단일 노드 Raft storage를 사용합니다. K3s CoreDNS는 `vault.home.arpa`를 현재 Linux 노드 주소로 해석하고, Vault API는 전용 TLS CA와 서버 인증서를 사용합니다. CA 개인 키는 `/etc/vault.d/tls/ca.key`에 root 전용 권한으로 두며 Git에 넣지 않습니다.
+Argo CD installs HashiCorp's Vault Helm chart into the `vault` namespace. The chart runs one Vault server with integrated Raft storage and a `local-path` persistent volume. This is a single-node deployment: the volume survives Pod replacement, but it does not provide node or disk redundancy. Back up snapshots outside the cluster.
 
-K3s를 설치한 뒤 Vault 호스트 서비스를 재현하려면 Ubuntu에서 실행합니다:
+Vault listens on HTTP inside the cluster. VSO connects to `http://vault.vault.svc:8200`; the Tailscale Operator exposes the Vault UI/API as the private HTTPS MagicDNS Ingress `vault`. No host IP, host TLS CA, CoreDNS alias, or CA Secret is needed for in-cluster traffic.
 
-```bash
-cd ~/src/home-server-desktop
-sudo .venv/bin/ansible-playbook -i ansible/inventory/wsl.yml ansible/playbooks/install-vault.yml
-```
+## Current WSL migration
 
-Ansible은 Vault 패키지·Raft 디렉터리·TLS·K3s DNS 별칭·VSO용 공개 CA Secret을 설정합니다. Vault는 의도적으로 초기화하지 않습니다. 최초 초기화 때 출력되는 unseal key share와 initial root token은 되돌릴 수 없으므로, 사용자가 직접 안전한 오프라인 위치에 보관합니다. 같은 노드 Raft storage는 단일 장애 지점이며, WSL/컴퓨터 재시작 뒤 Vault는 sealed 상태로 시작해 수동 unseal이 필요합니다.
+The previous systemd Vault is still the source of truth until the restore is confirmed. Its Shamir keys, root token, and Raft data remain in place. A protected source snapshot was saved at `/home/eorbr/vault-raft-pre-migration-20261109.snap` (mode `0600`). Do not initialize a clean Vault and begin using it for secrets before restoring that snapshot.
 
-초기화는 Vault 서비스를 처음 설치한 뒤 한 번만 실행합니다. 출력되는 키와 token은 터미널 로그, Git, 채팅에 복사하지 말고 안전한 별도 위치에 보관합니다.
+1. Commit and push the Vault Helm Application. Argo CD creates the `vault` namespace, StatefulSet, and PVC. Check `kubectl -n vault get pod,pvc` and wait until `vault-0` is Running.
+2. Copy the snapshot into the pod:
 
-```bash
-sudo env VAULT_ADDR=https://vault.home.arpa:8200 \
-  VAULT_CACERT=/etc/vault.d/tls/ca.crt \
-  vault operator init -key-shares=5 -key-threshold=3
-```
+   ```bash
+   sudo k3s kubectl cp /home/eorbr/vault-raft-pre-migration-20261109.snap vault/vault-0:/tmp/vault-raft.snap
+   ```
 
-Vault를 열 때는 각각의 key share를 숨김 입력 프롬프트에 넣습니다.
+3. Initialize the new, empty destination once. Store the temporary init result in a private file; its temporary keys/root token are only needed to perform the snapshot restore:
 
-```bash
-sudo env VAULT_ADDR=https://vault.home.arpa:8200 \
-  VAULT_CACERT=/etc/vault.d/tls/ca.crt vault operator unseal
-```
+   ```bash
+   sudo k3s kubectl exec -n vault vault-0 -- sh -c 'umask 077; vault operator init -key-shares=1 -key-threshold=1 -format=json > /tmp/vault-destination-init.json'
+   ```
 
-`unseal`을 threshold에 도달할 때까지 반복합니다. 출력된 root token을 보관된 위치에서 입력해 관리자 CLI를 사용할 수 있습니다. 루트 token을 Git이나 셸 기록에 저장하지 않습니다.
+4. Read the temporary root token without printing it, then force-restore the source snapshot. Force is required because the newly initialized destination has different temporary Shamir keys. This replaces the destination state with the source cluster state:
 
-1. Vault 주소와 신뢰할 CA 인증서를 준비합니다.
-2. Vault에서 Kubernetes auth method를 설정합니다.
-3. 앱 namespace와 ServiceAccount마다 별도 Vault role과 최소 권한 정책을 만듭니다.
-4. `VaultConnection`, `VaultAuth`, `VaultStaticSecret` 리소스를 앱별로 추가합니다.
-5. 앱 Deployment가 VSO가 만든 Secret을 참조하도록 합니다.
+   ```bash
+   sudo k3s kubectl exec -n vault vault-0 -- sh -c 'export VAULT_TOKEN="$(sed -n "s/.*\\"root_token\\":\\"\\([^\\"]*\\)\\".*/\\1/p" /tmp/vault-destination-init.json)"; vault operator raft snapshot restore -force /tmp/vault-raft.snap'
+   ```
 
-Tailscale Operator용 Kubernetes auth, KV v2 mount, 최소 권한 policy와 role, OAuth 값 입력은 `bash scripts/bootstrap-vault-tailscale.sh`가 설정합니다. 이 스크립트는 Vault 초기화/unseal, Argo CD가 Tailscale auth ServiceAccount를 생성한 뒤 실행합니다. 관리 token과 OAuth client secret은 숨김 입력으로 받고, OAuth JSON은 짧은 수명의 `/dev/shm` 파일에만 기록한 뒤 삭제합니다.
+5. Wait for the restore to finish in the pod logs. The command returning does not mean the restore has finished. Check the latest logs for `post-unseal setup complete` and `vault is unsealed`; if it seals before becoming unsealed, proceed to the manual unseal. Use three of the original five shares (the shares from `/home/eorbr/vault-init.json`):
 
-시크릿 값 대신 Vault 경로와 최소 권한만 Git에 기록합니다. VSO는 Vault 값을 Kubernetes Secret으로 동기화하므로 해당 값이 etcd에도 저장됩니다. etcd 암호화, namespace 격리, 제한된 RBAC를 적용합니다. Vault 준비 전에는 앱 시크릿 CR을 추가하지 않습니다.
+   ```bash
+   sudo k3s kubectl logs -n vault vault-0 --since=10m
+   sudo k3s kubectl exec -it -n vault vault-0 -- vault operator unseal
+   ```
 
-VSO는 Argo CD에서 고정한 Helm chart 버전으로 설치됩니다. 버전 변경 시 chart 호환성과 CRD 변경 사항을 확인합니다.
+   Run the unseal command three times, entering a different original share each time. Confirm `Initialized: true`, `Sealed: false`, and `Storage Type: raft` with `sudo k3s kubectl exec -n vault vault-0 -- vault status`.
+
+6. The snapshot also restores the previous Kubernetes auth configuration, which points at the host API address. Run `sudo bash ./scripts/bootstrap-vault-tailscale.sh --auth-only` from the repo to update TokenReview to the in-cluster API; this leaves the restored OAuth secret untouched. Then verify the Tailscale KV record, auth mount, policy, and role. Check VSO's `VaultStaticSecret` becomes `Ready=True`, then check the Tailscale Operator logs and both Ingress `ADDRESS` fields. After verification, remove the temporary init file and in-Pod snapshot: `sudo k3s kubectl exec -n vault vault-0 -- rm -f /tmp/vault-destination-init.json /tmp/vault-raft.snap`.
+7. Only after those checks, run `ansible-playbook -i ansible/inventory/wsl.yml ansible/playbooks/archive-external-vault.yml` to disable the old systemd Vault service and remove its host DNS/TLS bridge configuration. Keep `/var/lib/vault/data`, the source snapshot, and the original initialization file as rollback material until a separate backup has been verified.
+
+The snapshot contains encrypted Vault state but is sensitive backup material. Keep it outside Git, restrict its permissions, and copy it to durable storage before relying on this migration as the only backup.
+
+## Kubernetes authentication and VSO
+
+The Vault Helm chart grants its ServiceAccount Kubernetes TokenReview permission. Configure the Kubernetes auth method to call `https://kubernetes.default.svc` and use the Vault Pod's projected ServiceAccount token and mounted cluster CA. VSO presents a short-lived ServiceAccount JWT whose audiences include both `vault` and the Kubernetes API. Keep the Tailscale Vault role restricted to the `tailscale/tailscale-vault-auth` ServiceAccount and its read-only KV policy.
+
+Run `scripts/bootstrap-vault-tailscale.sh` from Ubuntu after Vault is restored and unsealed, VSO is installed, and the Argo CD credentials Application has created its ServiceAccount. The script talks to Vault through `kubectl exec` and stores the OAuth values in Vault KV; it does not place credentials in Git.
+
+## Fresh WSL or Linux dual-boot setup
+
+1. Run `prepare-host.yml`, `install-k3s.yml`, and `bootstrap-argocd.yml` from the chosen Ansible inventory.
+2. Configure Tailscale policy/credentials and initialize Vault once after Argo CD installs the chart.
+3. Save the init output and unseal shares in a protected file outside the repository. Unseal with the configured threshold after each host reboot.
+4. Configure Kubernetes auth and write required application secrets into Vault. Argo CD and VSO then reconcile the app manifests and Kubernetes Secrets.
+
+The Helm chart version, Vault image, PVC size/storage class, and cluster Applications are versioned in Git. The Vault data and initialization material are not.
+
+## References
+
+- [HashiCorp Vault Helm deployment](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/helm/run)
+- [Vault Kubernetes auth](https://developer.hashicorp.com/vault/docs/auth/kubernetes)
+- [Vault Raft snapshots](https://developer.hashicorp.com/vault/docs/sysadmin/snapshots)
+- [Vault Raft snapshot restore](https://developer.hashicorp.com/vault/docs/sysadmin/snapshots/restore)

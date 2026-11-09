@@ -13,7 +13,7 @@ spec:
     path: platform/vault-ingress
   destination:
     server: https://kubernetes.default.svc
-    namespace: vault-access
+    namespace: vault
   syncPolicy:
     automated:
       prune: false

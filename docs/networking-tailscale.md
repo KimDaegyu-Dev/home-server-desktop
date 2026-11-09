@@ -5,8 +5,8 @@ The Tailscale Kubernetes Operator is managed by Argo CD. It exposes selected Kub
 ## Operator and secret flow
 
 - Argo CD installs the pinned stable Helm chart `tailscale-operator` version `1.104.4` into `tailscale`.
-- The chart uses the pre-created `operator-oauth` Secret. Its `client_id` and `client_secret` fields are synchronized from HashiCorp Vault by Vault Secrets Operator.
-- The secret path is KV v2 `kv/tailscale/operator`. The bootstrap script creates a Kubernetes auth role restricted to the `tailscale/tailscale-vault-auth` ServiceAccount and grants read access to only that Vault path.
+- The chart uses the `operator-oauth` Secret. Vault Secrets Operator syncs its `client_id` and `client_secret` fields from Vault KV v2 path `kv/tailscale/operator`.
+- The Vault policy and Kubernetes auth role restrict access to the `tailscale/tailscale-vault-auth` ServiceAccount and only that KV path.
 - The OAuth client needs Write scopes for `General/Services`, `Devices/Core`, and `Keys/Auth Keys`, with `tag:k8s-operator` allowed. Do not put its values in Git.
 
 ## Tailnet setup
@@ -14,7 +14,7 @@ The Tailscale Kubernetes Operator is managed by Argo CD. It exposes selected Kub
 In the Tailscale admin console:
 
 1. Enable MagicDNS and HTTPS certificates.
-2. Merge these owners into the existing tailnet policy; retain any existing policy entries:
+2. Merge these owners into the existing tailnet policy; retain any existing policy entries. The empty owner list on `tag:k8s-operator` means tailnet admins own that tag. The second line delegates `tag:k8s` ownership to the operator so it can create tagged proxy devices:
 
    ```json
    "tagOwners": {
@@ -23,9 +23,10 @@ In the Tailscale admin console:
    }
    ```
 
-3. Create an OAuth client with the three Write scopes above and permit it to use `tag:k8s-operator`. Save its ID and secret; Tailscale only shows the secret at creation time.
-4. Initialize and unseal Vault, then run `sudo bash ./scripts/bootstrap-vault-tailscale.sh` inside the repository in Ubuntu. Enter the OAuth credentials at its hidden prompts. The script stores them directly in Vault and removes its short-lived temporary file.
-5. Allow the intended users or groups to reach tagged Tailscale ingress proxies on TCP 443 in the tailnet policy. Do not enable Funnel unless public Internet access is deliberately required.
+3. The existing OAuth client should have the three Write scopes above and be permitted to use `tag:k8s-operator`. Keep using the same credential so the current Vault value remains valid.
+4. Allow intended users or groups to reach tagged ingress proxies on TCP 443 in the tailnet policy. Do not enable Funnel unless public Internet access is deliberately required.
+
+The Tailscale Operator applies `tag:k8s-operator` to its own node and `tag:k8s` to ingress proxy devices. The `tagOwners` relationship authorizes the operator tag to create proxy nodes under `tag:k8s`; it does not grant user access to those proxies. User traffic access is separately controlled by the tailnet grants/ACL rules.
 
 ## Ingress pattern
 
@@ -54,14 +55,15 @@ spec:
                   number: 8080
 ```
 
-The repository includes this pattern for the Argo CD web service. Vault is a systemd service outside K3s, so its L7 Ingress points to a small in-cluster NGINX bridge. The bridge verifies Vault's private CA and keeps TLS enabled for the connection to `vault.home.arpa:8200`; Tailscale terminates the external HTTPS connection with its MagicDNS certificate.
+The repository includes this pattern for Argo CD and Vault. Vault runs inside K3s in namespace `vault`; its Ingress points directly to the Vault Service. Vault uses HTTP within the cluster, while Tailscale terminates external HTTPS using its MagicDNS certificate. VSO connects to `http://vault.vault.svc:8200`.
 
-The configured tailnet hostnames are `argocd` and `vault`. Their full `https://…ts.net` addresses appear in `kubectl get ingress -A` after the Operator has authenticated and issued certificates. Vault clients outside the cluster should set `VAULT_ADDR` to the full Tailscale HTTPS address. In-cluster VSO continues to connect directly to `https://vault.home.arpa:8200`.
+The configured tailnet hostnames are `argocd` and `vault`. Read their full `https://<tailnet>.ts.net` addresses from `kubectl get ingress -A` after the Operator authenticates and issues certificates. The addresses only work from devices connected to the tailnet.
 
-Read the generated MagicDNS address from the Ingress `ADDRESS` field. The operator provisions HTTPS certificates and a proxy for each standalone Ingress. This WSL cluster is a single node, so it starts without a multi-replica ProxyGroup; a ProxyGroup can later consolidate proxies if service count grows.
+The operator provisions a proxy for each standalone Ingress. This WSL cluster is a single node, so it starts without a multi-replica ProxyGroup; a ProxyGroup can later consolidate proxies if service count grows.
 
 ## References
 
 - [Install the Tailscale Kubernetes Operator](https://tailscale.com/docs/kubernetes-operator/install-operator)
+- [Tag customization and ownership](https://tailscale.com/docs/kubernetes-operator/reference/tags)
 - [Expose a cluster workload to your tailnet](https://tailscale.com/docs/kubernetes-operator/ingress/expose-workload-to-tailnet-l7)
 - [Vault authentication for VSO](https://developer.hashicorp.com/vault/docs/deploy/kubernetes/vso/sources/vault/auth)

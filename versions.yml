@@ -1,5 +1,4 @@
 # 검토 후 이 파일에서 명시적으로 버전을 업데이트합니다.
 k3s: "v1.37.2+k3s1"
 argocd: "v3.6.1"
-vault: "2.2.1-1"
 tailscale_operator_chart: "1.104.4"

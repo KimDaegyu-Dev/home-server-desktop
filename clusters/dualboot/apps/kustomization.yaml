@@ -1,6 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
+  - vault.yaml
   - vault-secrets-operator.yaml
   - vault-connection.yaml
   - tailscale-credentials.yaml

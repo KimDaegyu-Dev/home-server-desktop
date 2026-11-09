@@ -1,16 +1,20 @@
-# 아키텍처 메모
+# Architecture
 
 ```text
 GitHub home-server-desktop
-  ├─ Ansible: Linux 준비 및 K3s 설치
+  ├─ Ansible: Ubuntu host preparation, K3s install, Argo CD bootstrap
   └─ Argo CD root Application
-       ├─ 플랫폼 컴포넌트
-       └─ 앱별 Application
+       ├─ Vault Helm chart + Raft PVC
+       ├─ Vault Secrets Operator
+       ├─ Tailscale Operator + Vault-synced OAuth Secret
+       └─ application child Applications
 
-외부 Vault ── VSO ── 앱별 Kubernetes Secret
-GitHub Actions ── GHCR ── K3s workloads
+Vault Pod ── Kubernetes Service / HTTP ──> VSO ──> app Kubernetes Secrets
+Tailnet device ── HTTPS MagicDNS ──> Tailscale proxy ──> Kubernetes Service
 ```
 
-앱 배포 기준은 Git입니다. 이미지는 Docker Desktop 로컬 캐시가 아니라 registry에서 가져옵니다. local-path PVC는 특정 노드 디스크에 묶이므로 복구는 별도 백업으로 처리합니다.
+Git contains the repeatable configuration. Vault data, init keys, root tokens, kubeconfigs, and app secret values stay outside Git. Vault uses single-node integrated Raft storage backed by a local-path PVC; its snapshots must be stored outside the cluster.
 
-현재 부트스트랩은 K3s, Argo CD, Vault Secrets Operator를 설치합니다. Vault 주소·CA, 네트워크/Ingress, 별도 영속 디스크, 앱별 매니페스트와 백업 명령은 후속 설정입니다.
+Ansible does not install the Vault server. Argo CD installs the HashiCorp Vault chart and manages its configuration. Vault remains manually initialized and Shamir-unsealed; Kubernetes auth is configured after initialization so Vault can use its in-cluster ServiceAccount and Kubernetes API Service. VSO then syncs narrowly scoped KV values into Kubernetes Secrets.
+
+K3s uses its bundled containerd runtime. Docker Desktop image cache and named volumes are not shared with K3s. App images must be published to a registry, and persistent data must be migrated using per-application backup and restore procedures.

@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - searxng-settings.yaml
   - searxng.yaml
+  - kanzo-alias.yaml
   - mcpproxy-config.yaml
   - mcpproxy.yaml
   - mcpproxy-ingress.yaml

@@ -40,10 +40,8 @@ data:
         auth: none
       kanzo:
         transport: streamable-http
-        url: http://kanzo.kanzo.svc.cluster.local:4242/mcp
+        url: http://kanzo:4242/mcp
         auth: none
-        headers:
-          Host: localhost:4242
       watchskill:
         transport: streamable-http
         url: http://watch-skill.watch-skill.svc.cluster.local:8748/mcp

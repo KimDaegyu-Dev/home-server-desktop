@@ -47,6 +47,7 @@ spec:
       labels:
         app.kubernetes.io/name: kanzo
     spec:
+      hostname: kanzo
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true

@@ -26,6 +26,7 @@ spec:
             - -t
             - streamable-http
             - --enabled-tools=search,datasource,prometheus,dashboard,folder
+            - --allowed-hosts=grafana-mcp.tail5389e9.ts.net
           ports:
             - name: http
               containerPort: 8000

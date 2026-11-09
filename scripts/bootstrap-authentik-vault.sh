@@ -2,8 +2,11 @@
 set -euo pipefail
 set +x
 
-if [[ $# -ne 0 ]]; then
-  echo "Usage: $0" >&2
+init_file=""
+if [[ $# -eq 2 && "$1" == "--token-file" ]]; then
+  init_file="$2"
+elif [[ $# -gt 0 ]]; then
+  echo "Usage: $0 [--token-file PATH]" >&2
   exit 2
 fi
 
@@ -52,14 +55,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-read -r -s -p "Vault admin token (input hidden): " VAULT_TOKEN
-echo
 token_file="$(mktemp /dev/shm/vault-admin-token.XXXXXX)"
 chmod 0600 "${token_file}"
-printf '%s' "${VAULT_TOKEN}" >"${token_file}"
+if [[ -n "${init_file}" ]]; then
+  if [[ ! -r "${init_file}" ]]; then
+    echo "Vault init file is not readable: ${init_file}" >&2
+    exit 1
+  fi
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])).get("root_token"); assert isinstance(value,str) and value; print(value,end="")' "${init_file}" >"${token_file}"
+else
+  read -r -s -p "Vault admin token (input hidden): " VAULT_TOKEN
+  echo
+  printf '%s' "${VAULT_TOKEN}" >"${token_file}"
+  unset VAULT_TOKEN
+fi
 pod_token="/tmp/vault-admin-token-authentik-$(date +%s)-$$"
 k3s kubectl cp "${token_file}" "vault/vault-0:${pod_token}"
-unset VAULT_TOKEN
 
 vault_cmd() {
   k3s kubectl exec -n vault vault-0 -- sh -c 'token_file="$1"; shift; export VAULT_TOKEN="$(cat "$token_file")" VAULT_ADDR=http://127.0.0.1:8200; exec vault "$@"' sh "${pod_token}" "$@"

@@ -9,10 +9,10 @@ Authentik is deployed by Argo CD into the `authentik` namespace and exposed thro
 
    ```bash
    cd ~/src/home-server-desktop
-   sudo bash ./scripts/bootstrap-authentik-vault.sh
+   sudo bash ./scripts/bootstrap-authentik-vault.sh --token-file /home/eorbr/vault-init.json
    ```
 
-   The script creates a narrowly scoped Vault policy and Kubernetes auth role, generates unique credentials, writes them to `kv/authentik/postgresql` and `kv/authentik/config`, and removes temporary files. It refuses to overwrite existing Authentik KV data.
+   The script reads the root token from the protected init file without printing it, creates a narrowly scoped Vault policy and Kubernetes auth role, generates unique credentials, writes them to `kv/authentik/postgresql` and `kv/authentik/config`, and removes temporary files. It refuses to overwrite existing Authentik KV data. Omit `--token-file ...` to enter a Vault token at the hidden prompt instead.
 
 3. Wait for the `authentik-credentials`, `authentik-postgresql`, and `authentik` Argo CD Applications to become Healthy. Confirm VSO reports both VaultStaticSecrets Ready and both Deployments Ready.
 4. Open `https://authentik.tail5389e9.ts.net/if/flow/initial-setup/` from a tailnet-connected device. Set the `akadmin` password and recovery email, then store the password in a password manager.

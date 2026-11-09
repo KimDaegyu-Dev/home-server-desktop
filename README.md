@@ -35,11 +35,13 @@ Linux 듀얼부팅에서는 inventory를 `ansible/inventory/dualboot.yml`로 바
 |---|---|
 | Ubuntu 호스트, K3s | Ansible |
 | Argo CD 및 플랫폼 앱 | GitOps / Application of Applications |
-| 컨테이너 이미지 | GitHub Actions와 GHCR |
+| 컨테이너 이미지 | 공식 LiteLLM 미러와 WSL Buildah 로컬 빌드 → K3s containerd |
 | 비밀값 | K3s 내부 Vault와 VSO |
 | 앱 데이터 | PVC와 별도 백업 절차 |
 
 Vault의 저장소는 단일 노드 Raft와 `local-path` PVC입니다. Pod 교체에는 데이터를 유지하지만 노드·디스크 장애 대비는 별도 스냅샷 백업이 필요합니다. Docker Desktop 이미지 캐시와 named volume은 자동으로 K3s로 이동되지 않습니다. 이미지와 데이터는 각각 registry와 백업을 통해 이전합니다.
+
+서비스 로그인과 Langfuse 키 발급, 기본 점검은 [`docs/service-checks.md`](docs/service-checks.md)를 참고하세요.
 
 ## 저장소 구조
 

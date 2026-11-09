@@ -77,7 +77,7 @@ spec:
               operator: In
               values: ["76-ai-alloy"]
   syncPolicy:
-    preserveResourcesOnDeletion: true
+    preserveResourcesOnDeletion: false
   template:
     metadata:
       name: "{{.metadata.name}}"
@@ -121,8 +121,9 @@ spec:
       {{ end }}
       syncPolicy:
         automated:
+          enabled: true
           selfHeal: true
-          prune: false
+          prune: true
         syncOptions:
           - CreateNamespace=true
           {{ if eq .metadata.name "litellm" }}

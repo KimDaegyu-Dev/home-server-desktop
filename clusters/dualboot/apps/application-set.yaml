@@ -73,7 +73,7 @@ spec:
               operator: In
               values: ["75-ai-telemetry"]
   syncPolicy:
-    preserveResourcesOnDeletion: true
+    preserveResourcesOnDeletion: false
   template:
     metadata:
       name: "{{.metadata.name}}"
@@ -108,8 +108,9 @@ spec:
         {{ end }}
       syncPolicy:
         automated:
+          enabled: true
           selfHeal: true
-          prune: false
+          prune: true
         syncOptions:
           - CreateNamespace=true
           {{ if eq .metadata.name "litellm" }}

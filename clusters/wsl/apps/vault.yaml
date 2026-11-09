@@ -58,6 +58,7 @@ spec:
     namespace: vault
   syncPolicy:
     automated:
+      enabled: true
       selfHeal: true
       prune: true
     syncOptions:

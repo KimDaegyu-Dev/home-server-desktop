@@ -12,11 +12,17 @@ Langfuse trace에는 프롬프트와 응답 내용이 포함됩니다. Langfuse 
 
    The initial bootstrap also stores nonfunctional placeholder credentials for the Langfuse exporter. They let Alloy start before the Langfuse project API key exists; replace them with the real project keys in step 4.
 
-2. GitHub Actions에서 `litellm-headroom` 이미지 게시가 완료됐는지 확인합니다. 첫 게시 후 GHCR package visibility를 public으로 바꿔 클러스터가 인증 없이 이미지를 받을 수 있게 합니다.
+2. LiteLLM Helm chart와 공식 이미지는 `docker.litellm.ai/berriai` 미러에서 가져옵니다. Headroom callback을 포함한 이미지는 WSL의 Buildah로 빌드한 뒤 K3s containerd에 직접 가져옵니다. Docker Engine과 GHCR은 필요하지 않습니다. 새 호스트는 `bootstrap-argocd.yml`이 Argo CD root Application을 적용하기 전에 이미지를 빌드합니다. 실행 중인 WSL 호스트에서 다시 빌드하려면 다음을 실행합니다.
+
+   ```bash
+   sudo bash scripts/build-litellm-headroom.sh
+   ```
+
+   강제 재빌드가 필요하면 `--force`를 추가합니다. 버전은 `versions.yml`에 고정합니다.
 
 3. Argo CD는 cert-manager → ClickHouse Operator → AI Vault/VSO 자격 증명 → Langfuse/LiteLLM → 대시보드 순서로 동기화합니다. 각 단계가 Healthy인지 확인하고, VaultStaticSecret이 Ready가 될 때까지 기다립니다.
 
-4. Langfuse UI에서 사용자와 프로젝트를 만들고 프로젝트 API key를 발급합니다. 다음 명령을 실행해 키를 숨겨 입력하고 Alloy로 전달합니다.
+4. Langfuse UI에서 사용자와 프로젝트를 만들고 프로젝트 API key를 발급합니다. 다음 명령을 실행해 키를 숨겨 입력하고 Alloy로 전달합니다. 키 생성 절차와 서비스 검증은 [`service-checks.md`](service-checks.md)를 참고합니다.
 
    ```bash
    sudo bash scripts/bootstrap-ai-vault.sh --langfuse-project-keys

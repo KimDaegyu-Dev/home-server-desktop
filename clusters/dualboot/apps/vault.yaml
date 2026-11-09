@@ -58,7 +58,8 @@ spec:
     namespace: vault
   syncPolicy:
     automated:
+      enabled: true
       selfHeal: true
-      prune: false
+      prune: true
     syncOptions:
       - CreateNamespace=true

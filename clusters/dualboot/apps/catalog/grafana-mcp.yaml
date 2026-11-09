@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: grafana-mcp
+  namespace: argocd
+  labels:
+    sourceType: git
+    serverSideApply: "false"
+    stage: 70-monitoring-mcp
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/KimDaegyu-Dev/home-server-desktop.git
+    targetRevision: main
+    path: platform/grafana-mcp
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: grafana-mcp

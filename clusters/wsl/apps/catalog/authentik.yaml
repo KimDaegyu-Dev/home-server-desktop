@@ -30,6 +30,9 @@ spec:
             password: env://AUTHENTIK_POSTGRESQL__PASSWORD
         postgresql:
           enabled: false
+        blueprints:
+          configMaps:
+            - authentik-sso-blueprints
         server:
           replicas: 1
           ingress:
@@ -45,6 +48,21 @@ spec:
                 secretKeyRef:
                   name: authentik-config
                   key: postgresql__password
+            - name: AUTHENTIK_OIDC_GRAFANA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: grafana_client_secret
+            - name: AUTHENTIK_OIDC_ARGOCD_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: argocd_client_secret
+            - name: AUTHENTIK_OIDC_VAULT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: vault_client_secret
         worker:
           replicas: 1
           env:
@@ -58,6 +76,21 @@ spec:
                 secretKeyRef:
                   name: authentik-config
                   key: postgresql__password
+            - name: AUTHENTIK_OIDC_GRAFANA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: grafana_client_secret
+            - name: AUTHENTIK_OIDC_ARGOCD_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: argocd_client_secret
+            - name: AUTHENTIK_OIDC_VAULT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: vault_client_secret
   destination:
     server: https://kubernetes.default.svc
     namespace: authentik

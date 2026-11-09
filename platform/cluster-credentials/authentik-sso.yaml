@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+version: 1
+metadata:
+  name: home-server-sso-applications
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+entries:
+  - model: authentik_providers_oauth2.oauth2provider
+    id: grafana-oauth-provider
+    identifiers:
+      name: Grafana OIDC
+    attrs:
+      name: Grafana OIDC
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      grant_types:
+        - authorization_code
+        - refresh_token
+      client_id: grafana
+      client_secret: !Env AUTHENTIK_OIDC_GRAFANA_CLIENT_SECRET
+      redirect_uris:
+        - matching_mode: strict
+          url: https://grafana.tail5389e9.ts.net/login/generic_oauth
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'offline_access'"]]
+      issuer_mode: per_provider
+      include_claims_in_id_token: true
+      sub_mode: hashed_user_id
+    state: present
+  - model: authentik_core.application
+    id: grafana-oauth-application
+    identifiers:
+      slug: grafana
+    attrs:
+      name: Grafana
+      provider: !KeyOf grafana-oauth-provider
+      policy_engine_mode: any
+
+  - model: authentik_providers_oauth2.oauth2provider
+    id: argocd-oauth-provider
+    identifiers:
+      name: Argo CD OIDC
+    attrs:
+      name: Argo CD OIDC
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      grant_types:
+        - authorization_code
+        - refresh_token
+      client_id: argocd
+      client_secret: !Env AUTHENTIK_OIDC_ARGOCD_CLIENT_SECRET
+      redirect_uris:
+        - matching_mode: strict
+          url: https://argocd.tail5389e9.ts.net/auth/callback
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'offline_access'"]]
+      issuer_mode: per_provider
+      include_claims_in_id_token: true
+      sub_mode: hashed_user_id
+    state: present
+  - model: authentik_core.application
+    id: argocd-oauth-application
+    identifiers:
+      slug: argocd
+    attrs:
+      name: Argo CD
+      provider: !KeyOf argocd-oauth-provider
+      policy_engine_mode: any
+
+  - model: authentik_providers_oauth2.oauth2provider
+    id: vault-oauth-provider
+    identifiers:
+      name: Vault OIDC
+    attrs:
+      name: Vault OIDC
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      grant_types:
+        - authorization_code
+        - refresh_token
+      client_id: vault
+      client_secret: !Env AUTHENTIK_OIDC_VAULT_CLIENT_SECRET
+      redirect_uris:
+        - matching_mode: strict
+          url: https://vault.tail5389e9.ts.net/ui/vault/auth/oidc/oidc/callback
+        - matching_mode: strict
+          url: http://localhost:8250/oidc/callback
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
+        - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'offline_access'"]]
+      issuer_mode: per_provider
+      include_claims_in_id_token: true
+      sub_mode: hashed_user_id
+    state: present
+  - model: authentik_core.application
+    id: vault-oauth-application
+    identifiers:
+      slug: vault
+    attrs:
+      name: Vault
+      provider: !KeyOf vault-oauth-provider
+      policy_engine_mode: any

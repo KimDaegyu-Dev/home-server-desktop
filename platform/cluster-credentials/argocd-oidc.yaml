@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  url: https://argocd.tail5389e9.ts.net
+  oidc.config: |
+    name: Authentik
+    issuer: https://authentik.tail5389e9.ts.net/application/o/argocd/
+    clientID: argocd
+    clientSecret: $oidc.authentik.clientSecret
+    requestedScopes:
+      - openid
+      - profile
+      - email
+      - offline_access
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+data:
+  policy.default: role:readonly
+  policy.csv: |
+    g, authentik Admins, role:admin
+  scopes: '[groups]'

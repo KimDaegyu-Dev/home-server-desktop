@@ -13,3 +13,13 @@ resources:
   - monitoring-namespace.yaml
   - grafana-admin.yaml
   - monitoring-vault-auth.yaml
+  - authentik-sso-clients.yaml
+  - grafana-oidc.yaml
+  - argocd-oidc.yaml
+  - grafana-mcp-credentials.yaml
+configMapGenerator:
+  - name: authentik-sso-blueprints
+    files:
+      - authentik-sso.yaml
+generatorOptions:
+  disableNameSuffixHash: true

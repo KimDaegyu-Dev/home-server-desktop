@@ -38,3 +38,33 @@ Back up the Authentik PostgreSQL database and the Vault Raft snapshot outside th
 - [Authentik OIDC providers](https://docs.goauthentik.io/add-secure-apps/providers/oauth2/)
 - [Argo CD OIDC user management](https://argo-cd.readthedocs.io/en/latest/operator-manual/user-management/)
 - [Vault JWT/OIDC auth method](https://developer.hashicorp.com/vault/docs/auth/jwt)
+
+## Connect cluster services to Authentik
+
+The GitOps blueprint creates separate OIDC clients for Grafana, Argo CD, and Vault. Their client secrets are generated locally and stored in Vault; the blueprint reads them from VSO-synced Kubernetes Secrets. Grafana SSO assigns the `Editor` role so the account can edit dashboards while local admin login stays available for recovery. Argo CD maps the Authentik `authentik Admins` group to `role:admin`; the local admin remains enabled. Vault's `home-server-admin` OIDC role is bound to the `akadmin` username, while token login remains enabled.
+
+Before syncing the Authentik chart changes, seed the generated client secrets into Vault:
+
+```bash
+sudo bash ./scripts/bootstrap-sso-vault.sh --token-file /home/eorbr/vault-init.json --seed-only
+```
+
+After the Authentik chart and its blueprint have created the three OIDC providers, configure Vault OIDC and provision Argo CD's client secret:
+
+```bash
+sudo bash ./scripts/bootstrap-sso-vault.sh --token-file /home/eorbr/vault-init.json --configure-only
+```
+
+Wait for Authentik, Grafana, and Argo CD to reload their OIDC configuration. Sign in to Grafana or Argo CD with the Authentik button. In Vault, choose the `oidc` auth method and role `home-server-admin`. Keep local login as a break-glass path until each SSO flow has been verified.
+
+## Grafana MCP
+
+The `grafana-mcp` Argo CD Application runs Grafana's Streamable HTTP MCP server at `https://grafana-mcp.tail5389e9.ts.net/mcp`. Tailscale provides HTTPS and network access is restricted to the tailnet. MCP requests also require a bearer token. The server uses a dedicated Grafana `Editor` service account and exposes search, datasource, Prometheus, dashboard, and folder tools; it does not receive Grafana administrator credentials.
+
+After Grafana is healthy and the SSO bootstrap above has run, create the service account and Vault credentials:
+
+```bash
+sudo bash ./scripts/bootstrap-grafana-mcp.sh --token-file /home/eorbr/vault-init.json
+```
+
+The MCP caller token is stored at `kv/monitoring/grafana-mcp`, field `mcp_server_token`. The service-account token is stored beside it and synchronized only into the MCP namespace. Do not put either token in Git. The Windows Codex client can use this MCP URL with the caller token supplied through the `GRAFANA_MCP_TOKEN` environment variable.

@@ -48,6 +48,10 @@ spec:
             - key: home-server.io/stage
               operator: In
               values: ["60-monitoring-alloy"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["70-monitoring-mcp"]
   syncPolicy:
     preserveResourcesOnDeletion: true
   template:

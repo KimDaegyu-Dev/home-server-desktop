@@ -22,13 +22,40 @@ data:
         transport: streamable-http
         url: https://mcp.context7.com/mcp
         auth: none
+      grafana:
+        transport: streamable-http
+        url: http://grafana-mcp.grafana-mcp.svc.cluster.local:8000/mcp
+        auth: static
+        headers:
+          Authorization: Bearer ${GRAFANA_MCP_SERVER_TOKEN}
+          Host: grafana-mcp.tail5389e9.ts.net
       searxng:
         transport: stdio
         command: [python3, /opt/mcp-servers/searxng-mcp.py]
         env:
           SEARXNG_BASE_URL: http://searxng.search.svc.cluster.local:8080
     policy:
-      allowed_tools: [searxng_search, "context7_resolve-library-id", "context7_query-docs"]
+      allowed_tools:
+        - searxng_search
+        - "context7_resolve-library-id"
+        - "context7_query-docs"
+        - grafana_check_datasources_health
+        - grafana_get_dashboard_by_uid
+        - grafana_get_dashboard_panel_queries
+        - grafana_get_dashboard_property
+        - grafana_get_dashboard_summary
+        - grafana_list_dashboard_versions
+        - grafana_list_datasources
+        - grafana_list_prometheus_label_names
+        - grafana_list_prometheus_label_values
+        - grafana_list_prometheus_metric_metadata
+        - grafana_list_prometheus_metric_names
+        - grafana_query_prometheus
+        - grafana_query_prometheus_histogram
+        - grafana_search_dashboards
+        - grafana_search_folders
+        - grafana_create_folder
+        - grafana_update_dashboard
       denied_tools: []
       approval_tools: []
       on_rug_pull: kill

@@ -15,7 +15,7 @@ spec:
       labels:
         app.kubernetes.io/name: mcpproxy
       annotations:
-        checksum-mcpproxy-config: "5738a4fda7bfb02ab2a725ef27cf273a65edf13924ad2ec67dcb646402ae5996"
+        checksum-mcpproxy-config: "95a62dbfeb49424b09b3bd1c4ce43e8a0bddd0d5fb198e63775da6d4379b4496"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -66,6 +66,11 @@ spec:
                 secretKeyRef:
                   name: mcpproxy-credentials
                   key: authentik_client_secret
+            - name: GRAFANA_MCP_SERVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-mcp-credentials
+                  key: mcp_server_token
           volumeMounts:
             - name: bin
               mountPath: /opt/bin

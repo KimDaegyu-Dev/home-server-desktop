@@ -24,6 +24,8 @@ If the initial setup flow is unavailable after pods become healthy, use Authenti
 
 Configure native OIDC for Argo CD, Vault, and Grafana. Use a separate Authentik OAuth2/OpenID provider and client secret for each service. Keep each provider's redirect URI exact, scope Vault roles and Argo CD permissions to explicit Authentik groups, and sync each client secret from Vault through VSO. For applications without native OIDC, use an Authentik Proxy Provider only when the app's session and API behavior are compatible.
 
+Select Authentik's RSA internal JWT certificate as the signing key on all three OAuth providers. Without a selected signing key, Authentik signs ID tokens with HS256, which these OIDC clients may reject. In Grafana's Helm values, keep `auth.generic_oauth` as its own dotted `grafana.ini` section key; nesting `generic_oauth` beneath `auth` renders it as a map instead of a Grafana INI section.
+
 Roll out one service at a time. Verify an SSO login in a private browser session, check the expected role, then verify local break-glass login still works before moving to the next service. Keep tailnet access and the existing Tailscale Ingress layer in place.
 
 ## Recovery and backup

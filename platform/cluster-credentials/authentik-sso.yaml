@@ -29,6 +29,7 @@ entries:
         - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
         - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'offline_access'"]]
       issuer_mode: per_provider
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Internal JWT Certificate"]]
       include_claims_in_id_token: true
       sub_mode: hashed_user_id
     state: present
@@ -65,6 +66,7 @@ entries:
         - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
         - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'offline_access'"]]
       issuer_mode: per_provider
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Internal JWT Certificate"]]
       include_claims_in_id_token: true
       sub_mode: hashed_user_id
     state: present
@@ -103,6 +105,7 @@ entries:
         - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'profile'"]]
         - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'offline_access'"]]
       issuer_mode: per_provider
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Internal JWT Certificate"]]
       include_claims_in_id_token: true
       sub_mode: hashed_user_id
     state: present

@@ -1,19 +1,76 @@
 ---
-- name: Retire the external systemd Vault after an in-cluster restore is verified
+- name: Retire the external systemd Vault after in-cluster verification
   hosts: home_server
   become: true
   gather_facts: false
   tasks:
-    - name: Require K3s before cleaning cluster-side bridge resources
+    - name: Require the in-cluster Vault to be initialized and unsealed
       ansible.builtin.command:
-        argv: [/usr/local/bin/k3s, kubectl, get, nodes]
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - exec
+          - --namespace=vault
+          - vault-0
+          - --
+          - vault
+          - status
+          - -format=json
+      register: in_cluster_vault_status
       changed_when: false
+      failed_when: >-
+        in_cluster_vault_status.rc != 0 or
+        not (in_cluster_vault_status.stdout | from_json).initialized or
+        (in_cluster_vault_status.stdout | from_json).sealed
+
+    - name: Require the OAuth secret to be synced and healthy by VSO
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - get
+          - vaultstaticsecret
+          - tailscale-operator-oauth
+          - --namespace=tailscale
+          - -o=jsonpath={.status.conditions[?(@.type=="SecretSynced")].status}{" "}{.status.conditions[?(@.type=="Healthy")].status}{" "}{.status.conditions[?(@.type=="Ready")].status}
+      register: vso_secret_status
+      changed_when: false
+      failed_when: vso_secret_status.rc != 0 or vso_secret_status.stdout != "True True True"
+
+    - name: Require the replacement Tailscale Vault Ingress to have an address
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - get
+          - ingress
+          - vault
+          - --namespace=vault
+          - -o=jsonpath={.status.loadBalancer.ingress[0].hostname}
+      register: vault_ingress_address
+      changed_when: false
+      failed_when: vault_ingress_address.rc != 0 or vault_ingress_address.stdout | length == 0
 
     - name: Stop and disable the old systemd Vault service
       ansible.builtin.systemd_service:
         name: vault
         state: stopped
         enabled: false
+
+    - name: Purge the old systemd Vault package
+      ansible.builtin.apt:
+        name: vault
+        state: absent
+        purge: true
+        autoremove: false
+
+    - name: Delete the old systemd Vault Raft data and host configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/vault
+        - /etc/vault.d
 
     - name: Remove the old host-side Vault DNS alias
       ansible.builtin.lineinfile:
@@ -104,8 +161,9 @@
       register: old_ingress_namespace
       changed_when: "'deleted' in old_ingress_namespace.stdout"
 
-    - name: Preserve the old Vault package, Raft directory, TLS material, and init file
+    - name: Report the protected migration materials that remain outside the host service
       ansible.builtin.debug:
         msg: >-
-          The old service is disabled and its host DNS/CoreDNS/Ingress bridge is removed.
-          /var/lib/vault/data and /etc/vault.d were intentionally preserved for rollback.
+          The systemd Vault package, /var/lib/vault, /etc/vault.d, and old DNS/Ingress bridge
+          have been removed. The Raft snapshot and original init file remain at their
+          protected paths outside Git for recovery.

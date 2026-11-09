@@ -12,10 +12,12 @@ Updated: 2026-11-09
 
 ## Vault transition
 
-- Existing systemd Vault remains active, initialized, and unsealed at the time of the snapshot. It remains the source of truth until restore verification is complete.
+- Vault has been restored into the K3s Helm release from the source Raft snapshot. It is initialized, unsealed with the original Shamir shares, and reports the original Vault cluster ID.
 - A Raft snapshot is stored outside Git at `/home/eorbr/vault-raft-pre-migration-20261109.snap`, mode `0600` (27,824 bytes).
 - Original init material is `/home/eorbr/vault-init.json`, mode `0600`. Do not print it, commit it, or replace the original unseal shares during migration.
-- Git has been updated to route VSO to `http://vault.vault.svc:8200` and make the Vault Ingress point to the in-cluster Service. The NGINX bridge and external Vault DNS/TLS configuration should be removed only after the snapshot restore and secret sync are confirmed.
+- The systemd Vault service is disabled. Run `ansible/playbooks/archive-external-vault.yml` after the Vault, VSO secret, and replacement Tailscale Ingress checks pass to purge the old package, host data, TLS/configuration, and obsolete network bridge.
+- Auto Unseal is not configured. Vault continues to use Shamir 3-of-5 and requires manual unseal after a Vault pod or WSL restart.
+- Git routes VSO to `http://vault.vault.svc:8200` and points the Vault Ingress directly to the in-cluster Service. The guarded archive playbook removes the former NGINX bridge and external Vault DNS/TLS configuration after migration checks pass.
 - Follow [`vault.md`](vault.md) for the ordered snapshot restore. The chart destination must be initialized once, restored with `-force`, then unsealed with three of the original five shares.
 
 ## Tailscale prerequisite

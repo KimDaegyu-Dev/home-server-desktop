@@ -6,7 +6,7 @@ Vault listens on HTTP inside the cluster. VSO connects to `http://vault.vault.sv
 
 ## Current WSL migration
 
-The previous systemd Vault is still the source of truth until the restore is confirmed. Its Shamir keys, root token, and Raft data remain in place. A protected source snapshot was saved at `/home/eorbr/vault-raft-pre-migration-20261109.snap` (mode `0600`). Do not initialize a clean Vault and begin using it for secrets before restoring that snapshot.
+The WSL migration restored the source Raft snapshot into the K3s Helm release. The restored Vault is initialized and unsealed with the original Shamir shares and retains the original cluster ID. The protected source snapshot remains at `/home/eorbr/vault-raft-pre-migration-20261109.snap` (mode `0600`); the original init material remains at `/home/eorbr/vault-init.json` (mode `0600`). Keep both outside Git.
 
 1. Commit and push the Vault Helm Application. Argo CD creates the `vault` namespace, StatefulSet, and PVC. Check `kubectl -n vault get pod,pvc` and wait until `vault-0` is Running.
 2. Use the guarded restore script. It first confirms that the destination is reachable and uninitialized, validates and copies the snapshot, initializes the destination into a protected temporary file, unseals it with the temporary key, then submits the forced restore with the temporary root token. It refuses to overwrite an already initialized destination:
@@ -25,7 +25,9 @@ The previous systemd Vault is still the source of truth until the restore is con
    Run the unseal command three times, entering a different original share each time. Confirm `Initialized: true`, `Sealed: false`, and `Storage Type: raft` with `sudo k3s kubectl exec -n vault vault-0 -- vault status`.
 
 4. The snapshot also restores the previous Kubernetes auth configuration, which points at the host API address. Run `sudo bash ./scripts/bootstrap-vault-tailscale.sh --auth-only` from the repo to update TokenReview to the in-cluster API; this leaves the restored OAuth secret untouched. Then verify the Tailscale KV record, auth mount, policy, and role. Check VSO's `VaultStaticSecret` becomes `Ready=True`, then check the Tailscale Operator logs and both Ingress `ADDRESS` fields. After verification, remove the temporary init file and in-Pod snapshot: `sudo k3s kubectl exec -n vault vault-0 -- rm -f /tmp/vault-destination-init.json /tmp/vault-raft-source.snap`.
-5. Only after those checks, run `ansible-playbook -i ansible/inventory/wsl.yml ansible/playbooks/archive-external-vault.yml` to disable the old systemd Vault service and remove its host DNS/TLS bridge configuration. Keep `/var/lib/vault/data`, the source snapshot, and the original initialization file as rollback material until a separate backup has been verified.
+5. The old systemd Vault service is disabled. After verifying the in-cluster Vault is unsealed, the Tailscale OAuth `VaultStaticSecret` is healthy, and the new Vault Ingress has an address, run `ansible-playbook -i ansible/inventory/wsl.yml ansible/playbooks/archive-external-vault.yml`. This playbook checks those conditions, purges the old Vault package and `/var/lib/vault` plus `/etc/vault.d`, and removes the previous host DNS/CoreDNS/Ingress bridge. The protected snapshot and original init file remain outside Git for recovery.
+
+Auto Unseal is intentionally not configured. Vault uses Shamir 3-of-5 and must be manually unsealed after a Vault pod or WSL restart.
 
 The snapshot contains encrypted Vault state but is sensitive backup material. Keep it outside Git, restrict its permissions, and copy it to durable storage before relying on this migration as the only backup.
 

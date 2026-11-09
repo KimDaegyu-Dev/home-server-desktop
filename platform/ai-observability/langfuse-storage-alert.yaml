@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: langfuse-storage
+  namespace: monitoring
+spec:
+  groups:
+    - name: langfuse.storage
+      rules:
+        - alert: LangfusePersistentVolumeNearlyFull
+          expr: (kubelet_volume_stats_used_bytes{namespace="langfuse"} / kubelet_volume_stats_capacity_bytes{namespace="langfuse"}) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Langfuse storage volume is over 85% full
+            description: "PVC {{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace }} is {{ $value | humanizePercentage }} full. Langfuse OSS does not expire traces automatically."

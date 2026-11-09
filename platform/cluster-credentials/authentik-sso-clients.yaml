@@ -5,6 +5,11 @@ metadata:
   namespace: authentik
 spec:
   vaultAuthRef: authentik
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: authentik-server
+    - kind: Deployment
+      name: authentik-worker
   mount: kv
   path: authentik/sso-clients
   type: kv-v2
@@ -15,4 +20,3 @@ spec:
     name: authentik-sso-clients
     overwrite: true
     transformation:
-      excludeRaw: true

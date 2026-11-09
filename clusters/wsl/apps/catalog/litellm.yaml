@@ -1,0 +1,115 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: litellm
+  namespace: argocd
+  labels:
+    sourceType: helm
+    oci: "true"
+    serverSideApply: "false"
+    stage: 74-ai-apps
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  project: default
+  source:
+    repoURL: ghcr.io/berriai/litellm-helm
+    chart: litellm-helm
+    targetRevision: "1.106.7"
+    helm:
+      releaseName: litellm
+      values: |
+        replicaCount: 1
+        image:
+          repository: ghcr.io/kimdaegyu-dev/home-server-desktop/litellm-headroom
+          tag: "1.106.7-headroom-0.43.1"
+          pullPolicy: IfNotPresent
+        masterkeySecretName: litellm-secrets
+        masterkeySecretKey: LITELLM_MASTER_KEY
+        environmentSecrets:
+          - litellm-secrets
+        proxyConfigMap:
+          create: true
+        proxy_config:
+          model_list:
+            - model_name: coder
+              litellm_params:
+                model: openai/coder
+                api_base: http://strata-bridge.litellm.svc.cluster.local:18081/v1
+                api_key: os.environ/STRATA_BRIDGE_TOKEN
+            - model_name: iq_3s
+              litellm_params:
+                model: openai/iq_3s
+                api_base: http://strata-bridge.litellm.svc.cluster.local:18081/v1
+                api_key: os.environ/STRATA_BRIDGE_TOKEN
+          general_settings:
+            master_key: os.environ/PROXY_MASTER_KEY
+            store_model_in_db: false
+            enable_oauth_sso: true
+            ui_access_mode: admin_only
+          litellm_settings:
+            callbacks:
+              - headroom_proxy_callback.instance
+              - otel
+            redact_user_api_key_info: true
+        envVars:
+          PROXY_BASE_URL: https://litellm.tail5389e9.ts.net
+          LITELLM_OTEL_V2: "true"
+          LITELLM_OTEL_INTEGRATION_ENABLE_METRICS: "true"
+          OTEL_EXPORTER: otlp_http
+          OTEL_ENDPOINT: http://alloy.monitoring.svc.cluster.local:4318
+          OTEL_SERVICE_NAME: litellm
+          OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: span_only
+          LITELLM_OTEL_LANGFUSE_SPAN_SCOPE: llm_only
+          GENERIC_CLIENT_ID: litellm
+          GENERIC_AUTHORIZATION_ENDPOINT: https://authentik.tail5389e9.ts.net/application/o/authorize/
+          GENERIC_TOKEN_ENDPOINT: https://authentik.tail5389e9.ts.net/application/o/token/
+          GENERIC_USERINFO_ENDPOINT: https://authentik.tail5389e9.ts.net/application/o/userinfo/
+          GENERIC_USER_ID_ATTRIBUTE: sub
+          GENERIC_SCOPE: openid profile email
+        db:
+          deployStandalone: true
+          endpoint: litellm-postgresql
+          database: litellm
+          secret:
+            name: litellm-secrets
+            usernameKey: POSTGRES_USER
+            passwordKey: POSTGRES_PASSWORD
+        postgresql:
+          architecture: standalone
+          auth:
+            username: litellm
+            database: litellm
+            existingSecret: litellm-secrets
+            secretKeys:
+              userPasswordKey: POSTGRES_PASSWORD
+          primary:
+            persistence:
+              enabled: true
+              size: 5Gi
+        metricsServer:
+          enabled: true
+          port: 4001
+        serviceMonitor:
+          enabled: true
+          interval: 30s
+        service:
+          type: ClusterIP
+          port: 4000
+        ingress:
+          enabled: false
+        resources:
+          requests:
+            cpu: 250m
+            memory: 1Gi
+          limits:
+            memory: 3Gi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: litellm
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: false
+    syncOptions:
+      - CreateNamespace=true

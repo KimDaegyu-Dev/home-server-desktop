@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ai-observability
+  namespace: argocd
+  labels:
+    sourceType: git
+    serverSideApply: "false"
+    stage: 75-ai-telemetry
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/KimDaegyu-Dev/home-server-desktop.git
+    targetRevision: main
+    path: platform/ai-observability
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: false
+    syncOptions:
+      - CreateNamespace=true

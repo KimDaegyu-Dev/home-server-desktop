@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - langfuse-exporter-secret.yaml
+  - strata-bridge-service.yaml
+  - langfuse-storage-alert.yaml
+configMapGenerator:
+  - name: grafana-ai-dashboard
+    namespace: monitoring
+    files:
+      - litellm-overview.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+generatorOptions:
+  disableNameSuffixHash: true

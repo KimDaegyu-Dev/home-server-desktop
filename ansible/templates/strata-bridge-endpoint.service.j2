@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh Kubernetes endpoint for the authenticated Windows llama-swap bridge
+Requires=k3s.service
+After=k3s.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/home-server-update-strata-bridge-endpoint.sh

@@ -15,4 +15,3 @@ spec:
     name: grafana-admin
     overwrite: true
     transformation:
-      excludeRaw: true

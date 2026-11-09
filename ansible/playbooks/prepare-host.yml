@@ -62,6 +62,40 @@
         group: root
         mode: "0750"
 
+    - name: Install the WSL Strata bridge endpoint refresh timer
+      when: home_environment == "wsl"
+      block:
+        - name: Install the endpoint updater script
+          ansible.builtin.copy:
+            src: ../../scripts/update-strata-bridge-endpoint.sh
+            dest: /usr/local/sbin/home-server-update-strata-bridge-endpoint.sh
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Install the systemd endpoint service
+          ansible.builtin.template:
+            src: ../templates/strata-bridge-endpoint.service.j2
+            dest: /etc/systemd/system/home-server-strata-bridge-endpoint.service
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Install the systemd endpoint timer
+          ansible.builtin.template:
+            src: ../templates/strata-bridge-endpoint.timer.j2
+            dest: /etc/systemd/system/home-server-strata-bridge-endpoint.timer
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Enable the endpoint refresh timer
+          ansible.builtin.systemd_service:
+            name: home-server-strata-bridge-endpoint.timer
+            enabled: true
+            state: started
+            daemon_reload: true
+
     - name: Show selected profile
       ansible.builtin.debug:
         msg: "Profile={{ home_environment }}, storage={{ k3s_storage_path }}"

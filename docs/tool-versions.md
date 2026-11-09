@@ -7,6 +7,8 @@ Helm charts and their application images are pinned in each environment's Argo C
 - Vault Helm chart `0.34.1`, Vault image `2.2.1`.
 - Vault Secrets Operator chart `1.6.2`.
 - Tailscale Operator chart `1.104.4`.
+- cert-manager chart `v1.20.2` and ClickHouse Operator chart `0.0.8` are Langfuse prerequisites.
+- Langfuse chart `2.2.3` / app `4.75.0`; LiteLLM monolithic chart `1.106.7` / app `1.106.7`; Headroom Python package `0.43.1`.
 
 Update WSL and dual-boot Application definitions together when changing a platform chart or image. Review the upstream release notes, update the version pins, and reconcile the WSL cluster before applying the change to dual-boot.
 

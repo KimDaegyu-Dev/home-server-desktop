@@ -15,4 +15,3 @@ spec:
     name: grafana-oidc
     overwrite: true
     transformation:
-      excludeRaw: true

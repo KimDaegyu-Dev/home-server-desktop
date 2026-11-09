@@ -52,6 +52,26 @@ spec:
             - key: home-server.io/stage
               operator: In
               values: ["70-monitoring-mcp"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["71-cert-manager"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["72-clickhouse-operator"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["73-ai-platform"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["74-ai-apps"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["75-ai-telemetry"]
   syncPolicy:
     preserveResourcesOnDeletion: true
   template:
@@ -73,6 +93,9 @@ spec:
         {{ if eq .metadata.labels.sourceType "helm" }}
         chart: {{.spec.source.chart | toJson}}
         helm:
+          {{ if hasKey .metadata.labels "oci" }}
+          enableOCI: true
+          {{ end }}
           releaseName: {{.spec.source.helm.releaseName | toJson}}
           {{ if hasKey .metadata.labels "skipCrds" }}
           {{ if eq .metadata.labels.skipCrds "true" }}

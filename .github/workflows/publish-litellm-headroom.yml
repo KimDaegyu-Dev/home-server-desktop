@@ -1,0 +1,30 @@
+name: Publish LiteLLM with Headroom
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - images/litellm-headroom/**
+      - .github/workflows/publish-litellm-headroom.yml
+      - versions.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: images/litellm-headroom
+          push: true
+          tags: ghcr.io/kimdaegyu-dev/home-server-desktop/litellm-headroom:1.106.7-headroom-0.43.1

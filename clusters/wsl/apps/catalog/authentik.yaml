@@ -63,6 +63,18 @@ spec:
                 secretKeyRef:
                   name: authentik-sso-clients
                   key: vault_client_secret
+            - name: AUTHENTIK_OIDC_LANGFUSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: langfuse_client_secret
+                  optional: true
+            - name: AUTHENTIK_OIDC_LITELLM_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: litellm_client_secret
+                  optional: true
         worker:
           replicas: 1
           env:
@@ -91,6 +103,18 @@ spec:
                 secretKeyRef:
                   name: authentik-sso-clients
                   key: vault_client_secret
+            - name: AUTHENTIK_OIDC_LANGFUSE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: langfuse_client_secret
+                  optional: true
+            - name: AUTHENTIK_OIDC_LITELLM_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-sso-clients
+                  key: litellm_client_secret
+                  optional: true
   destination:
     server: https://kubernetes.default.svc
     namespace: authentik

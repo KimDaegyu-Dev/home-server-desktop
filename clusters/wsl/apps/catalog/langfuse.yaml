@@ -1,0 +1,137 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: langfuse
+  namespace: argocd
+  labels:
+    sourceType: helm
+    serverSideApply: "false"
+    stage: 74-ai-apps
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  project: default
+  source:
+    repoURL: https://langfuse.github.io/langfuse-k8s
+    chart: langfuse
+    targetRevision: "2.2.3"
+    helm:
+      releaseName: langfuse
+      values: |
+        langfuse:
+          replicas: 1
+          image:
+            tag: "4.75.0"
+            pullPolicy: IfNotPresent
+          salt:
+            secretKeyRef:
+              name: langfuse
+              key: salt
+          encryptionKey:
+            secretKeyRef:
+              name: langfuse
+              key: encryption-key
+          nextauth:
+            url: https://langfuse.tail5389e9.ts.net
+            secret:
+              secretKeyRef:
+                name: langfuse
+                key: nextauth-secret
+          features:
+            telemetryEnabled: false
+            signUpDisabled: false
+          additionalEnv:
+            - name: AUTH_AUTHENTIK_CLIENT_ID
+              value: langfuse
+            - name: AUTH_AUTHENTIK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-auth
+                  key: AUTH_AUTHENTIK_CLIENT_SECRET
+            - name: AUTH_AUTHENTIK_ISSUER
+              value: https://authentik.tail5389e9.ts.net/application/o/langfuse/
+          ingress:
+            enabled: false
+          web:
+            replicas: 1
+            pdb:
+              create: false
+          worker:
+            replicas: 1
+        postgresql:
+          deploy: true
+          auth:
+            username: langfuse
+            database: langfuse
+            password: ""
+            existingSecret: langfuse
+            secretKeys:
+              userPasswordKey: postgresql-password
+              adminPasswordKey: POSTGRES_PASSWORD
+          settings:
+            existingSecret: langfuse
+          userDatabase:
+            existingSecret: langfuse
+          storage:
+            requestedSize: 5Gi
+        clickhouse:
+          deploy: true
+          crdCheck: true
+          auth:
+            username: default
+            existingSecret: langfuse
+            existingSecretKey: clickhouse-password
+          cluster:
+            enabled: true
+            replicas: 1
+            image:
+              tag: "26.8.36.3"
+            storage:
+              size: 20Gi
+            resources:
+              requests:
+                cpu: 500m
+                memory: 1Gi
+              limits:
+                memory: 3Gi
+          keeper:
+            enabled: true
+            replicas: 1
+            storage:
+              size: 2Gi
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                memory: 512Mi
+        redis:
+          deploy: true
+          auth:
+            enabled: true
+            existingSecret: langfuse
+            existingSecretPasswordKey: redis-password
+            usersExistingSecret: langfuse
+          dataStorage:
+            enabled: true
+            requestedSize: 2Gi
+        s3:
+          deploy: true
+          auth:
+            existingSecret: langfuse
+            rootUserSecretKey: s3-user
+            rootPasswordSecretKey: s3-password
+          allInOne:
+            data:
+              size: 5Gi
+            s3:
+              existingConfigSecret: langfuse
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: langfuse
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: false
+    syncOptions:
+      - CreateNamespace=true

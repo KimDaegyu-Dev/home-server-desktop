@@ -6,7 +6,7 @@ metadata:
   labels:
     sourceType: helm
     serverSideApply: "false"
-    stage: 60-monitoring-alloy
+    stage: 76-ai-alloy
   annotations:
     argocd.argoproj.io/sync-wave: "15"
 spec:

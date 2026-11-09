@@ -72,6 +72,10 @@ spec:
             - key: home-server.io/stage
               operator: In
               values: ["75-ai-telemetry"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["76-ai-alloy"]
   syncPolicy:
     preserveResourcesOnDeletion: true
   template:

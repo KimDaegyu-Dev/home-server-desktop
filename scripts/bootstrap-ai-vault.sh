@@ -90,7 +90,7 @@ if [[ -z "$vault_status" ]] || ! grep -q '"initialized"[[:space:]]*:[[:space:]]*
 fi
 unset vault_status
 
-if vault_cmd kv metadata get -mount=kv ai/langfuse >/dev/null 2>&1 || vault_cmd kv metadata get -mount=kv ai/litellm >/dev/null 2>&1; then
+if vault_cmd kv metadata get -mount=kv ai/langfuse >/dev/null 2>&1 || vault_cmd kv metadata get -mount=kv ai/litellm >/dev/null 2>&1 || vault_cmd kv metadata get -mount=kv ai/langfuse-exporter >/dev/null 2>&1; then
   echo "AI bootstrap data already exists. Refusing to rotate credentials; use Vault's normal rotation procedure." >&2
   exit 1
 fi
@@ -132,6 +132,12 @@ PY
 chmod 0600 "$tmp"/*.json
 vault_cmd kv put -mount=kv ai/langfuse "@$tmp/langfuse.json" >/dev/null
 vault_cmd kv put -mount=kv ai/litellm "@$tmp/litellm.json" >/dev/null
+python3 - "$tmp/langfuse-exporter.json" <<'PY'
+import json, sys
+with open(sys.argv[1], "w") as f: json.dump({"publicKey": "pending-vault-sync", "secretKey": "pending-vault-sync"}, f)
+PY
+chmod 0600 "$tmp/langfuse-exporter.json"
+vault_cmd kv put -mount=kv ai/langfuse-exporter "@$tmp/langfuse-exporter.json" >/dev/null
 
 LANGFUSE_CLIENT="$langfuse_client" python3 - "$tmp/langfuse-auth.json" <<'PY'
 import json, os, sys
@@ -189,6 +195,6 @@ k3s kubectl -n authentik rollout status deployment/authentik-server --timeout=18
 k3s kubectl -n authentik rollout status deployment/authentik-worker --timeout=180s >/dev/null
 k3s kubectl -n authentik exec deployment/authentik-worker -- python manage.py shell -c 'import os; from authentik.providers.oauth2.models import OAuth2Provider; pairs=[("grafana","AUTHENTIK_OIDC_GRAFANA_CLIENT_SECRET"),("argocd","AUTHENTIK_OIDC_ARGOCD_CLIENT_SECRET"),("vault","AUTHENTIK_OIDC_VAULT_CLIENT_SECRET"),("langfuse","AUTHENTIK_OIDC_LANGFUSE_CLIENT_SECRET"),("litellm","AUTHENTIK_OIDC_LITELLM_CLIENT_SECRET")]; assert all(OAuth2Provider.objects.filter(client_id=client).update(client_secret=os.environ[env]) == 1 for client,env in pairs), "Expected exactly one OAuth provider for every client id"' >/dev/null
 
-echo "Seeded Langfuse, LiteLLM, and Authentik client credentials in Vault; configured narrow VSO policies and roles."
+echo "Seeded Langfuse, LiteLLM, Authentik, and initial Langfuse exporter credentials in Vault; configured narrow VSO policies and roles."
 echo "Wait for the Authentik and AI VaultStaticSecrets to become Ready. For Authentik, restart server/worker after the new VSO keys appear."
 echo "After first Langfuse UI setup, create a project API key and run this script with --langfuse-project-keys."

@@ -10,6 +10,8 @@ Langfuse trace에는 프롬프트와 응답 내용이 포함됩니다. Langfuse 
 
 1. WSL Ubuntu에서 최신 저장소를 받은 뒤 `sudo bash scripts/bootstrap-ai-vault.sh`를 실행합니다. Vault admin token은 숨김 입력합니다. 스크립트는 앱 암호화 키, DB 암호, LiteLLM master key, 브리지 토큰, Authentik OAuth client secrets를 생성해 Vault에 넣습니다. 값은 터미널에 표시하지 않습니다. Langfuse 전용 Authentik secret은 `ai/langfuse-auth`에 별도로 저장하고, Authentik namespace에서만 공유되는 클라이언트 secret 경로를 Langfuse에 복제하지 않습니다. `ai/langfuse` 또는 `ai/litellm` 경로가 이미 있으면 회전을 막기 위해 초기화를 중단합니다.
 
+   The initial bootstrap also stores nonfunctional placeholder credentials for the Langfuse exporter. They let Alloy start before the Langfuse project API key exists; replace them with the real project keys in step 4.
+
 2. GitHub Actions에서 `litellm-headroom` 이미지 게시가 완료됐는지 확인합니다. 첫 게시 후 GHCR package visibility를 public으로 바꿔 클러스터가 인증 없이 이미지를 받을 수 있게 합니다.
 
 3. Argo CD는 cert-manager → ClickHouse Operator → AI Vault/VSO 자격 증명 → Langfuse/LiteLLM → 대시보드 순서로 동기화합니다. 각 단계가 Healthy인지 확인하고, VaultStaticSecret이 Ready가 될 때까지 기다립니다.

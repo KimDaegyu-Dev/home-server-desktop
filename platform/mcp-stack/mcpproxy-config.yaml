@@ -18,13 +18,17 @@ data:
         client_secret: ${AUTHENTIK_OIDC_CLIENT_SECRET}
         scopes: [openid, email, profile]
     backends:
+      context7:
+        transport: streamable-http
+        url: https://mcp.context7.com/mcp
+        auth: none
       searxng:
         transport: stdio
         command: [python3, /opt/mcp-servers/searxng-mcp.py]
         env:
           SEARXNG_BASE_URL: http://searxng.search.svc.cluster.local:8080
     policy:
-      allowed_tools: [searxng_search]
+      allowed_tools: [searxng_search, "context7_resolve-library-id", "context7_query-docs"]
       denied_tools: []
       approval_tools: []
       on_rug_pull: kill

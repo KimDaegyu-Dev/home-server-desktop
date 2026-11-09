@@ -32,29 +32,42 @@ if [[ -z "${vault_status}" ]] || ! grep -q '"initialized"[[:space:]]*:[[:space:]
 fi
 unset vault_status
 
-read -r -s -p "Vault admin token (input hidden): " VAULT_TOKEN
-echo
 payload_file=""
+policy_file=""
 pod_payload=""
+pod_policy=""
+token_file=""
+pod_token=""
 cleanup() {
+  local remote_files=() local_files=()
+  [[ -n "${pod_payload}" ]] && remote_files+=("${pod_payload}")
+  [[ -n "${pod_policy}" ]] && remote_files+=("${pod_policy}")
+  [[ -n "${pod_token}" ]] && remote_files+=("${pod_token}")
+  [[ -n "${payload_file}" ]] && local_files+=("${payload_file}")
+  [[ -n "${policy_file}" ]] && local_files+=("${policy_file}")
+  [[ -n "${token_file}" ]] && local_files+=("${token_file}")
+  if ((${#remote_files[@]})); then
+    k3s kubectl exec -n vault vault-0 -- rm -f "${remote_files[@]}" >/dev/null 2>&1 || true
+  fi
+  if ((${#local_files[@]})); then
+    rm -f "${local_files[@]}"
+  fi
   unset VAULT_TOKEN
-  if [[ -n "${pod_payload}" ]]; then
-    k3s kubectl exec -n vault vault-0 -- rm -f "${pod_payload}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${payload_file}" ]]; then
-    rm -f "${payload_file}"
-  fi
 }
 trap cleanup EXIT
 
-# Send the admin token over kubectl exec stdin so it is not placed in process arguments.
 vault_cmd() {
-  if [[ -t 0 ]]; then
-    printf '%s\n' "${VAULT_TOKEN}" | k3s kubectl exec -i -n vault vault-0 -- sh -c 'IFS= read -r VAULT_TOKEN; export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200; exec vault "$@"' sh "$@"
-  else
-    { printf '%s\n' "${VAULT_TOKEN}"; cat; } | k3s kubectl exec -i -n vault vault-0 -- sh -c 'IFS= read -r VAULT_TOKEN; export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200; exec vault "$@"' sh "$@"
-  fi
+  k3s kubectl exec -n vault vault-0 -- sh -c 'token_file="$1"; shift; export VAULT_TOKEN="$(cat "$token_file")" VAULT_ADDR=http://127.0.0.1:8200; exec vault "$@"' sh "${pod_token}" "$@"
 }
+
+read -r -s -p "Vault admin token (input hidden): " VAULT_TOKEN
+echo
+token_file="$(mktemp /dev/shm/vault-admin-token.XXXXXX)"
+chmod 0600 "${token_file}"
+printf '%s' "${VAULT_TOKEN}" >"${token_file}"
+pod_token="/tmp/vault-admin-token-$(date +%s)-$$"
+k3s kubectl cp "${token_file}" "vault/vault-0:${pod_token}"
+unset VAULT_TOKEN
 
 if ! vault_cmd auth list -format=json | grep -q '"kubernetes/"'; then
   vault_cmd auth enable -path=kubernetes kubernetes
@@ -69,11 +82,16 @@ if ! vault_cmd secrets list -format=json | grep -q '"kv/"'; then
   vault_cmd secrets enable -path=kv kv-v2
 fi
 
-vault_cmd policy write tailscale-operator - <<'POLICY'
+policy_file="$(mktemp /dev/shm/tailscale-policy.XXXXXX.hcl)"
+chmod 0600 "${policy_file}"
+cat >"${policy_file}" <<'POLICY'
 path "kv/data/tailscale/operator" {
   capabilities = ["read"]
 }
 POLICY
+pod_policy="/tmp/tailscale-policy-$(date +%s)-$$.hcl"
+k3s kubectl cp "${policy_file}" "vault/vault-0:${pod_policy}"
+vault_cmd policy write tailscale-operator "${pod_policy}"
 
 vault_cmd write auth/kubernetes/role/tailscale-operator \
   bound_service_account_names=tailscale-vault-auth \

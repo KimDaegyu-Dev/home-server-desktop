@@ -10,6 +10,7 @@ Agent client
        -> Context7 documentation lookup
        -> ai-memory read-only MCP tools
        -> Graphify code graph for the pinned home-server-desktop revision
+       -> Kanzo task board (delete tool excluded)
        -> existing Grafana MCP (approved dashboard and Prometheus tools)
   -> Alloy -> Prometheus metrics and Langfuse traces
 ```
@@ -37,7 +38,7 @@ The MCP ingress is Tailnet-only through Tailscale Operator and uses the hostname
 | Context7 | Upstream Context7 documentation service | Search query and library/version selection go to the external provider; no local corpus | No local persistence. Add an API key from Vault if rate limits require it; do not commit a provider token. | Outbound MCP backend only. |
 | agent-browser | Target websites and transient browser session | Page content and screenshots may contain personal data | Ephemeral browser profile by default; no host browser profile, Docker socket, or persistent downloads. Restrict egress to required sites when an allowlist is known. | MCPProxy only; no browser UI ingress. |
 | watch-skill | Existing local videos, screen captures, notes, and index DB | Media and human-reviewed lessons | Preserve `/home/eorbr/.watch-skill/index.db`, `.config/watch-skill`, and the existing backup archive. Set an explicit media-retention policy and backup path before moving data. Never mount `docker.sock`. | MCPProxy only; restrict tools to read/annotate until destructive operations are reviewed. |
-| Kanzo | Current Kanzo SQLite task database | Tasks and project notes | SQLite PVC and consistent SQLite backup (`VACUUM INTO` or online backup API); test restore. | ClusterIP only because upstream Kanzo has no login. Authentik protection is required before any UI route. |
+| Kanzo | New task board; no prior Kanzo database was found on the WSL/Windows source paths | Tasks and project notes in SQLite | 2Gi local-path PVC; use SQLite's online backup API and preserve config/attachments. UI remains internal until an Authentik-protected route is available. | ClusterIP plus NetworkPolicy from `mcp`; task create/update tools are enabled, delete is excluded. |
 | LiteLLM | Existing LiteLLM deployment and PostgreSQL | Requests, usage, cost, virtual keys | Reuse the existing endpoint and database; do not deploy a second proxy or database. API keys remain in Vault. | Existing Tailnet HTTPS endpoint; MCPProxy only receives a deliberately scoped credential if a backend requires it. |
 | Langfuse | Existing Langfuse deployment and ClickHouse/PostgreSQL | Prompt/response traces and evaluations | Existing PVC backup plan applies; trace retention must be bounded before adding more spans. Avoid duplicating prompt bodies in MCPProxy WAL. | Existing Tailnet HTTPS endpoint. |
 
@@ -62,7 +63,7 @@ Each tool addition must pass the following before it is put on the gateway allow
 3. Wait for `mcp-stack` to become `Synced / Healthy`; verify SearXNG `/healthz`, JSON API search, MCPProxy `/healthz`, `/metrics`, OAuth metadata, and exactly the single allowed search tool.
 4. Confirm the Tailnet Ingress address, complete Authentik OAuth from a real client, and sync the single endpoint into Windows and WSL clients with Skillshare.
 5. Context7 and Grafana MCP are already configured. Graphify builds a code-only graph from a pinned revision, without the semantic pass that sends documents to a model. ai-memory is configured as a ClusterIP backend; run the Vault bootstrap to create/reuse its bearer token, then run `sudo bash scripts/migrate-ai-memory-to-k3s.sh` from WSL after the PVC is Bound. The script refuses an active source process, imports into a staging directory, compares file checksums, and leaves the original tree and pre-migration archive untouched. Only read-only memory and graph tools are allowed through MCPProxy; inferred edges remain labeled and must not be saved as confirmed facts without user review.
-6. Locate Snowball's original Compose and named-volume data before migrating it. Keep source volumes intact through backup, import, count/hash comparison, query verification, and restore test. Graphiti, Graphify, browser automation, watch-skill, and Kanzo remain unconfigured and must be added after their sources, data, and access model have been verified.
+6. Locate Snowball's original Compose and named-volume data before migrating it. Keep source volumes intact through backup, import, count/hash comparison, query verification, and restore test. Graphiti, browser automation, and watch-skill remain unconfigured; Graphify and Kanzo are configured but await Vault bootstrap and GitOps rollout. Kanzo's UI remains internal until an Authentik-protected route is configured.
 
 ## Skillshare client configuration
 

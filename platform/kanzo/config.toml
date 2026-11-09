@@ -1,0 +1,3 @@
+port = 4242
+listen = "0.0.0.0"
+mcp_http = true

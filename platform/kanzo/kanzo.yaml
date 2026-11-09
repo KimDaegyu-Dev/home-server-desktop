@@ -1,0 +1,267 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kanzo-data
+  namespace: kanzo
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kanzo-backups
+  namespace: kanzo
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kanzo
+  namespace: kanzo
+  labels:
+    app.kubernetes.io/name: kanzo
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kanzo
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: install-kanzo
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          imagePullPolicy: IfNotPresent
+          command: [python3, /installer/fetch-kanzo.py]
+          volumeMounts:
+            - name: kanzo-binary
+              mountPath: /opt/kanzo
+            - name: installer
+              mountPath: /installer
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: kanzo
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - >-
+              if [ ! -f /data/config.toml ]; then cp /seed/config.toml /data/config.toml; fi;
+              exec /opt/kanzo/kanzo --home /data --port 4242 --no-open
+          env:
+            - name: KANZO_HOME
+              value: /data
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 4242
+              protocol: TCP
+          volumeMounts:
+            - name: kanzo-binary
+              mountPath: /opt/kanzo
+              readOnly: true
+            - name: kanzo-data
+              mountPath: /data
+            - name: seed-config
+              mountPath: /seed
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: kanzo-binary
+          emptyDir:
+            sizeLimit: 32Mi
+        - name: installer
+          configMap:
+            name: kanzo-seed-config
+            defaultMode: 0444
+            items:
+              - key: fetch-kanzo.py
+                path: fetch-kanzo.py
+        - name: seed-config
+          configMap:
+            name: kanzo-seed-config
+            defaultMode: 0444
+            items:
+              - key: config.toml
+                path: config.toml
+        - name: kanzo-data
+          persistentVolumeClaim:
+            claimName: kanzo-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kanzo
+  namespace: kanzo
+  labels:
+    app.kubernetes.io/name: kanzo
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kanzo
+  ports:
+    - name: http
+      port: 4242
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kanzo-backup
+  namespace: kanzo
+spec:
+  schedule: "17 2 * * *"
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+          containers:
+            - name: backup
+              image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+              imagePullPolicy: IfNotPresent
+              command: [python3, /backup/backup-kanzo.py]
+              env:
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: "1"
+              volumeMounts:
+                - name: kanzo-data
+                  mountPath: /data
+                  readOnly: true
+                - name: kanzo-backups
+                  mountPath: /backups
+                - name: backup-script
+                  mountPath: /backup
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+                readOnlyRootFilesystem: true
+          volumes:
+            - name: kanzo-data
+              persistentVolumeClaim:
+                claimName: kanzo-data
+            - name: kanzo-backups
+              persistentVolumeClaim:
+                claimName: kanzo-backups
+            - name: backup-script
+              configMap:
+                name: kanzo-seed-config
+                defaultMode: 0444
+                items:
+                  - key: backup-kanzo.py
+                    path: backup-kanzo.py
+            - name: tmp
+              emptyDir:
+                sizeLimit: 1Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kanzo-mcp-ingress
+  namespace: kanzo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mcp
+      ports:
+        - protocol: TCP
+          port: 4242

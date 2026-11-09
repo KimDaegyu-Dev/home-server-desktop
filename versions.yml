@@ -20,6 +20,8 @@ mcpproxy_linux_amd64_sha256: "3a6e794321ded9cd71c467e426407fa24b1dad26b0d9040f81
 ai_memory_image: "docker.io/akitaonrails/ai-memory@sha256:6d107f95f7c4a79d3b2de789baf2013a3b20ddabdf12da83ca4c56f85b84b0c8"
 graphifyy: "0.9.104"
 graphify_source_revision: "7d3a92a3ad8fc2a2f6a258f1918d6ae16f31241d"
+kanzo: "0.4.1"
+kanzo_linux_amd64_sha256: "660622f9b366d5a459b5b850b177370f76e18d9819993d0f0fabce00ae076c41"
 searxng: "2026.11.8-74418092d@sha256:7add5ffe7933e6b46aa3a26bed8a0c342c9a45ec331d9a8cf145e46b04b24f36"
 skillshare_cli: "v0.30.1"
 skillshare_windows_amd64_sha256: "6ea2735464f19783902adfe15e8ae5e34e257a789274a1c172012fe9685a8e34"

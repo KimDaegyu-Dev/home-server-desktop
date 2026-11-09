@@ -3,6 +3,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: graphify-data
   namespace: graphify
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   accessModes:
     - ReadWriteOnce

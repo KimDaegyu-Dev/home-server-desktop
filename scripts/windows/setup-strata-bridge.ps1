@@ -61,7 +61,9 @@ $server = @'
 $ErrorActionPreference = 'Continue'
 Add-Type -AssemblyName System.Net.Http
 $port = 18081
-$tokenPath = Join-Path $env:ProgramData 'HomeServer\StrataBridge\token.xml'
+$bridgeRoot = Join-Path $env:ProgramData 'HomeServer\StrataBridge'
+$tokenPath = Join-Path $bridgeRoot 'token.xml'
+$logPath = Join-Path $bridgeRoot 'bridge.log'
 $secureToken = Import-Clixml -LiteralPath $tokenPath
 $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
 try { $bridgeToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
@@ -108,14 +110,19 @@ while ($listener.IsListening) {
         $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
         $context.Response.StatusCode = [int]$response.StatusCode
         foreach ($header in $response.Headers) {
-            if ($header.Key -notin @('Transfer-Encoding','Connection','Keep-Alive')) { $context.Response.Headers[$header.Key] = [string]::Join(',', $header.Value) }
+            if ($header.Key -notin @('Transfer-Encoding','Connection','Keep-Alive','Date','Server')) { $context.Response.Headers[$header.Key] = [string]::Join(',', $header.Value) }
         }
         foreach ($header in $response.Content.Headers) {
+            if ($header.Key -eq 'Content-Type') { $context.Response.ContentType = [string]::Join(',', $header.Value); continue }
             if ($header.Key -notin @('Transfer-Encoding','Connection','Keep-Alive','Content-Length')) { $context.Response.Headers[$header.Key] = [string]::Join(',', $header.Value) }
         }
+        $contentLength = $response.Content.Headers.ContentLength
+        if ($null -ne $contentLength) { $context.Response.ContentLength64 = [long]$contentLength }
+        else { $context.Response.SendChunked = $true }
         $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
         $stream.CopyToAsync($context.Response.OutputStream).GetAwaiter().GetResult()
     } catch {
+        try { Add-Content -LiteralPath $logPath -Value "$(Get-Date -Format o) $($_.Exception.GetType().FullName): $($_.Exception.Message)" -Encoding UTF8 } catch {}
         if ($null -ne $context) { try { $context.Response.StatusCode = 502; $context.Response.Close() } catch {} }
     } finally {
         if ($null -ne $response) { $response.Dispose() }
@@ -132,11 +139,32 @@ Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remov
 New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $port -RemoteAddress $wslCidr -Profile Any | Out-Null
 
 $account = "$env:USERDOMAIN\$env:USERNAME"
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$serverPath`""
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$serverPath`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
 $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Highest
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
 Start-ScheduledTask -TaskName $taskName
 
-Write-Host "Installed the authenticated WSL-only bridge on TCP $port (firewall source: $wslCidr)."
+$deadline = (Get-Date).AddSeconds(20)
+$bridgeReady = $false
+do {
+    Start-Sleep -Milliseconds 500
+    try { $bridgeReady = (Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 2).StatusCode -eq 200 } catch { }
+} while (-not $bridgeReady -and (Get-Date) -lt $deadline)
+if (-not $bridgeReady) { throw "Bridge did not become healthy. Check $logPath." }
+
+$tokenPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($token)
+try {
+    $plainToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPointer)
+    $models = Invoke-RestMethod -Uri "http://127.0.0.1:$port/v1/models" -Headers @{ Authorization = "Bearer $plainToken" } -TimeoutSec 10
+} catch {
+    throw "Bridge health succeeded, but authenticated llama-swap model discovery failed. Check $logPath. $($_.Exception.Message)"
+} finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPointer)
+    $plainToken = $null
+}
+if (-not $models.data -or $models.data.Count -lt 1) { throw "Bridge returned no models. Check $logPath." }
+
+Write-Host "Installed and verified the authenticated WSL-only bridge on TCP $port (firewall source: $wslCidr)."
+Write-Host "llama-swap model discovery succeeded ($($models.data.Count) models)."
 Write-Host 'Run Ansible prepare-host.yml in WSL to refresh the Kubernetes endpoint after WSL networking changes.'

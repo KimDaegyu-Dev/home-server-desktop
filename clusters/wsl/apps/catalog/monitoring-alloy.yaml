@@ -20,9 +20,17 @@ spec:
       values: |
         alloy:
           enableReporting: false
-          envFrom:
-            - secretRef:
-                name: langfuse-exporter
+          extraEnv:
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-exporter
+                  key: publicKey
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-exporter
+                  key: secretKey
           configMap:
             content: |
               otelcol.receiver.otlp "default" {
@@ -40,8 +48,8 @@ spec:
 
               otelcol.auth.basic "langfuse" {
                 client_auth {
-                  username = sys.env("publicKey")
-                  password = sys.env("secretKey")
+                  username = sys.env("LANGFUSE_PUBLIC_KEY")
+                  password = sys.env("LANGFUSE_SECRET_KEY")
                 }
               }
 

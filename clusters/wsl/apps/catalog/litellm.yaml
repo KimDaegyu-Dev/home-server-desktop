@@ -28,6 +28,21 @@ spec:
         masterkeySecretKey: LITELLM_MASTER_KEY
         environmentSecrets:
           - litellm-secrets
+        extraEnvVars:
+          - name: DATABASE_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: litellm-dbcredentials
+                key: username
+          - name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: litellm-dbcredentials
+                key: password
+          - name: DATABASE_HOST
+            value: litellm-postgresql
+          - name: DATABASE_NAME
+            value: litellm
         proxyConfigMap:
           create: true
         proxy_config:
@@ -95,6 +110,9 @@ spec:
           enabled: true
           interval: 30s
         migrationJob:
+          command: ["/bin/sh", "-c"]
+          args:
+            - 'export DATABASE_URL="postgresql://${DATABASE_USERNAME}:${DATABASE_PASSWORD}@${DATABASE_HOST}:5432/${DATABASE_NAME}"; exec python litellm/proxy/prisma_migration.py'
           hooks:
             argocd:
               enabled: false

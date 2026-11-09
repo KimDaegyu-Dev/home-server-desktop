@@ -21,7 +21,7 @@ spec:
         app.kubernetes.io/name: agent-browser
     spec:
       serviceAccountName: agent-browser-vault-auth
-      automountServiceAccountToken: true
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

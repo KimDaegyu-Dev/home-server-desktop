@@ -138,13 +138,13 @@ spec:
         app.kubernetes.io/name: graphiti
     spec:
       serviceAccountName: graphiti-vault-auth
-      automountServiceAccountToken: true
+      automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
-        fsGroupChangePolicy: OnRootMismatch
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: graphiti
           image: zepai/knowledge-graph-mcp:1.1.3-graphiti-0.31.2-standalone@sha256:288b79e987adc71d1f55f9f44d9a62fb0422a80eb6870b0e32abb9ad85c12d69
@@ -178,6 +178,8 @@ spec:
               value: /model-cache
             - name: HOME
               value: /model-cache/home
+            - name: UV_CACHE_DIR
+              value: /tmp/uv-cache
           ports:
             - name: http
               containerPort: 8000
@@ -212,6 +214,9 @@ spec:
               cpu: 2
               memory: 2Gi
           securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]

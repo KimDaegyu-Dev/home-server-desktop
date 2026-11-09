@@ -20,16 +20,24 @@ if k3s ctr -n k8s.io images list -q | grep -Fxq "${image}"; then
   exit 0
 fi
 
-buildah bud --format docker \
-  --build-arg "AGENT_BROWSER_VERSION=${agent_browser_version}" \
-  --build-arg "AGENT_BROWSER_SHA256=${agent_browser_sha}" \
-  --build-arg "SUPERGATEWAY_VERSION=${supergateway_version}" \
-  --build-arg "SUPERGATEWAY_SHA256=${supergateway_sha}" \
-  -f "${repo_root}/platform/agent-browser/Dockerfile" \
-  -t "${image}" "${repo_root}/platform/agent-browser"
+if ! buildah images --format '{{.Name}}:{{.Tag}}' | grep -Fxq "${image}"; then
+  buildah bud --format docker \
+    --build-arg "AGENT_BROWSER_VERSION=${agent_browser_version}" \
+    --build-arg "AGENT_BROWSER_SHA256=${agent_browser_sha}" \
+    --build-arg "SUPERGATEWAY_VERSION=${supergateway_version}" \
+    --build-arg "SUPERGATEWAY_SHA256=${supergateway_sha}" \
+    -f "${repo_root}/platform/agent-browser/Dockerfile" \
+    -t "${image}" "${repo_root}/platform/agent-browser"
+else
+  echo "Reusing the locally built Agent Browser image: ${image}"
+fi
 
-archive="$(mktemp /dev/shm/agent-browser.XXXXXX.oci.tar)"
+archive="$(mktemp /dev/shm/agent-browser.XXXXXX.docker.tar)"
 trap 'rm -f "${archive}"' EXIT
-buildah push "${image}" "oci-archive:${archive}"
+buildah push "${image}" "docker-archive:${archive}:${image}"
 k3s ctr -n k8s.io images import "${archive}"
+if ! k3s ctr -n k8s.io images list -q | grep -Fxq "${image}"; then
+  echo "K3s containerd did not register the expected image reference: ${image}" >&2
+  exit 1
+fi
 echo "Imported ${image} into K3s containerd."

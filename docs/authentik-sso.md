@@ -55,6 +55,14 @@ After the Authentik chart and its blueprint have created the three OIDC provider
 sudo bash ./scripts/bootstrap-sso-vault.sh --token-file /home/eorbr/vault-init.json --configure-only
 ```
 
+To rotate all three OIDC client secrets later, run:
+
+```bash
+sudo bash ./scripts/bootstrap-sso-vault.sh --token-file /home/eorbr/vault-init.json --rotate-secrets
+```
+
+After Vault Secrets Operator syncs the new values, restart the Authentik server and worker so Authentik reapplies the blueprint.
+
 Wait for Authentik, Grafana, and Argo CD to reload their OIDC configuration. Sign in to Grafana or Argo CD with the Authentik button. In Vault, choose the `oidc` auth method and role `home-server-admin`. Keep local login as a break-glass path until each SSO flow has been verified.
 
 ## Grafana MCP

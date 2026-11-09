@@ -19,8 +19,12 @@ while (($#)); do
       mode="configure-only"
       shift
       ;;
+    --rotate-secrets)
+      mode="rotate-secrets"
+      shift
+      ;;
     *)
-      echo "Usage: $0 [--token-file PATH] [--seed-only|--configure-only]" >&2
+      echo "Usage: $0 [--token-file PATH] [--seed-only|--configure-only|--rotate-secrets]" >&2
       exit 2
       ;;
   esac
@@ -89,6 +93,25 @@ k3s kubectl cp "${token_file}" "vault/vault-0:${pod_token}"
 vault_cmd() {
   k3s kubectl exec -n vault vault-0 -- sh -c 'token_file="$1"; shift; export VAULT_TOKEN="$(cat "$token_file")" VAULT_ADDR=http://127.0.0.1:8200; exec vault "$@"' sh "${pod_token}" "$@"
 }
+
+if [[ "${mode}" == "rotate-secrets" ]]; then
+  grafana_secret="$(openssl rand -hex 32)"
+  argocd_secret="$(openssl rand -hex 32)"
+  vault_secret="$(openssl rand -hex 32)"
+  clients_file="$(mktemp /dev/shm/authentik-sso-clients.XXXXXX.json)"
+  grafana_file="$(mktemp /dev/shm/grafana-oidc.XXXXXX.json)"
+  chmod 0600 "${clients_file}" "${grafana_file}"
+  printf '%s\n%s\n%s\n' "${grafana_secret}" "${argocd_secret}" "${vault_secret}" | python3 -c 'import json,sys; grafana,argocd,vault=sys.stdin.read().splitlines(); json.dump({"grafana_client_secret":grafana,"argocd_client_secret":argocd,"vault_client_secret":vault},open(sys.argv[1],"w"))' "${clients_file}"
+  printf '%s' "${grafana_secret}" | python3 -c 'import json,sys; json.dump({"client_id":"grafana","client_secret":sys.stdin.read()},open(sys.argv[1],"w"))' "${grafana_file}"
+  pod_clients="/tmp/authentik-sso-clients-$(date +%s)-$$.json"
+  pod_grafana="/tmp/grafana-oidc-$(date +%s)-$$.json"
+  k3s kubectl cp "${clients_file}" "vault/vault-0:${pod_clients}"
+  k3s kubectl cp "${grafana_file}" "vault/vault-0:${pod_grafana}"
+  vault_cmd kv put -mount=kv authentik/sso-clients "@${pod_clients}" >/dev/null
+  vault_cmd kv put -mount=kv monitoring/grafana-oidc "@${pod_grafana}" >/dev/null
+  echo "Rotated the Authentik OIDC client secrets in Vault."
+  exit 0
+fi
 
 if vault_cmd kv metadata get -mount=kv authentik/sso-clients >/dev/null 2>&1; then
   grafana_secret="$(vault_cmd kv get -field=grafana_client_secret -mount=kv authentik/sso-clients)"

@@ -29,6 +29,20 @@ assert [tool["name"] for tool in replies[1]["result"]["tools"]] == ["search"]
 print("SearXNG MCP initialize and tools/list passed.")
 PY
 
+python3 - "$repo_root/platform/mcp-stack/mcpproxy-config.yaml" <<'PY'
+import ast, sys
+from pathlib import Path
+lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+start = lines.index("  oauth-proxy.py: |") + 1
+source = []
+for line in lines[start:]:
+    if line and not line.startswith("    "):
+        break
+    source.append(line[4:] if line.startswith("    ") else "")
+ast.parse("\n".join(source), filename="oauth-proxy.py")
+print("MCP OAuth resource metadata proxy syntax passed.")
+PY
+
 mkdir -p "$tmp/bin"
 curl -fsSL "https://github.com/hoophq/mcpproxy/releases/download/${version}/${archive}" -o "$tmp/$archive"
 echo "$sha256  $tmp/$archive" | sha256sum -c - >/dev/null

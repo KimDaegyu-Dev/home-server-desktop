@@ -74,8 +74,10 @@ spec:
         chart: {{.spec.source.chart | toJson}}
         helm:
           releaseName: {{.spec.source.helm.releaseName | toJson}}
+          {{ if hasKey .metadata.labels "skipCrds" }}
           {{ if eq .metadata.labels.skipCrds "true" }}
           skipCrds: true
+          {{ end }}
           {{ end }}
           values: {{.spec.source.helm.values | toJson}}
         {{ else }}

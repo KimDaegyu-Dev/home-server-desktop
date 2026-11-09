@@ -120,6 +120,10 @@ spec:
               value: "1"
             - name: WATCHSKILL_DATA_DIR
               value: /data
+            - name: HF_HOME
+              value: /data/cache/huggingface
+            - name: XDG_CACHE_HOME
+              value: /data/cache
             - name: WATCHSKILL_BIN_DIR
               value: /data/bin
             - name: WATCHSKILL_CACHE_MAX_BYTES

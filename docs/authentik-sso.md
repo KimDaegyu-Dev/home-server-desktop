@@ -14,7 +14,7 @@ Authentik is deployed by Argo CD into the `authentik` namespace and exposed thro
 
    The script reads the root token from the protected init file without printing it, creates a narrowly scoped Vault policy and Kubernetes auth role, generates unique credentials, writes them to `kv/authentik/postgresql` and `kv/authentik/config`, and removes temporary files. It refuses to overwrite existing Authentik KV data. Omit `--token-file ...` to enter a Vault token at the hidden prompt instead.
 
-3. Wait for the `authentik-credentials`, `authentik-postgresql`, and `authentik` Argo CD Applications to become Healthy. Confirm VSO reports both VaultStaticSecrets Ready and both Deployments Ready.
+3. Wait for the `platform-credentials`, `authentik-postgresql`, and `authentik` Argo CD Applications to become Healthy. Confirm VSO reports both VaultStaticSecrets Ready and both Deployments Ready.
 4. Open `https://authentik.tail5389e9.ts.net/if/flow/initial-setup/` from a tailnet-connected device. Set the `akadmin` password and recovery email, then store the password in a password manager.
 5. Keep `akadmin` and the current Argo CD admin/Vault root-token recovery paths until every OIDC integration is tested. Do not remove local break-glass access as part of the first SSO rollout.
 

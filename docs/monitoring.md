@@ -6,7 +6,7 @@ Grafana Alloy runs as a single Deployment and accepts application OTLP metrics o
 
 ## Bootstrap Grafana credentials
 
-1. Push GitOps manifests and wait for the `monitoring-credentials` Application to create the namespace, VaultAuth, and `monitoring-vault-auth` ServiceAccount.
+1. Push GitOps manifests and wait for the `platform-credentials` Application to create the namespace, VaultAuth, and `monitoring-vault-auth` ServiceAccount.
 2. From Ubuntu, seed a random Grafana admin password into Vault:
 
    ```bash

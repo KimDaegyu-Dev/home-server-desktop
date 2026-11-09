@@ -3,6 +3,10 @@ kind: Application
 metadata:
   name: monitoring-stack
   namespace: argocd
+  labels:
+    sourceType: helm
+    serverSideApply: "true"
+    stage: 50-monitoring-stack
   annotations:
     argocd.argoproj.io/sync-wave: "10"
 spec:
@@ -60,9 +64,6 @@ spec:
                       storage: 2Gi
         kubeEtcd:
           enabled: false
-        prometheus-node-exporter:
-          hostRootFsMount:
-            mountPropagation: ""
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring

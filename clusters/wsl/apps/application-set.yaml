@@ -1,0 +1,82 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: home-server-platform
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  goTemplate: true
+  goTemplateOptions:
+    - missingkey=error
+  generators:
+    - git:
+        repoURL: https://github.com/KimDaegyu-Dev/home-server-desktop.git
+        revision: main
+        requeueAfterSeconds: 60
+        files:
+          - path: clusters/wsl/apps/catalog/*.yaml
+  strategy:
+    type: RollingSync
+    rollingSync:
+      steps:
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["00-credentials"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["10-tailscale"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["20-ingress"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["30-authentik-postgresql"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["40-authentik"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["50-monitoring-stack"]
+        - matchExpressions:
+            - key: home-server.io/stage
+              operator: In
+              values: ["60-monitoring-alloy"]
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+  template:
+    metadata:
+      name: "{{.metadata.name}}"
+      labels:
+        app.kubernetes.io/part-of: home-server-desktop
+        home-server.io/stage: "{{.metadata.labels.stage}}"
+    spec:
+      project: default
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{.spec.destination.namespace}}"
+  templatePatch: |
+    spec:
+      source:
+        repoURL: {{.spec.source.repoURL | toJson}}
+        targetRevision: {{.spec.source.targetRevision | toJson}}
+        {{ if eq .metadata.labels.sourceType "helm" }}
+        chart: {{.spec.source.chart | toJson}}
+        helm:
+          releaseName: {{.spec.source.helm.releaseName | toJson}}
+          values: {{.spec.source.helm.values | toJson}}
+        {{ else }}
+        path: {{.spec.source.path | toJson}}
+        {{ end }}
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace=true
+          {{ if eq .metadata.labels.serverSideApply "true" }}
+          - ServerSideApply=true
+          {{ end }}

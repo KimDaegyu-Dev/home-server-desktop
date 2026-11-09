@@ -3,6 +3,10 @@ kind: Application
 metadata:
   name: monitoring-alloy
   namespace: argocd
+  labels:
+    sourceType: helm
+    serverSideApply: "false"
+    stage: 60-monitoring-alloy
   annotations:
     argocd.argoproj.io/sync-wave: "15"
 spec:

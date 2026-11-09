@@ -3,6 +3,10 @@ kind: Application
 metadata:
   name: authentik-postgresql
   namespace: argocd
+  labels:
+    sourceType: helm
+    serverSideApply: "false"
+    stage: 30-authentik-postgresql
   annotations:
     argocd.argoproj.io/sync-wave: "10"
 spec:

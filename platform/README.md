@@ -1,3 +1,5 @@
-# Platform components
+# Platform manifests
 
-현재 Vault Secrets Operator Application은 `clusters/<profile>/apps/`에서 관리합니다. Ingress, 인증서, 스토리지 확장은 운영 선택과 주소가 결정된 후 이 디렉터리에 추가합니다.
+Cluster-wide credential resources are collected in `cluster-credentials/` and Tailscale Ingress resources in `cluster-ingress/`. The corresponding Argo CD Applications are generated from `clusters/<profile>/apps/catalog/` by the profile's ApplicationSet.
+
+Keep secret values in Vault KV. Git contains only VaultStaticSecret references and non-secret configuration. The ApplicationSet preserves workloads when an Application descriptor is removed, so deleting a catalog entry does not automatically delete the underlying resources.

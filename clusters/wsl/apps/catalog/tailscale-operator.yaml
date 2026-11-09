@@ -3,6 +3,10 @@ kind: Application
 metadata:
   name: tailscale-operator
   namespace: argocd
+  labels:
+    sourceType: helm
+    serverSideApply: "false"
+    stage: 10-tailscale
   annotations:
     argocd.argoproj.io/sync-wave: "10"
 spec:
@@ -13,6 +17,7 @@ spec:
     targetRevision: "1.104.4"
     helm:
       releaseName: tailscale-operator
+      values: ""
   destination:
     server: https://kubernetes.default.svc
     namespace: tailscale

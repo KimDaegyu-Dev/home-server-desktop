@@ -3,16 +3,4 @@ kind: Kustomization
 resources:
   - vault.yaml
   - vault-secrets-operator.yaml
-  - vault-connection.yaml
-  - tailscale-credentials.yaml
-  - tailscale-operator.yaml
-  - tailscale-ingress.yaml
-  - vault-ingress.yaml
-  - authentik-credentials.yaml
-  - authentik-postgresql.yaml
-  - authentik.yaml
-  - authentik-ingress.yaml
-  - monitoring-credentials.yaml
-  - monitoring-stack.yaml
-  - monitoring-alloy.yaml
-  - monitoring-ingress.yaml
+  - application-set.yaml

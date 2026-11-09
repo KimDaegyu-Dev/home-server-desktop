@@ -20,3 +20,9 @@ Ansible does not install the Vault server. Argo CD installs the HashiCorp Vault 
 The Tailscale Operator terminates HTTPS for the Argo CD and Vault Ingresses. Argo CD's backend therefore runs in insecure HTTP mode inside the cluster; the public-facing connection remains HTTPS over the tailnet. The `bootstrap-argocd.yml` playbook applies this server setting and restarts the server when it changes.
 
 K3s uses its bundled containerd runtime. Docker Desktop image cache and named volumes are not shared with K3s. App images must be published to a registry, and persistent data must be migrated using per-application backup and restore procedures.
+
+## Argo CD application layout
+
+The root Application keeps the Vault and Vault Secrets Operator bootstrap order. An ApplicationSet generates the remaining independent Helm Applications and two grouped manifest Applications for credentials and ingress. RollingSync advances only after each stage is Healthy. The generated Helm Applications remain separate install and upgrade units. The ApplicationSet preserves their workloads if an Application definition is removed. The Ansible Argo CD bootstrap enables the RollingSync controller feature so a fresh WSL or dual-boot installation can reproduce this behavior.
+
+The catalog under `clusters/<profile>/apps/catalog/` contains Application descriptors consumed by the Git file generator; Argo CD does not apply those files directly. The root Kustomization applies only the bootstrap charts and ApplicationSet. This reduces the active child Applications from fifteen to nine while retaining per-chart lifecycle boundaries.

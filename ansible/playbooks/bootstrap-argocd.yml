@@ -31,7 +31,7 @@
       register: argocd_install
       changed_when: "'created' in argocd_install.stdout or 'configured' in argocd_install.stdout"
 
-    - name: Configure Argo CD for TLS termination at the Tailscale Ingress
+    - name: Configure Argo CD HTTP backend and ApplicationSet progressive syncs
       ansible.builtin.command:
         argv:
           - /usr/local/bin/k3s
@@ -42,7 +42,7 @@
           - --namespace=argocd
           - --type=merge
           - --patch
-          - '{"data":{"server.insecure":"true"}}'
+          - '{"data":{"server.insecure":"true","applicationsetcontroller.enable.progressive.syncs":"true"}}'
       register: argocd_http_backend
       changed_when: >-
         'patched' in argocd_http_backend.stdout and
@@ -60,6 +60,18 @@
       when: argocd_http_backend.changed
       changed_when: true
 
+    - name: Restart ApplicationSet controller to load progressive syncs
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - restart
+          - deployment/argocd-applicationset-controller
+          - --namespace=argocd
+      when: argocd_http_backend.changed
+      changed_when: true
+
     - name: Wait for Argo CD server rollout
       ansible.builtin.command:
         argv:
@@ -68,6 +80,18 @@
           - rollout
           - status
           - deployment/argocd-server
+          - --namespace=argocd
+          - --timeout=180s
+      changed_when: false
+
+    - name: Wait for ApplicationSet controller rollout
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/k3s
+          - kubectl
+          - rollout
+          - status
+          - deployment/argocd-applicationset-controller
           - --namespace=argocd
           - --timeout=180s
       changed_when: false

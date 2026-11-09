@@ -1,22 +1,18 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: authentik-credentials
+  name: platform-ingress
   namespace: argocd
-  annotations:
-    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    sourceType: git
+    serverSideApply: "false"
+    stage: 20-ingress
 spec:
   project: default
   source:
     repoURL: https://github.com/KimDaegyu-Dev/home-server-desktop.git
     targetRevision: main
-    path: platform/authentik-credentials
+    path: platform/cluster-ingress
   destination:
     server: https://kubernetes.default.svc
-    namespace: authentik
-  syncPolicy:
-    automated:
-      selfHeal: true
-      prune: false
-    syncOptions:
-      - CreateNamespace=true
+    namespace: argocd

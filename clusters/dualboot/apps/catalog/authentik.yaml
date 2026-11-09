@@ -3,6 +3,10 @@ kind: Application
 metadata:
   name: authentik
   namespace: argocd
+  labels:
+    sourceType: helm
+    serverSideApply: "false"
+    stage: 40-authentik
   annotations:
     argocd.argoproj.io/sync-wave: "20"
 spec:

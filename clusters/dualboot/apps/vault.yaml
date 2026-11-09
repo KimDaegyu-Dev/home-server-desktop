@@ -36,7 +36,7 @@ spec:
             replicas: 1
             raft:
               enabled: true
-              setNodeId: true
+              setNodeId: false
               config: |
                 ui = true
                 disable_mlock = true
@@ -47,6 +47,7 @@ spec:
                 }
                 storage "raft" {
                   path = "/vault/data"
+                  node_id = "home-server-linux-vault"
                 }
                 service_registration "kubernetes" {}
         ui:

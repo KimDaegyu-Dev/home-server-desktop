@@ -10,6 +10,8 @@ Helm charts and their application images are pinned in each environment's Argo C
 
 Update WSL and dual-boot Application definitions together when changing a platform chart or image. Review the upstream release notes, update the version pins, and reconcile the WSL cluster before applying the change to dual-boot.
 
+Each environment pins a stable Raft `node_id`. The WSL value preserves the source node identity during the current snapshot migration; the dual-boot profile uses its own identity for a fresh cluster. When restoring a snapshot from another environment, match the destination node ID to the source cluster's Raft peer ID before restoring.
+
 ## Upstream releases
 
 - [K3s releases](https://github.com/k3s-io/k3s/releases)

@@ -3,7 +3,8 @@
 
 import json
 import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Lock
 
 from fastembed import TextEmbedding
 
@@ -13,6 +14,7 @@ MODEL_NAME = os.environ.get(
     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
 )
 MODEL_CACHE = os.environ.get("FASTEMBED_CACHE", "/model-cache/fastembed")
+MODEL_LOCK = Lock()
 for writable_dir in (
     MODEL_CACHE,
     os.environ.get("HF_HOME", "/model-cache/huggingface"),
@@ -52,7 +54,9 @@ class Handler(BaseHTTPRequestHandler):
             if not texts or any(not item.strip() for item in texts):
                 self._json(400, {"error": "input must contain non-empty text"})
                 return
-            vectors = MODEL.embed(texts, batch_size=32)
+            # Keep inference serialized while serving health probes concurrently.
+            with MODEL_LOCK:
+                vectors = MODEL.embed(texts, batch_size=32)
             data = [
                 {"object": "embedding", "index": index, "embedding": vector.tolist()}
                 for index, vector in enumerate(vectors)
@@ -83,4 +87,4 @@ class Handler(BaseHTTPRequestHandler):
         print(f"graphiti-embedder {self.command} {self.path}", flush=True)
 
 
-HTTPServer(("0.0.0.0", 8081), Handler).serve_forever()
+ThreadingHTTPServer(("0.0.0.0", 8081), Handler).serve_forever()

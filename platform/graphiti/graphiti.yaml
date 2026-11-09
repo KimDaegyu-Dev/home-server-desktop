@@ -315,7 +315,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: embedder
-          image: localhost/home-server/graphiti-embedder:0.9.1-r2
+          image: localhost/home-server/graphiti-embedder:0.9.1-r3
           imagePullPolicy: IfNotPresent
           ports:
             - name: embeddings
@@ -342,18 +342,22 @@ spec:
             httpGet:
               path: /healthz
               port: embeddings
+            timeoutSeconds: 3
             periodSeconds: 10
             failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /healthz
               port: embeddings
+            timeoutSeconds: 3
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /healthz
               port: embeddings
+            timeoutSeconds: 3
             periodSeconds: 20
+            failureThreshold: 6
           resources:
             requests:
               cpu: 250m

@@ -26,7 +26,7 @@ kanzo_linux_amd64_sha256: "660622f9b366d5a459b5b850b177370f76e18d9819993d0f0fabc
 graphiti_mcp_image: "zepai/knowledge-graph-mcp:1.1.3-graphiti-0.31.2-standalone"
 graphiti_mcp_amd64_digest: "sha256:288b79e987adc71d1f55f9f44d9a62fb0422a80eb6870b0e32abb9ad85c12d69"
 fastembed: "0.9.1"
-fastembed_image: "localhost/home-server/graphiti-embedder:0.9.1-r2"
+fastembed_image: "localhost/home-server/graphiti-embedder:0.9.1-r3"
 falkordb_server_image: "falkordb/falkordb-server:6.0.0"
 falkordb_server_amd64_digest: "sha256:d90c2bccbd28fdae42aafd93c618a4347a4ee311c0e7c3b9262def0f463ee567"
 agent_browser: "v0.41.2"

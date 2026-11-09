@@ -8,3 +8,7 @@ resources:
   - tailscale-operator.yaml
   - tailscale-ingress.yaml
   - vault-ingress.yaml
+  - authentik-credentials.yaml
+  - authentik-postgresql.yaml
+  - authentik.yaml
+  - authentik-ingress.yaml

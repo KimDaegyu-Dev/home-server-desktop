@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: authentik
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  project: default
+  source:
+    repoURL: https://charts.goauthentik.io
+    chart: authentik
+    targetRevision: "2026.8.5"
+    helm:
+      releaseName: authentik
+      values: |
+        global:
+          image:
+            tag: "2026.8.5"
+        authentik:
+          existingSecret:
+            secretName: authentik-config
+          postgresql:
+            host: authentik-postgresql
+            name: authentik
+            user: authentik
+        postgresql:
+          enabled: false
+        server:
+          replicas: 1
+          ingress:
+            enabled: false
+        worker:
+          replicas: 1
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: authentik
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: false
+    syncOptions:
+      - CreateNamespace=true

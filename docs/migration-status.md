@@ -37,6 +37,12 @@ The Tailscale Operator is running and the Ingress resources have addresses:
 - Argo CD: `https://argocd.tail5389e9.ts.net`
 - Vault: `https://vault.tail5389e9.ts.net`
 
+## Identity and monitoring roadmap
+
+- Local Argo CD and Vault logins were confirmed before starting Authentik. GitOps configuration now adds Authentik, a dedicated PostgreSQL Helm release, VSO-managed secrets, and a Tailscale Ingress. Deployment awaits the Vault bootstrap step documented in [`authentik-sso.md`](authentik-sso.md).
+- Authentik will become the OIDC provider for native integrations (Argo CD, Vault, Grafana) and the proxy provider for compatible apps. Keep local break-glass access until each integration is verified.
+- Prometheus/Grafana, read-only Grafana MCP, and Docker workload migrations remain subsequent stages. Existing Docker service inventory and staged data are listed below.
+
 ## Data copied without starting Docker
 
 The original directories remain. File-level staging copies were made while the source containers were offline:
@@ -56,14 +62,13 @@ These are staging copies, not yet mounted by Kubernetes. Keep originals until ea
 - AI Memory: image `docker.io/akitaonrails/ai-memory@sha256:6d107f95f7c4a79d3b2de789baf2013a3b20ddabdf12da83ca4c56f85b84b0c8`, port 49374, with staged data; its auth token must come from Vault.
 - Other stopped projects and images (including QEV, Beacon, LLM Wiki, OpenClaw, and OMP) were not active Compose workloads selected for the first migration pass.
 
-## Remaining work
+## Remaining migration work
 
-1. Add the Tailscale `tagOwners` relationship in the admin policy.
-2. Push the Git changes and let Argo CD install the Vault chart; perform the documented Raft restore and verify VSO.
-3. Confirm the Tailscale Operator creates its node and ingress proxies, then verify the Argo CD and Vault MagicDNS HTTPS addresses from a tailnet-connected device.
-4. Run `archive-external-vault.yml` only after the in-cluster Vault is verified. The playbook disables the old service and removes its host DNS/CoreDNS/Ingress bridge while preserving the old data directory and TLS files.
-5. Publish custom images to GHCR and pin immutable tags or digests. Snowball currently has no Git remote.
-6. Export Snowball and companion Docker named volumes through a Docker-aware backup after Docker Desktop is repaired. Those named volumes cannot be read through Docker CLI while the engine is stopped.
-7. Add each service as an Argo child Application only after its image, Vault references, and persistent data are ready.
+1. Configure Authentik's first admin and validate OIDC for Argo CD and Vault while keeping local recovery access.
+2. Deploy Prometheus/Grafana with a selected retention and storage budget, then add service-specific metric exporters or ServiceMonitors.
+3. Deploy a read-only Grafana MCP transport and verify its caller authentication and Grafana service-account permissions.
+4. Publish custom images to GHCR and pin immutable tags or digests. Snowball currently has no Git remote.
+5. Recover Docker named-volume exports after Docker Desktop is repaired; preserve the existing staged data copies and originals until each restore is verified.
+6. Migrate services in waves, starting with workloads whose data is already staged; defer Docker-socket-dependent workloads until redesigned for Kubernetes.
 
 See [`migration.md`](migration.md) for the repeatable per-application cutover sequence. The Docker VHDX and named volumes have not been deleted or intentionally modified.

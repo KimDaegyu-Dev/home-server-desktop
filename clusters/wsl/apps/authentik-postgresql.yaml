@@ -1,0 +1,38 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: authentik-postgresql
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  project: default
+  source:
+    repoURL: https://charts.bitnami.com/bitnami
+    chart: postgresql
+    targetRevision: "17.1.2"
+    helm:
+      releaseName: authentik-postgresql
+      values: |
+        architecture: standalone
+        auth:
+          username: authentik
+          database: authentik
+          existingSecret: authentik-postgresql-credentials
+          secretKeys:
+            userPasswordKey: password
+            adminPasswordKey: postgres-password
+        primary:
+          persistence:
+            enabled: true
+            storageClass: local-path
+            size: 8Gi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: authentik
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: false
+    syncOptions:
+      - CreateNamespace=true

@@ -102,4 +102,4 @@ MCP 클라이언트의 Streamable HTTP 서버 주소는 `https://grafana-mcp.tai
 
 ## GitOps 자동 동기화 기본값
 
-WSL과 dualboot ApplicationSet은 모든 생성 Application에 자동 sync, self-heal, prune을 설정합니다. 새 앱은 `clusters/<profile>/apps/catalog/`에 Application 설명 파일을 추가하고 stage label을 지정하면 이 설정을 상속합니다. prune이 켜져 있으므로 카탈로그 파일을 삭제하면 생성된 Application과 그 Application이 관리하던 리소스도 제거됩니다.
+WSL과 dualboot ApplicationSet은 모든 생성 Application에 자동 sync, self-heal, prune을 설정합니다. 새 앱은 `clusters/<profile>/apps/catalog/`에 Application 설명 파일을 추가하면 이 설정을 상속합니다. RollingSync는 auto-sync를 끄는 Argo CD 동작 때문에 사용하지 않으며, 각 앱이 독립적으로 동기화됩니다. prune이 켜져 있으므로 카탈로그 파일을 삭제하면 생성된 Application과 해당 앱이 관리하던 리소스도 제거됩니다.

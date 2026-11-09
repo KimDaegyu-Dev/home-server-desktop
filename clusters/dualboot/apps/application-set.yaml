@@ -16,62 +16,6 @@ spec:
         requeueAfterSeconds: 60
         files:
           - path: clusters/dualboot/apps/catalog/*.yaml
-  strategy:
-    type: RollingSync
-    rollingSync:
-      steps:
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["00-credentials"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["10-tailscale"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["20-ingress"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["30-authentik-postgresql"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["40-authentik"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["50-monitoring-stack"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["60-monitoring-alloy"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["70-monitoring-mcp"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["71-cert-manager"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["72-clickhouse-operator"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["73-ai-platform"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["74-ai-apps"]
-        - matchExpressions:
-            - key: home-server.io/stage
-              operator: In
-              values: ["75-ai-telemetry"]
   syncPolicy:
     preserveResourcesOnDeletion: false
   template:
@@ -111,6 +55,12 @@ spec:
           enabled: true
           selfHeal: true
           prune: true
+        retry:
+          limit: 8
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m
         syncOptions:
           - CreateNamespace=true
           {{ if eq .metadata.name "litellm" }}

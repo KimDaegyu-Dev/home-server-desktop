@@ -20,7 +20,7 @@ Langfuse trace에는 프롬프트와 응답 내용이 포함됩니다. Langfuse 
 
    강제 재빌드가 필요하면 `--force`를 추가합니다. 버전은 `versions.yml`에 고정합니다.
 
-3. Argo CD는 cert-manager → ClickHouse Operator → AI Vault/VSO 자격 증명 → Langfuse/LiteLLM → 대시보드 순서로 동기화합니다. 각 단계가 Healthy인지 확인하고, VaultStaticSecret이 Ready가 될 때까지 기다립니다. LiteLLM DB 스키마 migration은 Argo CD PreSync hook으로 동기화할 때 실행됩니다.
+3. Argo CD는 앱들을 자동 동기화합니다. ClickHouse Operator와 AI Vault/VSO 자격 증명 등 선행 리소스가 먼저 Ready인지 확인하고, VaultStaticSecret이 Ready가 될 때까지 기다립니다. 의존성 리소스가 아직 없으면 sync retry를 확인합니다. LiteLLM DB 스키마 migration은 Argo CD PreSync hook으로 동기화할 때 실행됩니다.
 
 4. Langfuse UI에서 사용자와 프로젝트를 만들고 프로젝트 API key를 발급합니다. 다음 명령을 실행해 키를 숨겨 입력하고 Alloy로 전달합니다. 키 생성 절차와 서비스 검증은 [`service-checks.md`](service-checks.md)를 참고합니다.
 

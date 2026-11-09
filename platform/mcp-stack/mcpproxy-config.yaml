@@ -28,7 +28,6 @@ data:
         auth: static
         headers:
           Authorization: Bearer ${GRAFANA_MCP_SERVER_TOKEN}
-          Host: grafana-mcp.tail5389e9.ts.net
       ai-memory:
         transport: streamable-http
         url: http://ai-memory.ai-memory.svc.cluster.local:49374/mcp

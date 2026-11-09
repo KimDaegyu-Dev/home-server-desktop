@@ -38,7 +38,7 @@ spec:
         - |
           import json, os, urllib.request
           u="http://grafana-mcp.grafana-mcp.svc.cluster.local:8000/mcp"
-          h={"Content-Type":"application/json","Accept":"application/json, text/event-stream","MCP-Protocol-Version":"2025-03-26","Host":"grafana-mcp.tail5389e9.ts.net","Authorization":"Bearer "+os.environ["MCP_GRAFANA_SERVER_TOKEN"]}
+          h={"Content-Type":"application/json","Accept":"application/json, text/event-stream","MCP-Protocol-Version":"2025-03-26","Authorization":"Bearer "+os.environ["MCP_GRAFANA_SERVER_TOKEN"]}
           def call(i,method,params):
               body=json.dumps({"jsonrpc":"2.0","id":i,"method":method,"params":params}).encode()
               r=urllib.request.urlopen(urllib.request.Request(u,data=body,headers=h),timeout=25)

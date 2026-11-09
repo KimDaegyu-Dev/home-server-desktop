@@ -107,7 +107,9 @@ spec:
         path: {{.spec.source.path | toJson}}
         {{ end }}
       syncPolicy:
-        automated: {{.spec.syncPolicy.automated | toJson}}
+        automated:
+          selfHeal: true
+          prune: false
         syncOptions:
           - CreateNamespace=true
           {{ if eq .metadata.labels.serverSideApply "true" }}

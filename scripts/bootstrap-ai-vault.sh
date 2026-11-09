@@ -29,8 +29,9 @@ tmp="$(mktemp -d /dev/shm/home-server-ai.XXXXXX)"
 chmod 0700 "$tmp"
 pod_token="/tmp/home-server-ai-token-$(date +%s)-$$"
 pod_policy="/tmp/home-server-ai-policy-$(date +%s)-$$.hcl"
+pod_json="/tmp/home-server-ai-json-$(date +%s)-$$.json"
 cleanup() {
-  k3s kubectl exec -n vault vault-0 -- rm -f "$pod_token" "$pod_policy" >/dev/null 2>&1 || true
+  k3s kubectl exec -n vault vault-0 -- rm -f "$pod_token" "$pod_policy" "$pod_json" >/dev/null 2>&1 || true
   rm -rf "$tmp"
   unset VAULT_TOKEN
 }
@@ -50,6 +51,13 @@ k3s kubectl cp "$tmp/token" "vault/vault-0:$pod_token"
 vault_cmd() {
   k3s kubectl exec -n vault vault-0 -- sh -c 'token_file="$1"; shift; export VAULT_TOKEN="$(cat "$token_file")" VAULT_ADDR=http://127.0.0.1:8200; exec vault "$@"' sh "$pod_token" "$@"
 }
+vault_put_json() {
+  local vault_path="$1" source_file="$2"
+  [[ -r "$source_file" ]] || { echo "Cannot read temporary Vault input file." >&2; return 1; }
+  k3s kubectl cp "$source_file" "vault/vault-0:$pod_json" >/dev/null
+  vault_cmd kv put -mount=kv "$vault_path" "@$pod_json" >/dev/null
+  k3s kubectl exec -n vault vault-0 -- rm -f "$pod_json" >/dev/null
+}
 
 if [[ "$mode" == "langfuse-project-keys" ]]; then
   read -r -s -p "Langfuse project public key (hidden): " langfuse_public
@@ -64,7 +72,7 @@ with open(sys.argv[1], "w") as f:
 PY
   unset langfuse_public langfuse_secret LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY
   chmod 0600 "$tmp/exporter.json"
-  vault_cmd kv put -mount=kv ai/langfuse-exporter "@$tmp/exporter.json" >/dev/null
+  vault_put_json ai/langfuse-exporter "$tmp/exporter.json"
   if ! k3s kubectl -n monitoring get vaultstaticsecret langfuse-exporter >/dev/null 2>&1; then
     echo "Stored the key, but the Langfuse exporter VaultStaticSecret is not installed yet; retry after AI telemetry syncs." >&2
     exit 1
@@ -141,21 +149,21 @@ data = {"LITELLM_MASTER_KEY": os.environ["MASTER"], "PROXY_MASTER_KEY": os.envir
 with open(sys.argv[1], "w") as f: json.dump(data, f)
 PY
 chmod 0600 "$tmp"/*.json
-vault_cmd kv put -mount=kv ai/langfuse "@$tmp/langfuse.json" >/dev/null
-vault_cmd kv put -mount=kv ai/litellm "@$tmp/litellm.json" >/dev/null
+vault_put_json ai/langfuse "$tmp/langfuse.json"
+vault_put_json ai/litellm "$tmp/litellm.json"
 python3 - "$tmp/langfuse-exporter.json" <<'PY'
 import json, sys
 with open(sys.argv[1], "w") as f: json.dump({"publicKey": "pending-vault-sync", "secretKey": "pending-vault-sync"}, f)
 PY
 chmod 0600 "$tmp/langfuse-exporter.json"
-vault_cmd kv put -mount=kv ai/langfuse-exporter "@$tmp/langfuse-exporter.json" >/dev/null
+vault_put_json ai/langfuse-exporter "$tmp/langfuse-exporter.json"
 
 LANGFUSE_CLIENT="$langfuse_client" python3 - "$tmp/langfuse-auth.json" <<'PY'
 import json, os, sys
 with open(sys.argv[1], "w") as f: json.dump({"AUTH_AUTHENTIK_CLIENT_SECRET": os.environ["LANGFUSE_CLIENT"]}, f)
 PY
 chmod 0600 "$tmp/langfuse-auth.json"
-vault_cmd kv put -mount=kv ai/langfuse-auth "@$tmp/langfuse-auth.json" >/dev/null
+vault_put_json ai/langfuse-auth "$tmp/langfuse-auth.json"
 
 vault_cmd kv get -format=json -mount=kv authentik/sso-clients >"$tmp/sso-current.json"
 LANGFUSE_CLIENT="$langfuse_client" LITELLM_CLIENT="$litellm_client" python3 - "$tmp/sso-current.json" "$tmp/sso-updated.json" <<'PY'
@@ -166,7 +174,7 @@ data["litellm_client_secret"] = os.environ["LITELLM_CLIENT"]
 with open(sys.argv[2], "w") as f: json.dump(data, f)
 PY
 chmod 0600 "$tmp/sso-updated.json"
-vault_cmd kv put -mount=kv authentik/sso-clients "@$tmp/sso-updated.json" >/dev/null
+vault_put_json authentik/sso-clients "$tmp/sso-updated.json"
 
 cat >"$tmp/langfuse-policy.hcl" <<'POLICY'
 path "kv/data/ai/langfuse" { capabilities = ["read"] }

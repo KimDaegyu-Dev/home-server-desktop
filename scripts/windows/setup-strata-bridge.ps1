@@ -49,7 +49,8 @@ $token | Export-Clixml -LiteralPath $tokenPath
 
 $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existingTask -and $existingTask.State -eq 'Running') {
-    Stop-ScheduledTask -TaskName $taskName -Confirm:$false
+    & schtasks.exe /End /TN $taskName | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not stop the existing bridge task.' }
     $stopDeadline = (Get-Date).AddSeconds(10)
     do {
         Start-Sleep -Milliseconds 200
@@ -144,7 +145,7 @@ Set-Content -LiteralPath $serverPath -Value $server -Encoding UTF8
 & netsh.exe http delete urlacl "url=http://+:$port/" 2>$null | Out-Null
 & netsh.exe http add urlacl "url=http://+:$port/" "user=$env:USERDOMAIN\$env:USERNAME" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Failed to reserve the bridge listener URL.' }
-Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -Confirm:$false
 New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $port -RemoteAddress $wslCidr -Profile Any | Out-Null
 
 $account = "$env:USERDOMAIN\$env:USERNAME"

@@ -35,6 +35,10 @@ data:
         auth: static
         headers:
           Authorization: Bearer ${AI_MEMORY_AUTH_TOKEN}
+      graphify:
+        transport: streamable-http
+        url: http://graphify.graphify.svc.cluster.local:8080/mcp
+        auth: none
       searxng:
         transport: stdio
         command: [python3, /opt/mcp-servers/searxng-mcp.py]
@@ -70,6 +74,13 @@ data:
         - memory_read_page
         - memory_read_session_observations
         - memory_install_self_routing
+        - query_graph
+        - get_node
+        - get_neighbors
+        - shortest_path
+        - get_community
+        - god_nodes
+        - graph_stats
       denied_tools: []
       approval_tools: []
       on_rug_pull: kill

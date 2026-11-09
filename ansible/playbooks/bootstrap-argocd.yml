@@ -96,6 +96,14 @@
           - --timeout=180s
       changed_when: false
 
+    - name: Build and import the pinned LiteLLM Headroom image before Argo sync
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - "{{ home_repo_root }}/scripts/build-litellm-headroom.sh"
+      register: litellm_headroom_image
+      changed_when: "'Imported ' in litellm_headroom_image.stdout"
+
     - name: Apply the environment's root Application
       ansible.builtin.command:
         argv:

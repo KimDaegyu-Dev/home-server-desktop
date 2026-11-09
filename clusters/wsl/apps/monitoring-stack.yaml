@@ -59,6 +59,9 @@ spec:
                       storage: 2Gi
         kubeEtcd:
           enabled: false
+        prometheus-node-exporter:
+          hostRootFsMount:
+            mountPropagation: ""
   destination:
     server: https://kubernetes.default.svc
     namespace: monitoring

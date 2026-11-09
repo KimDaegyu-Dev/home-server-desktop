@@ -1,6 +1,6 @@
 # Prometheus and Grafana
 
-Argo CD installs the Prometheus Community `kube-prometheus-stack` chart. It includes Prometheus Operator, Prometheus, Alertmanager, Grafana, node-exporter, kube-state-metrics, and Kubernetes dashboards/rules. Prometheus retains up to 30 days and 18 GB of samples on a 20 GiB local-path PVC. Grafana uses a 5 GiB PVC; Alertmanager uses 2 GiB.
+Argo CD installs the Prometheus Community `kube-prometheus-stack` chart. It includes Prometheus Operator, Prometheus, Alertmanager, Grafana, node-exporter, kube-state-metrics, and Kubernetes dashboards/rules. Prometheus retains up to 30 days and 18 GB of samples on a 20 GiB local-path PVC. Grafana uses a 5 GiB PVC; Alertmanager uses 2 GiB. WSL disables node-exporter's host mount propagation, which WSL2 does not support; it still scrapes kubelet/cAdvisor and Kubernetes state metrics. The Linux dual-boot profile uses the chart's normal node-exporter mounts.
 
 ## Bootstrap Grafana credentials
 

@@ -122,6 +122,10 @@ spec:
         serviceMonitor:
           enabled: true
           interval: 30s
+        migrationJob:
+          hooks:
+            argocd:
+              enabled: false
         service:
           type: ClusterIP
           port: 4000

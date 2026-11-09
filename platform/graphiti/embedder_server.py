@@ -13,6 +13,12 @@ MODEL_NAME = os.environ.get(
     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
 )
 MODEL_CACHE = os.environ.get("FASTEMBED_CACHE", "/model-cache/fastembed")
+for writable_dir in (
+    MODEL_CACHE,
+    os.environ.get("HF_HOME", "/model-cache/huggingface"),
+    os.environ.get("XDG_CACHE_HOME", "/model-cache/.cache"),
+):
+    os.makedirs(writable_dir, exist_ok=True)
 MODEL = TextEmbedding(model_name=MODEL_NAME, cache_dir=MODEL_CACHE, threads=2)
 
 

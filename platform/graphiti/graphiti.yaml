@@ -320,7 +320,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: embedder
-          image: localhost/home-server/graphiti-embedder:0.9.1-r1
+          image: localhost/home-server/graphiti-embedder:0.9.1-r2
           imagePullPolicy: IfNotPresent
           ports:
             - name: embeddings
@@ -330,6 +330,14 @@ spec:
               value: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
             - name: FASTEMBED_CACHE
               value: /model-cache/fastembed
+            - name: HOME
+              value: /model-cache/home
+            - name: HF_HOME
+              value: /model-cache/huggingface
+            - name: HF_HUB_CACHE
+              value: /model-cache/huggingface/hub
+            - name: XDG_CACHE_HOME
+              value: /model-cache/.cache
           volumeMounts:
             - name: model-cache
               mountPath: /model-cache

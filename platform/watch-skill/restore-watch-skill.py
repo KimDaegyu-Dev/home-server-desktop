@@ -35,7 +35,8 @@ with tarfile.open(archive_path, "r:gz") as archive:
     if not any((item.name == "watch-skill/index.db" or item.name == "index.db") and item.isfile() for item in members):
         raise SystemExit("Watch Skill archive has no index.db.")
     target.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="watch-skill-restore-", dir="/tmp") as temp_name:
+    # Stage on the PVC itself so the final os.replace calls stay on one filesystem.
+    with tempfile.TemporaryDirectory(prefix=".watch-skill-restore-", dir=target) as temp_name:
         staged = pathlib.Path(temp_name)
         for member in members:
             member_path = pathlib.PurePosixPath(member.name)
@@ -57,7 +58,7 @@ with tarfile.open(archive_path, "r:gz") as archive:
         for name in ("index.db", "lessons.db"):
             database = staged / name
             if database.is_file():
-                with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as db:
+                with sqlite3.connect(f"file:{database}?mode=ro&immutable=1", uri=True) as db:
                     if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                         raise SystemExit(f"Restored Watch Skill {name} SQLite integrity check failed.")
 

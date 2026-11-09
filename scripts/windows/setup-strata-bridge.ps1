@@ -1,7 +1,7 @@
-# Run once in an elevated PowerShell. The token is entered as a SecureString and
-# stored with the current Windows user's DPAPI protection; it is never printed.
+# Run in an elevated PowerShell. The token is stored with the current Windows
+# user's DPAPI protection; it is never printed. Reuse it with -ReuseStoredToken.
 [CmdletBinding()]
-param()
+param([switch]$ReuseStoredToken)
 
 $ErrorActionPreference = 'Stop'
 $port = 18081
@@ -37,12 +37,29 @@ function Get-NetworkCidr([string]$AddressPrefix) {
 $wslCidr = Get-NetworkCidr $wslAddress
 
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-$token = Read-Host 'Paste STRATA_BRIDGE_TOKEN from Vault (input hidden)' -AsSecureString
-if ($token.Length -lt 32) { throw 'The bridge token is unexpectedly short.' }
+if ($ReuseStoredToken) {
+    if (-not (Test-Path -LiteralPath $tokenPath)) { throw 'No stored bridge token is available to reuse.' }
+    $token = Import-Clixml -LiteralPath $tokenPath
+} else {
+    $token = Read-Host 'Paste STRATA_BRIDGE_TOKEN from Vault (input hidden)' -AsSecureString
+}
+if ($token -isnot [Security.SecureString] -or $token.Length -lt 32) { throw 'The bridge token is missing or unexpectedly short.' }
 $token | Export-Clixml -LiteralPath $tokenPath
+
+$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($existingTask -and $existingTask.State -eq 'Running') {
+    Stop-ScheduledTask -TaskName $taskName
+    $stopDeadline = (Get-Date).AddSeconds(10)
+    do {
+        Start-Sleep -Milliseconds 200
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    } while ($existingTask -and $existingTask.State -eq 'Running' -and (Get-Date) -lt $stopDeadline)
+    if ($existingTask -and $existingTask.State -eq 'Running') { throw 'The existing bridge task did not stop; left its files unchanged.' }
+}
 
 $server = @'
 $ErrorActionPreference = 'Continue'
+Add-Type -AssemblyName System.Net.Http
 $port = 18081
 $tokenPath = Join-Path $env:ProgramData 'HomeServer\StrataBridge\token.xml'
 $secureToken = Import-Clixml -LiteralPath $tokenPath
@@ -52,8 +69,8 @@ finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
 $listener = [Net.HttpListener]::new()
 $listener.Prefixes.Add("http://+:$port/")
 $listener.Start()
-$client = [Net.Http.HttpClient]::new()
-$client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+$client = [System.Net.Http.HttpClient]::new()
+$client.Timeout = [System.Threading.Timeout]::InfiniteTimeSpan
 $expected = [Text.Encoding]::UTF8.GetBytes($bridgeToken)
 while ($listener.IsListening) {
     $context = $null

@@ -110,6 +110,15 @@ spec:
         {{ else }}
         path: {{.spec.source.path | toJson}}
         {{ end }}
+      {{ if eq .metadata.name "litellm" }}
+      ignoreDifferences:
+        - group: ""
+          kind: Secret
+          name: litellm-dbcredentials
+          namespace: litellm
+          jsonPointers:
+            - /data
+      {{ end }}
       syncPolicy:
         automated:
           selfHeal: true

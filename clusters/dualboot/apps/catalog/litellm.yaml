@@ -105,7 +105,7 @@ spec:
             - 'export DATABASE_URL="postgresql://${DATABASE_USERNAME}:${DATABASE_PASSWORD}@${DATABASE_HOST}:5432/${DATABASE_NAME}"; exec python litellm/proxy/prisma_migration.py'
           hooks:
             argocd:
-              enabled: false
+              enabled: true
         service:
           type: ClusterIP
           port: 4000

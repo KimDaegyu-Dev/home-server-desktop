@@ -11,8 +11,15 @@ $installDir = Join-Path $env:ProgramData 'HomeServer\StrataBridge'
 $tokenPath = Join-Path $installDir 'token.xml'
 $serverPath = Join-Path $installDir 'bridge.ps1'
 
-$wslAddress = (& wsl.exe -d Ubuntu -- bash -lc "ip -o -4 addr show dev eth0 scope global | awk 'NR==1 {print \$4}'").Trim()
-if ($LASTEXITCODE -ne 0 -or $wslAddress -notmatch '^([0-9]{1,3}\.){3}[0-9]{1,3}/\d+$') {
+$wslAddressOutput = & wsl.exe -d Ubuntu -- ip -o -4 addr show dev eth0 scope global
+$wslExitCode = $LASTEXITCODE
+$wslAddressLine = $wslAddressOutput | Select-Object -First 1
+if ($wslExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($wslAddressLine)) {
+    throw 'Could not read Ubuntu eth0 address. Start WSL2 and retry.'
+}
+$wslAddressFields = $wslAddressLine.Trim() -split '\s+'
+$wslAddress = if ($wslAddressFields.Count -ge 4 -and $wslAddressFields[2] -eq 'inet') { $wslAddressFields[3] } else { '' }
+if ($wslAddress -notmatch '^([0-9]{1,3}\.){3}[0-9]{1,3}/\d+$') {
     throw 'Could not read Ubuntu eth0 address/prefix. Start WSL2 and retry.'
 }
 

@@ -18,20 +18,42 @@ spec:
           image:
             tag: "2026.8.5"
         authentik:
-          existingSecret:
-            secretName: authentik-config
+          secret_key: env://AUTHENTIK_SECRET_KEY
           postgresql:
             host: authentik-postgresql
             name: authentik
             user: authentik
+            password: env://AUTHENTIK_POSTGRESQL__PASSWORD
         postgresql:
           enabled: false
         server:
           replicas: 1
           ingress:
             enabled: false
+          env:
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-config
+                  key: secret_key
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-config
+                  key: postgresql__password
         worker:
           replicas: 1
+          env:
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-config
+                  key: secret_key
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik-config
+                  key: postgresql__password
   destination:
     server: https://kubernetes.default.svc
     namespace: authentik

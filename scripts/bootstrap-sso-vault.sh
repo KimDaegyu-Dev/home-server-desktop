@@ -48,16 +48,19 @@ grafana_file=""
 vault_config_file=""
 policy_file=""
 argocd_patch_file=""
+vault_role_file=""
 pod_token=""
 pod_clients=""
 pod_grafana=""
 pod_config=""
+pod_role=""
 pod_policy=""
 cleanup() {
   local remote_files=() local_files=()
   [[ -n "${pod_clients}" ]] && remote_files+=("${pod_clients}")
   [[ -n "${pod_grafana}" ]] && remote_files+=("${pod_grafana}")
   [[ -n "${pod_config}" ]] && remote_files+=("${pod_config}")
+  [[ -n "${pod_role}" ]] && remote_files+=("${pod_role}")
   [[ -n "${pod_policy}" ]] && remote_files+=("${pod_policy}")
   [[ -n "${pod_token}" ]] && remote_files+=("${pod_token}")
   if ((${#remote_files[@]})); then
@@ -68,6 +71,7 @@ cleanup() {
   [[ -n "${vault_config_file}" ]] && local_files+=("${vault_config_file}")
   [[ -n "${policy_file}" ]] && local_files+=("${policy_file}")
   [[ -n "${argocd_patch_file}" ]] && local_files+=("${argocd_patch_file}")
+  [[ -n "${vault_role_file}" ]] && local_files+=("${vault_role_file}")
   [[ -n "${token_file}" ]] && local_files+=("${token_file}")
   ((${#local_files[@]})) && rm -f "${local_files[@]}"
   unset VAULT_TOKEN grafana_secret argocd_secret vault_secret
@@ -187,17 +191,14 @@ rm -f "${policy_file}"
 policy_file=""
 k3s kubectl exec -n vault vault-0 -- rm -f "${pod_policy}" >/dev/null 2>&1 || true
 pod_policy=""
-vault_cmd write auth/oidc/role/home-server-admin \
-  role_type=oidc \
-  user_claim=preferred_username \
-  bound_audiences=vault \
-  'bound_claims={"preferred_username":"akadmin"}' \
-  groups_claim=groups \
-  token_policies=home-server-oidc-admin \
-  allowed_redirect_uris=https://vault.tail5389e9.ts.net/ui/vault/auth/oidc/oidc/callback \
-  allowed_redirect_uris=http://localhost:8250/oidc/callback \
-  oidc_scopes=openid,profile,email \
-  ttl=1h >/dev/null
+vault_role_file="$(mktemp /dev/shm/vault-oidc-role.XXXXXX.json)"
+chmod 0600 "${vault_role_file}"
+python3 -c 'import json,sys; json.dump({"role_type":"oidc","user_claim":"preferred_username","bound_audiences":["vault"],"bound_claims":{"preferred_username":["akadmin"]},"groups_claim":"groups","token_policies":["home-server-oidc-admin"],"allowed_redirect_uris":["https://vault.tail5389e9.ts.net/ui/vault/auth/oidc/oidc/callback","http://localhost:8250/oidc/callback"],"oidc_scopes":["openid","profile","email"],"ttl":"1h"},open(sys.argv[1],"w"))' "${vault_role_file}"
+pod_role="/tmp/vault-oidc-role-$(date +%s)-$$.json"
+k3s kubectl cp "${vault_role_file}" "vault/vault-0:${pod_role}"
+vault_cmd write auth/oidc/role/home-server-admin "@${pod_role}" >/dev/null
+rm -f "${vault_role_file}"
+vault_role_file=""
 
 argocd_secret="$(vault_cmd kv get -field=argocd_client_secret -mount=kv authentik/sso-clients)"
 argocd_patch_file="$(mktemp /dev/shm/argocd-oidc-secret.XXXXXX.json)"

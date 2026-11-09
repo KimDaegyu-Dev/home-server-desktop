@@ -53,7 +53,7 @@ data:
           Authorization: Bearer ${WATCHSKILL_MCP_TOKEN}
       graphiti:
         transport: streamable-http
-        url: http://graphiti.graphiti.svc.cluster.local:8000/mcp/
+        url: http://graphiti.graphiti.svc.cluster.local:8000/mcp
         auth: none
       agentbrowser:
         transport: streamable-http

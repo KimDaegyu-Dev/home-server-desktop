@@ -1,9 +1,4 @@
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: graphiti
----
-apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: graphiti-db

@@ -8,21 +8,21 @@ Updated: 2026-11-09
 - K3s `v1.37.2+k3s1` is active; node `home-server-wsl` is Ready.
 - Argo CD `v3.6.1`, Vault Secrets Operator chart `1.6.2`, and Tailscale Operator chart `1.104.4` are installed.
 - Docker Desktop was stopped by request and was not started during this work.
-- Git now defines Vault as a Helm-managed single-node Raft StatefulSet with a `local-path` PVC. The chart is not yet installed in the running cluster; the manifest update must be pushed and reconciled before the data restore.
+- Vault is installed by Argo CD as a Helm-managed single-node Raft StatefulSet with a `local-path` PVC. The Raft snapshot restore is complete; the Vault and Vault Ingress Applications are `Synced` and `Healthy`.
 
 ## Vault transition
 
 - Vault has been restored into the K3s Helm release from the source Raft snapshot. It is initialized, unsealed with the original Shamir shares, and reports the original Vault cluster ID.
 - A Raft snapshot is stored outside Git at `/home/eorbr/vault-raft-pre-migration-20261109.snap`, mode `0600` (27,824 bytes).
 - Original init material is `/home/eorbr/vault-init.json`, mode `0600`. Do not print it, commit it, or replace the original unseal shares during migration.
-- The systemd Vault service is disabled. Run `ansible/playbooks/archive-external-vault.yml` after the Vault, VSO secret, and replacement Tailscale Ingress checks pass to purge the old package, host data, TLS/configuration, and obsolete network bridge.
+- The old systemd Vault package and service are removed, along with `/var/lib/vault`, `/etc/vault.d`, the old CoreDNS/host aliases, TLS bridge, and `vault-access` namespace. The guarded Ansible playbook completed successfully after checking Vault unsealed status, VSO readiness, and the new Ingress address.
 - Auto Unseal is not configured. Vault continues to use Shamir 3-of-5 and requires manual unseal after a Vault pod or WSL restart.
-- Git routes VSO to `http://vault.vault.svc:8200` and points the Vault Ingress directly to the in-cluster Service. The guarded archive playbook removes the former NGINX bridge and external Vault DNS/TLS configuration after migration checks pass.
-- Follow [`vault.md`](vault.md) for the ordered snapshot restore. The chart destination must be initialized once, restored with `-force`, then unsealed with three of the original five shares.
+- VSO connects to `http://vault.vault.svc:8200`; the Vault Ingress points directly to the in-cluster Service. Argo CD has pruned the former NGINX bridge and disabled Vault Injector resources.
+- The protected Raft snapshot and original init material remain outside Git at the paths above. See [`vault.md`](vault.md) for the migration sequence and recovery details; do not repeat the restore against the active cluster.
 
 ## Tailscale prerequisite
 
-The OAuth credential now has the `tag:k8s-operator` tag allowed, and Vault has synced the OAuth Secret into namespace `tailscale`. The operator logs still report that `tag:k8s` is invalid/not permitted because the tailnet policy is missing the ownership delegation. Merge this into the existing `tagOwners` block:
+The OAuth credential permits `tag:k8s-operator`, and the tailnet policy delegates `tag:k8s` ownership to `tag:k8s-operator`:
 
 ```json
 "tagOwners": {
@@ -31,7 +31,10 @@ The OAuth credential now has the `tag:k8s-operator` tag allowed, and Vault has s
 }
 ```
 
-After saving the policy, the Operator should retry without recreating the OAuth client. Both Ingress resources currently have no Tailscale `ADDRESS` until proxy creation succeeds.
+The Tailscale Operator is running and the Ingress resources have addresses:
+
+- Argo CD: `https://argocd.tail5389e9.ts.net`
+- Vault: `https://vault.tail5389e9.ts.net`
 
 ## Data copied without starting Docker
 

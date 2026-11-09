@@ -40,17 +40,12 @@ spec:
                 }
               }
 
-              otelcol.auth.basic "langfuse" {
-                client_auth {
-                  username_file = "/etc/alloy/langfuse-secrets/publicKey"
-                  password_file = "/etc/alloy/langfuse-secrets/secretKey"
-                }
-              }
-
               otelcol.exporter.otlphttp "langfuse" {
                 client {
-                  auth = otelcol.auth.basic.langfuse.handler
                   endpoint = "http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel"
+                  headers = {
+                    Authorization = "Basic " + encoding.to_base64(sys.env("LANGFUSE_PUBLIC_KEY") + ":" + sys.env("LANGFUSE_SECRET_KEY")),
+                  }
                 }
               }
 

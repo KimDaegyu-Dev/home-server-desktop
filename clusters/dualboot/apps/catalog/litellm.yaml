@@ -20,6 +20,8 @@ spec:
       releaseName: litellm
       values: |
         replicaCount: 1
+        strategy:
+          type: Recreate
         image:
           repository: localhost/home-server/litellm-headroom
           tag: "1.106.7-headroom-0.43.1"

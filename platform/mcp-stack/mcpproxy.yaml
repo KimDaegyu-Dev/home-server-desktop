@@ -39,6 +39,28 @@ spec:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
+        - name: fix-data-ownership
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          imagePullPolicy: IfNotPresent
+          command: [chown, -R, 65532:65532, /data]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN]
+            readOnlyRootFilesystem: true
         - name: seed-config
           image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
           imagePullPolicy: IfNotPresent

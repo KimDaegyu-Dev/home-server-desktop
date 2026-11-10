@@ -71,19 +71,30 @@ import json, sys
 with open(sys.argv[1]) as f: values = json.load(f)["data"]["data"]
 if not values.get("authentik_client_secret") or not values.get("authserver.pem", "").startswith("-----BEGIN PRIVATE KEY-----"):
     raise SystemExit("Existing kv/mcp/mcpproxy is incomplete; refusing to rotate or replace partial data.")
-values.setdefault("MCPPROXY_API_KEY", __import__("secrets").token_urlsafe(48))
-values.setdefault("MCPPROXY_CRED_KEY", __import__("secrets").token_urlsafe(48))
-if len(values["MCPPROXY_API_KEY"]) < 32 or len(values["MCPPROXY_CRED_KEY"]) < 32:
-    raise SystemExit("Existing MCPProxy API or credential-encryption key is too short; refusing to rotate it implicitly.")
+import base64, secrets
+values.setdefault("MCPPROXY_API_KEY", secrets.token_urlsafe(48))
+if len(values["MCPPROXY_API_KEY"]) < 32:
+    raise SystemExit("Existing MCPProxy API key is too short; refusing to rotate it implicitly.")
+cred_key = values.get("MCPPROXY_CRED_KEY", "")
+try:
+    decoded_cred_key = base64.b64decode(cred_key, validate=True)
+except (ValueError, base64.binascii.Error):
+    decoded_cred_key = b""
+if not decoded_cred_key:
+    # The previous bootstrap created a URL-safe token, but Server Edition
+    # requires standard base64 encoding of exactly 32 AES-256 key bytes.
+    values["MCPPROXY_CRED_KEY"] = base64.b64encode(secrets.token_bytes(32)).decode("ascii")
+elif len(decoded_cred_key) != 32:
+    raise SystemExit("Existing MCPPROXY_CRED_KEY decodes to the wrong size; refusing to replace it implicitly.")
 with open(sys.argv[2], "w") as f: json.dump({"authentik_client_secret": values["authentik_client_secret"], "authserver.pem": values["authserver.pem"], "MCPPROXY_API_KEY": values["MCPPROXY_API_KEY"], "MCPPROXY_CRED_KEY": values["MCPPROXY_CRED_KEY"]}, f)
 PY
 else
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$tmp/authserver.pem" 2>/dev/null
   python3 - "$tmp/mcpproxy.json" "$tmp/authserver.pem" <<'PY'
-import json, secrets, sys
+import base64, json, secrets, sys
 with open(sys.argv[2]) as f: signing_key = f.read()
 with open(sys.argv[1], "w") as f:
-    json.dump({"authentik_client_secret": secrets.token_hex(32), "authserver.pem": signing_key, "MCPPROXY_API_KEY": secrets.token_urlsafe(48), "MCPPROXY_CRED_KEY": secrets.token_urlsafe(48)}, f)
+    json.dump({"authentik_client_secret": secrets.token_hex(32), "authserver.pem": signing_key, "MCPPROXY_API_KEY": secrets.token_urlsafe(48), "MCPPROXY_CRED_KEY": base64.b64encode(secrets.token_bytes(32)).decode("ascii")}, f)
 PY
 fi
 

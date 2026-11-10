@@ -45,7 +45,6 @@ data:
         "admin_emails": ["ddk3207@naver.com"],
         "public_url": "https://mcp.tail5389e9.ts.net",
         "session_cookie_secure": "auto",
-        "credential_encryption_key": "${env:MCPPROXY_CRED_KEY}",
         "oauth": {
           "provider": "oidc",
           "issuer_url": "https://authentik.tail5389e9.ts.net/application/o/mcp-proxy/",

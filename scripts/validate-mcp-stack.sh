@@ -25,7 +25,7 @@ assert config["server_edition"]["public_url"] == "https://mcp.tail5389e9.ts.net"
 assert len(config["mcpServers"]) == 9
 assert all(server.get("enabled") is True for server in config["mcpServers"])
 assert "${env:OIDC_CLIENT_SECRET}" in json.dumps(config)
-assert "${env:MCPPROXY_CRED_KEY}" in json.dumps(config)
+assert "credential_encryption_key" not in config["server_edition"]
 assert "${env:GRAFANA_MCP_SERVER_TOKEN}" in json.dumps(config)
 assert not any(secret in json.dumps(config) for secret in ("hvs.", "sk-", "-----BEGIN PRIVATE KEY-----"))
 ast.parse(adapter_path.read_text(encoding="utf-8"), filename=str(adapter_path))

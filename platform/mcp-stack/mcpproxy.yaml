@@ -86,6 +86,27 @@ spec:
             capabilities:
               drop: [ALL]
             readOnlyRootFilesystem: true
+        - name: migrate-config-secrets
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+          imagePullPolicy: IfNotPresent
+          command: [python3, -c]
+          args:
+            - "import json; from pathlib import Path; p=Path('/data/mcp_config.json'); d=json.loads(p.read_text()); s=d.get('server_edition') or {}; k=s.get('credential_encryption_key'); k == '${env:MCPPROXY_CRED_KEY}' and s.pop('credential_encryption_key'); p.write_text(json.dumps(d, indent=2) + '\\n')"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
       containers:
         - name: mcpproxy
           image: localhost/home-server/mcpproxy-server:v0.73.0

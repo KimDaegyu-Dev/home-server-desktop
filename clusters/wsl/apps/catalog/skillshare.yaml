@@ -15,4 +15,4 @@ spec:
     path: platform/skillshare
   destination:
     server: https://kubernetes.default.svc
-    namespace: skillshare
+    namespace: mcp

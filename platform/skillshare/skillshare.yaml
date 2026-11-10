@@ -2,7 +2,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: skillshare-data
-  namespace: skillshare
+  namespace: mcp
   annotations:
     argocd.argoproj.io/sync-options: Prune=false
 spec:
@@ -17,7 +17,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: skillshare
-  namespace: skillshare
+  namespace: mcp
   labels:
     app.kubernetes.io/name: skillshare
 spec:
@@ -63,6 +63,12 @@ spec:
           image: ghcr.io/runkids/skillshare:0.26.4
           imagePullPolicy: IfNotPresent
           command: [skillshare, mcp, serve, --http, 0.0.0.0:8765]
+          env:
+            - name: SKILLSHARE_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: skillshare-credentials
+                  key: SKILLSHARE_MCP_TOKEN
           ports:
             - name: http
               containerPort: 8765
@@ -106,7 +112,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: skillshare
-  namespace: skillshare
+  namespace: mcp
 spec:
   type: ClusterIP
   selector:

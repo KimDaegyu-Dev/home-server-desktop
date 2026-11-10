@@ -131,6 +131,11 @@ spec:
                 secretKeyRef:
                   name: mcpproxy-credentials
                   key: MCPPROXY_CRED_KEY
+            - name: SKILLSHARE_MCP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: skillshare-credentials
+                  key: SKILLSHARE_MCP_TOKEN
             - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:

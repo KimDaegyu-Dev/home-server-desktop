@@ -155,6 +155,22 @@ with open(sys.argv[1], "w") as f: json.dump({"WATCHSKILL_MCP_TOKEN": secrets.tok
 PY
 fi
 
+if vault_cmd kv get -format=json -mount=kv mcp/skillshare >"$tmp/skillshare-current.json" 2>/dev/null; then
+  python3 - "$tmp/skillshare-current.json" "$tmp/skillshare.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f: values = json.load(f)["data"]["data"]
+token = values.get("SKILLSHARE_MCP_TOKEN")
+if not isinstance(token, str) or len(token) < 32:
+    raise SystemExit("Existing kv/mcp/skillshare has no valid MCP token; refusing to replace partial data.")
+with open(sys.argv[2], "w") as f: json.dump({"SKILLSHARE_MCP_TOKEN": token}, f)
+PY
+else
+  python3 - "$tmp/skillshare.json" <<'PY'
+import json, secrets, sys
+with open(sys.argv[1], "w") as f: json.dump({"SKILLSHARE_MCP_TOKEN": secrets.token_urlsafe(48)}, f)
+PY
+fi
+
 if ! vault_cmd kv get -format=json -mount=kv authentik/sso-clients >"$tmp/sso-current.json" 2>/dev/null; then
   echo "Vault path kv/authentik/sso-clients is required before MCP SSO can be configured." >&2
   exit 1
@@ -184,6 +200,7 @@ path "kv/data/mcp/mcpproxy" { capabilities = ["read"] }
 path "kv/data/ai/ai-memory" { capabilities = ["read"] }
 path "kv/data/mcp/watch-skill" { capabilities = ["read"] }
 path "kv/data/mcp/agent-browser" { capabilities = ["read"] }
+path "kv/data/mcp/skillshare" { capabilities = ["read"] }
 POLICY
 chmod 0600 "$vault_policy_file"
 
@@ -194,7 +211,7 @@ path "kv/data/mcp/watch-skill" { capabilities = ["read"] }
 POLICY
 chmod 0600 "$watch_skill_policy_file"
 
-for item in "$tmp/searxng.json:mcp/searxng" "$tmp/watch-skill-mcp.json:mcp/watch-skill" "$tmp/mcpproxy.json:mcp/mcpproxy" "$tmp/ai-memory.json:ai/ai-memory" "$tmp/watch-skill-key.json:ai/watch-skill" "$tmp/sso-updated.json:authentik/sso-clients"; do
+for item in "$tmp/searxng.json:mcp/searxng" "$tmp/watch-skill-mcp.json:mcp/watch-skill" "$tmp/skillshare.json:mcp/skillshare" "$tmp/mcpproxy.json:mcp/mcpproxy" "$tmp/ai-memory.json:ai/ai-memory" "$tmp/watch-skill-key.json:ai/watch-skill" "$tmp/sso-updated.json:authentik/sso-clients"; do
   payload_file="${item%%:*}"
   vault_path="${item#*:}"
   k3s kubectl cp "$payload_file" "vault/vault-0:$pod_payload" >/dev/null

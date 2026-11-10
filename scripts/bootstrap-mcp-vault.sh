@@ -169,6 +169,7 @@ chmod 0600 "$vault_policy_file"
 watch_skill_policy_file="$tmp/watch-skill-vso.hcl"
 cat >"$watch_skill_policy_file" <<'POLICY'
 path "kv/data/ai/watch-skill" { capabilities = ["read"] }
+path "kv/data/mcp/watch-skill" { capabilities = ["read"] }
 POLICY
 chmod 0600 "$watch_skill_policy_file"
 
@@ -199,6 +200,20 @@ vault_cmd write auth/kubernetes/role/watch-skill-vso \
   bound_service_account_names=watch-skill-vault-auth \
   bound_service_account_namespaces=watch-skill \
   audience=vault token_policies=watch-skill-vso token_ttl=1h >/dev/null
+
+if k3s kubectl -n watch-skill get vaultstaticsecret watch-skill-mcp-credentials >/dev/null 2>&1; then
+  k3s kubectl -n watch-skill annotate vaultstaticsecret watch-skill-mcp-credentials "force-sync=$(date +%s)" --overwrite >/dev/null
+  ready=""
+  for _ in {1..60}; do
+    ready="$(k3s kubectl -n watch-skill get vaultstaticsecret watch-skill-mcp-credentials -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+    if [[ "$ready" == "True" ]] && k3s kubectl -n watch-skill get secret watch-skill-mcp-credentials >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+  if [[ "${ready:-}" != "True" ]]; then
+    echo "Vault policy and role were stored, but watch-skill/watch-skill-mcp-credentials did not become Ready." >&2
+    exit 1
+  fi
+fi
 
 if k3s kubectl -n authentik get vaultstaticsecret authentik-sso-clients >/dev/null 2>&1; then
   k3s kubectl -n authentik annotate vaultstaticsecret authentik-sso-clients "force-sync=$(date +%s)" --overwrite >/dev/null

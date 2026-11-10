@@ -109,7 +109,7 @@ vault_cmd write auth/kubernetes/role/watch-skill-vso \
   bound_service_account_namespaces=watch-skill \
   audience=vault token_policies=watch-skill-vso token_ttl=1h >/dev/null
 
-for ref in "watch-skill/watch-skill-credentials" "mcp/watch-skill-backend-credentials"; do
+for ref in "watch-skill/watch-skill-credentials" "watch-skill/watch-skill-mcp-credentials" "mcp/watch-skill-backend-credentials"; do
   namespace="${ref%%/*}"
   name="${ref#*/}"
   if k3s kubectl -n "$namespace" get vaultstaticsecret "$name" >/dev/null 2>&1; then

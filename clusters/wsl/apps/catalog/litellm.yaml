@@ -128,7 +128,7 @@ spec:
           enabled: false
         resources:
           requests:
-            cpu: 1m
+            cpu: 0
             memory: 1Gi
           limits:
             memory: 3Gi

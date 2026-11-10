@@ -1,0 +1,17 @@
+sources:
+  skills: /home/skillshare/.config/skillshare/skills
+  agents: /home/skillshare/.config/skillshare/agents
+
+mode: merge
+
+targets: {}
+
+ignore:
+  - .DS_Store
+  - .git/
+  - __pycache__/
+
+audit:
+  profile: default
+  threshold: CRITICAL
+  dedupe: global

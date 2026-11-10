@@ -69,6 +69,7 @@ spec:
             redact_user_api_key_info: true
         envVars:
           PROXY_BASE_URL: https://litellm.tail5389e9.ts.net
+          AUTO_REDIRECT_UI_LOGIN_TO_SSO: "true"
           LITELLM_OTEL_V2: "true"
           LITELLM_OTEL_INTEGRATION_ENABLE_METRICS: "true"
           OTEL_EXPORTER: otlp_http

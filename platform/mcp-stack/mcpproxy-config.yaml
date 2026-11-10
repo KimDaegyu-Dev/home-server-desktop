@@ -85,32 +85,32 @@ data:
         - grafana_search_folders
         - grafana_create_folder
         - grafana_update_dashboard
-        - memory_query
-        - memory_recent
-        - memory_status
-        - memory_briefing
-        - memory_explore
-        - memory_read_page
-        - memory_read_session_observations
-        - query_graph
-        - get_node
-        - get_neighbors
-        - shortest_path
-        - get_community
-        - god_nodes
-        - graph_stats
-        - add_comment
-        - create_project
-        - create_task
-        - get_task
-        - link_repo
-        - list_projects
-        - list_tasks
-        - next_task
-        - update_task
-        - watch_video
-        - ask_video
-        - get_moment
+        - ai-memory_memory_query
+        - ai-memory_memory_recent
+        - ai-memory_memory_status
+        - ai-memory_memory_briefing
+        - ai-memory_memory_explore
+        - ai-memory_memory_read_page
+        - ai-memory_memory_read_session_observations
+        - graphify_query_graph
+        - graphify_get_node
+        - graphify_get_neighbors
+        - graphify_shortest_path
+        - graphify_get_community
+        - graphify_god_nodes
+        - graphify_graph_stats
+        - kanzo_add_comment
+        - kanzo_create_project
+        - kanzo_create_task
+        - kanzo_get_task
+        - kanzo_link_repo
+        - kanzo_list_projects
+        - kanzo_list_tasks
+        - kanzo_next_task
+        - kanzo_update_task
+        - watchskill_watch_video
+        - watchskill_ask_video
+        - watchskill_get_moment
         - graphiti_search_nodes
         - graphiti_search_memory_facts
         - graphiti_get_episode_entities

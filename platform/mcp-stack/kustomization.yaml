@@ -7,6 +7,7 @@ resources:
   - mcpproxy-config.yaml
   - mcpproxy.yaml
   - mcpproxy-ingress.yaml
+  - searxng-ingress.yaml
 configMapGenerator:
   - name: searxng-mcp
     namespace: mcp

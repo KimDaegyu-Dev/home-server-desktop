@@ -1,3 +1,18 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcpproxy-data
+  namespace: mcp
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,54 +29,65 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: mcpproxy
-      annotations:
-        checksum-mcpproxy-config: "3d95301a4f6e7e4ba6659685a5c4f58f5bc7dee2bb2f1f14a8945512d04f9f83"
     spec:
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
-        - name: fetch-mcpproxy
-          image: alpine:3.22
+        - name: seed-config
+          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
           imagePullPolicy: IfNotPresent
-          command: [/bin/sh, -ec]
+          command: [python3, -c]
           args:
-            - >-
-              wget -q -O /tmp/mcpproxy.tar.gz
-              https://github.com/hoophq/mcpproxy/releases/download/v0.1.7/mcpproxy_0.1.7_linux_amd64.tar.gz;
-              echo '3a6e794321ded9cd71c467e426407fa24b1dad26b0d9040f81a12fce3f166b7d  /tmp/mcpproxy.tar.gz' | sha256sum -c -;
-              tar -xzf /tmp/mcpproxy.tar.gz -C /opt/bin ./mcpproxyd ./configcheck;
-              chmod 0555 /opt/bin/mcpproxyd /opt/bin/configcheck
+            - "from pathlib import Path; import shutil; target=Path('/data/mcp_config.json'); target.exists() or shutil.copyfile('/seed/mcp_config.json', target)"
           volumeMounts:
-            - name: bin
-              mountPath: /opt/bin
+            - name: config-seed
+              mountPath: /seed
+              readOnly: true
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+            readOnlyRootFilesystem: true
       containers:
         - name: mcpproxy
-          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
-          imagePullPolicy: IfNotPresent
-          command: [/bin/sh, -ec]
+          image: localhost/home-server/mcpproxy-server:v0.73.0
+          imagePullPolicy: Never
           args:
-            - >-
-              /opt/bin/configcheck /etc/mcpproxy/config.yaml;
-              exec /opt/bin/mcpproxyd -config /etc/mcpproxy/config.yaml
+            - serve
+            - --listen=0.0.0.0:8080
+            - --config=/data/mcp_config.json
+            - --data-dir=/data
           ports:
             - name: http
-              containerPort: 8081
+              containerPort: 8080
               protocol: TCP
           env:
-            - name: MCPPROXY_STATE_DIR
-              value: /tmp/mcpproxy
-            - name: PYTHONDONTWRITEBYTECODE
-              value: "1"
-            - name: AUTHENTIK_OIDC_CLIENT_SECRET
+            - name: MCPPROXY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mcpproxy-credentials
+                  key: MCPPROXY_API_KEY
+            - name: MCPPROXY_CRED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mcpproxy-credentials
+                  key: MCPPROXY_CRED_KEY
+            - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: mcpproxy-credentials
@@ -87,31 +113,22 @@ spec:
                   name: mcp-agent-browser-credentials
                   key: AGENT_BROWSER_MCP_TOKEN
           volumeMounts:
-            - name: bin
-              mountPath: /opt/bin
-              readOnly: true
-            - name: search-mcp
-              mountPath: /opt/mcp-servers
-              readOnly: true
-            - name: config
-              mountPath: /etc/mcpproxy
-              readOnly: true
-            - name: signing-key
-              mountPath: /var/run/mcpproxy
-              readOnly: true
-            - name: state
-              mountPath: /tmp/mcpproxy
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
           startupProbe:
             httpGet:
               path: /healthz
               port: http
             periodSeconds: 5
-            failureThreshold: 30
+            failureThreshold: 60
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: http
             periodSeconds: 10
+            failureThreshold: 12
           livenessProbe:
             httpGet:
               path: /healthz
@@ -119,83 +136,27 @@ spec:
             periodSeconds: 20
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: 150m
+              memory: 384Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: "1"
+              memory: 1536Mi
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: [ALL]
-            readOnlyRootFilesystem: true
-        - name: oauth-proxy
-          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
-          imagePullPolicy: IfNotPresent
-          command: [python3, /opt/mcpproxy/oauth-proxy.py]
-          ports:
-            - name: http-proxy
-              containerPort: 8080
-              protocol: TCP
-          env:
-            - name: MCP_PUBLIC_URL
-              value: https://mcp.tail5389e9.ts.net
-            - name: PYTHONDONTWRITEBYTECODE
-              value: "1"
-          volumeMounts:
-            - name: config
-              mountPath: /opt/mcpproxy
-              readOnly: true
-          startupProbe:
-            httpGet:
-              path: /healthz
-              port: http-proxy
-            periodSeconds: 5
-            failureThreshold: 30
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: http-proxy
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http-proxy
-            periodSeconds: 20
-          resources:
-            requests:
-              cpu: 10m
-              memory: 24Mi
-            limits:
-              cpu: 100m
-              memory: 96Mi
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 10001
-            runAsGroup: 10001
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
             readOnlyRootFilesystem: true
       volumes:
-        - name: bin
-          emptyDir: {}
-        - name: search-mcp
-          configMap:
-            name: searxng-mcp
-            defaultMode: 0444
-        - name: config
+        - name: config-seed
           configMap:
             name: mcpproxy-config
-        - name: signing-key
-          secret:
-            secretName: mcpproxy-credentials
-            defaultMode: 0440
-            items:
-              - key: authserver.pem
-                path: authserver.pem
-        - name: state
-          emptyDir: {}
+            defaultMode: 0444
+        - name: data
+          persistentVolumeClaim:
+            claimName: mcpproxy-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
 ---
 apiVersion: v1
 kind: Service
@@ -211,7 +172,7 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: http-proxy
+      targetPort: http
       protocol: TCP
 ---
 apiVersion: monitoring.coreos.com/v1
@@ -231,3 +192,8 @@ spec:
     - port: http
       path: /metrics
       interval: 30s
+      authorization:
+        type: Bearer
+        credentials:
+          name: mcpproxy-monitoring-credentials
+          key: api_key

@@ -71,7 +71,11 @@ import json, sys
 with open(sys.argv[1]) as f: values = json.load(f)["data"]["data"]
 if not values.get("authentik_client_secret") or not values.get("authserver.pem", "").startswith("-----BEGIN PRIVATE KEY-----"):
     raise SystemExit("Existing kv/mcp/mcpproxy is incomplete; refusing to rotate or replace partial data.")
-with open(sys.argv[2], "w") as f: json.dump({"authentik_client_secret": values["authentik_client_secret"], "authserver.pem": values["authserver.pem"]}, f)
+values.setdefault("MCPPROXY_API_KEY", __import__("secrets").token_urlsafe(48))
+values.setdefault("MCPPROXY_CRED_KEY", __import__("secrets").token_urlsafe(48))
+if len(values["MCPPROXY_API_KEY"]) < 32 or len(values["MCPPROXY_CRED_KEY"]) < 32:
+    raise SystemExit("Existing MCPProxy API or credential-encryption key is too short; refusing to rotate it implicitly.")
+with open(sys.argv[2], "w") as f: json.dump({"authentik_client_secret": values["authentik_client_secret"], "authserver.pem": values["authserver.pem"], "MCPPROXY_API_KEY": values["MCPPROXY_API_KEY"], "MCPPROXY_CRED_KEY": values["MCPPROXY_CRED_KEY"]}, f)
 PY
 else
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$tmp/authserver.pem" 2>/dev/null
@@ -79,7 +83,7 @@ else
 import json, secrets, sys
 with open(sys.argv[2]) as f: signing_key = f.read()
 with open(sys.argv[1], "w") as f:
-    json.dump({"authentik_client_secret": secrets.token_hex(32), "authserver.pem": signing_key}, f)
+    json.dump({"authentik_client_secret": secrets.token_hex(32), "authserver.pem": signing_key, "MCPPROXY_API_KEY": secrets.token_urlsafe(48), "MCPPROXY_CRED_KEY": secrets.token_urlsafe(48)}, f)
 PY
 fi
 
@@ -155,6 +159,12 @@ clients["mcpproxy_client_secret"] = mcp["authentik_client_secret"]
 with open(sys.argv[3], "w") as f: json.dump(clients, f)
 PY
 chmod 0600 "$tmp"/*.json "$tmp/authserver.pem" 2>/dev/null || true
+python3 - "$tmp/mcpproxy.json" "$tmp/mcpproxy-monitoring.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f: values = json.load(f)
+with open(sys.argv[2], "w") as f: json.dump({"api_key": values["MCPPROXY_API_KEY"]}, f)
+PY
+chmod 0600 "$tmp/mcpproxy-monitoring.json"
 
 vault_policy_file="$tmp/mcp-vso.hcl"
 cat >"$vault_policy_file" <<'POLICY'
@@ -179,9 +189,26 @@ for item in "$tmp/searxng.json:mcp/searxng" "$tmp/watch-skill-mcp.json:mcp/watch
   k3s kubectl cp "$payload_file" "vault/vault-0:$pod_payload" >/dev/null
   vault_cmd kv put -mount=kv "$vault_path" "@$pod_payload" >/dev/null
 done
+item="$tmp/mcpproxy-monitoring.json:monitoring/mcpproxy"
+payload_file="${item%%:*}"
+vault_path="${item#*:}"
+k3s kubectl cp "$payload_file" "vault/vault-0:$pod_payload" >/dev/null
+vault_cmd kv put -mount=kv "$vault_path" "@$pod_payload" >/dev/null
 
 k3s kubectl cp "$vault_policy_file" "vault/vault-0:$pod_policy" >/dev/null
 vault_cmd policy write mcp-vso "$pod_policy" >/dev/null
+monitoring_policy_file="$tmp/monitoring-vso.hcl"
+cat >"$monitoring_policy_file" <<'POLICY'
+path "kv/data/monitoring/grafana" { capabilities = ["read"] }
+path "kv/data/monitoring/mcpproxy" { capabilities = ["read"] }
+POLICY
+chmod 0600 "$monitoring_policy_file"
+k3s kubectl cp "$monitoring_policy_file" "vault/vault-0:$pod_policy" >/dev/null
+vault_cmd policy write monitoring-vso "$pod_policy" >/dev/null
+vault_cmd write auth/kubernetes/role/monitoring-vso \
+  bound_service_account_names=monitoring-vault-auth \
+  bound_service_account_namespaces=monitoring \
+  audience=vault token_policies=monitoring-vso token_ttl=1h >/dev/null
 k3s kubectl cp "$watch_skill_policy_file" "vault/vault-0:$pod_policy" >/dev/null
 vault_cmd policy write watch-skill-vso "$pod_policy" >/dev/null
 vault_cmd write auth/kubernetes/role/searxng-vso \
@@ -231,5 +258,23 @@ if k3s kubectl -n authentik get vaultstaticsecret authentik-sso-clients >/dev/nu
   k3s kubectl -n authentik rollout status deployment/authentik-worker --timeout=180s >/dev/null
 fi
 
-echo "Stored MCP, SearXNG, ai-memory, and Watch Skill bootstrap credentials, stable MCP OAuth signing key, and VSO roles in Vault."
-echo "Vault paths: kv/mcp/searxng, kv/mcp/watch-skill, kv/mcp/mcpproxy, kv/ai/ai-memory, kv/ai/watch-skill, kv/authentik/sso-clients. Secret values were not printed."
+for ref in "mcp/mcpproxy-credentials" "monitoring/mcpproxy-monitoring-credentials"; do
+  namespace="${ref%%/*}"
+  name="${ref#*/}"
+  if k3s kubectl -n "$namespace" get vaultstaticsecret "$name" >/dev/null 2>&1; then
+    k3s kubectl -n "$namespace" annotate vaultstaticsecret "$name" "force-sync=$(date +%s)" --overwrite >/dev/null
+    ready=""
+    for _ in {1..60}; do
+      ready="$(k3s kubectl -n "$namespace" get vaultstaticsecret "$name" -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+      if [[ "$ready" == "True" ]] && k3s kubectl -n "$namespace" get secret "$name" >/dev/null 2>&1; then break; fi
+      sleep 2
+    done
+    if [[ "${ready:-}" != "True" ]]; then
+      echo "Vault values and roles were stored, but ${namespace}/${name} did not become Ready." >&2
+      exit 1
+    fi
+  fi
+done
+
+echo "Stored MCP, SearXNG, ai-memory, and Watch Skill bootstrap credentials and VSO roles in Vault."
+echo "Vault paths include kv/mcp/mcpproxy and kv/monitoring/mcpproxy. Secret values were not printed."

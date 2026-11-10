@@ -3,9 +3,11 @@ kind: Kustomization
 resources:
   - searxng-settings.yaml
   - searxng.yaml
+  - searxng-mcp.yaml
   - kanzo-alias.yaml
   - mcpproxy-config.yaml
   - mcpproxy.yaml
+  - mcpproxy-monitoring-secret.yaml
   - mcpproxy-ingress.yaml
   - searxng-ingress.yaml
 configMapGenerator:

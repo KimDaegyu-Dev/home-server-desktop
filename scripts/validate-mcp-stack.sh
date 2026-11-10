@@ -3,70 +3,63 @@ set -euo pipefail
 set +x
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-version="v0.1.7"
-archive="mcpproxy_0.1.7_linux_amd64.tar.gz"
-sha256="3a6e794321ded9cd71c467e426407fa24b1dad26b0d9040f81a12fce3f166b7d"
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-
 command -v python3 >/dev/null || { echo "python3 is required." >&2; exit 1; }
 command -v k3s >/dev/null || { echo "Run inside the K3s host or install k3s CLI." >&2; exit 1; }
-command -v curl >/dev/null || { echo "curl is required." >&2; exit 1; }
 
 k3s kubectl kustomize "$repo_root/platform/mcp-stack" >/dev/null
-config_hash="$(sha256sum "$repo_root/platform/mcp-stack/mcpproxy-config.yaml" | awk '{print $1}')"
-declared_hash="$(sed -n 's/^[[:space:]]*checksum-mcpproxy-config: "\([0-9a-f]*\)"/\1/p' "$repo_root/platform/mcp-stack/mcpproxy.yaml")"
-[[ "$config_hash" == "$declared_hash" ]] || {
-    echo "MCPProxy config checksum annotation is stale; update mcpproxy.yaml." >&2
-    exit 1
-}
-python3 - "$repo_root/platform/mcp-stack/searxng-mcp.py" <<'PY'
-import ast, json, subprocess, sys
-path = sys.argv[1]
-ast.parse(open(path, encoding="utf-8").read())
-messages = "\n".join([
-    json.dumps({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{"protocolVersion":"2025-11-25", "capabilities":{}, "clientInfo":{"name":"preflight", "version":"1"}}}),
-    json.dumps({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}}),
-]) + "\n"
-result = subprocess.run([sys.executable, path], input=messages, text=True, capture_output=True, check=True)
-replies = [json.loads(line) for line in result.stdout.splitlines()]
-assert replies[0]["result"]["serverInfo"]["name"] == "searxng-search"
-assert [tool["name"] for tool in replies[1]["result"]["tools"]] == ["search"]
-print("SearXNG MCP initialize and tools/list passed.")
-PY
-
-python3 - "$repo_root/platform/mcp-stack/mcpproxy-config.yaml" <<'PY'
-import ast, sys
+python3 - "$repo_root/platform/mcp-stack/mcpproxy-config.yaml" "$repo_root/platform/mcp-stack/searxng-mcp.py" <<'PY'
+import ast, json, subprocess, sys, time, urllib.request
 from pathlib import Path
-lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
-start = lines.index("  oauth-proxy.py: |") + 1
-source = []
-for line in lines[start:]:
-    if line and not line.startswith("    "):
-        break
-    source.append(line[4:] if line.startswith("    ") else "")
-ast.parse("\n".join(source), filename="oauth-proxy.py")
-print("MCP OAuth resource metadata proxy syntax passed.")
-PY
-
-mkdir -p "$tmp/bin"
-curl -fsSL "https://github.com/hoophq/mcpproxy/releases/download/${version}/${archive}" -o "$tmp/$archive"
-echo "$sha256  $tmp/$archive" | sha256sum -c - >/dev/null
-tar -xzf "$tmp/$archive" -C "$tmp/bin" ./configcheck
-chmod 0555 "$tmp/bin/configcheck"
-
-python3 - "$repo_root/platform/mcp-stack/mcpproxy-config.yaml" "$tmp/config.yaml" <<'PY'
-from pathlib import Path
-import sys
-lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
-start = lines.index("  config.yaml: |") + 1
+config_path, adapter_path = map(Path, sys.argv[1:])
+lines = config_path.read_text(encoding="utf-8").splitlines()
+start = lines.index("  mcp_config.json: |") + 1
 block = []
 for line in lines[start:]:
     if line and not line.startswith("    "):
         break
     block.append(line[4:] if line.startswith("    ") else "")
-Path(sys.argv[2]).write_text("\n".join(block) + "\n", encoding="utf-8")
+config = json.loads("\n".join(block))
+assert config["server_edition"]["enabled"] is True
+assert config["server_edition"]["oauth"]["provider"] == "oidc"
+assert config["server_edition"]["public_url"] == "https://mcp.tail5389e9.ts.net"
+assert len(config["mcpServers"]) == 9
+assert all(server.get("enabled") is True for server in config["mcpServers"])
+assert "${env:OIDC_CLIENT_SECRET}" in json.dumps(config)
+assert "${env:MCPPROXY_CRED_KEY}" in json.dumps(config)
+assert "${env:GRAFANA_MCP_SERVER_TOKEN}" in json.dumps(config)
+assert not any(secret in json.dumps(config) for secret in ("hvs.", "sk-", "-----BEGIN PRIVATE KEY-----"))
+ast.parse(adapter_path.read_text(encoding="utf-8"), filename=str(adapter_path))
+
+messages = "\n".join([
+    json.dumps({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{"protocolVersion":"2025-11-25", "capabilities":{}, "clientInfo":{"name":"preflight", "version":"1"}}}),
+    json.dumps({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}}),
+]) + "\n"
+result = subprocess.run([sys.executable, str(adapter_path)], input=messages, text=True, capture_output=True, check=True)
+replies = [json.loads(line) for line in result.stdout.splitlines()]
+assert replies[0]["result"]["serverInfo"]["name"] == "searxng-search"
+assert [tool["name"] for tool in replies[1]["result"]["tools"]] == ["search"]
+
+proc = subprocess.Popen([sys.executable, str(adapter_path), "--http"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+try:
+    for _ in range(50):
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8090/healthz", timeout=1) as response:
+                assert response.status == 200
+            break
+        except Exception:
+            if proc.poll() is not None:
+                raise RuntimeError("SearXNG HTTP adapter exited before health became ready")
+            time.sleep(0.1)
+    else:
+        raise RuntimeError("SearXNG HTTP adapter health check timed out")
+    payload = json.dumps({"jsonrpc":"2.0", "id":3, "method":"tools/list", "params":{}}).encode()
+    request = urllib.request.Request("http://127.0.0.1:8090/mcp", data=payload, headers={"Content-Type":"application/json", "Accept":"application/json, text/event-stream"})
+    with urllib.request.urlopen(request, timeout=2) as response:
+        assert json.load(response)["result"]["tools"][0]["name"] == "search"
+finally:
+    proc.terminate()
+    proc.wait(timeout=5)
+print("MCPProxy Server Edition JSON config and SearXNG stdio/HTTP MCP adapter checks passed.")
 PY
 
-AUTHENTIK_OIDC_CLIENT_SECRET=preflight-only-value "$tmp/bin/configcheck" "$tmp/config.yaml"
-echo "MCPProxy ${version} configuration passed configcheck."
+echo "Kustomize render and MCP stack validation passed."

@@ -4,368 +4,124 @@ metadata:
   name: mcpproxy-config
   namespace: mcp
 data:
-  config.yaml: |
-    listen: 0.0.0.0:8081
-    inbound:
-      mode: anonymous
-    auth_server:
-      issuer: https://mcp.tail5389e9.ts.net
-      signing_key_file: /var/run/mcpproxy/authserver.pem
-      access_token_ttl: 1h
-      upstream:
-        issuer: https://authentik.tail5389e9.ts.net/application/o/mcp-proxy/
-        client_id: mcp-proxy
-        client_secret: ${AUTHENTIK_OIDC_CLIENT_SECRET}
-        scopes: [openid, email, profile]
-    backends:
-      context7:
-        transport: streamable-http
-        url: https://mcp.context7.com/mcp
-        auth: none
-      grafana:
-        transport: streamable-http
-        url: http://grafana-mcp.grafana-mcp.svc.cluster.local:8000/mcp
-        auth: static
-        headers:
-          Authorization: Bearer ${GRAFANA_MCP_SERVER_TOKEN}
-      ai-memory:
-        transport: streamable-http
-        url: http://ai-memory.ai-memory.svc.cluster.local:49374/mcp
-        auth: static
-        headers:
-          Authorization: Bearer ${AI_MEMORY_AUTH_TOKEN}
-      graphify:
-        transport: streamable-http
-        url: http://graphify.graphify.svc.cluster.local:8080/mcp
-        auth: none
-      kanzo:
-        transport: streamable-http
-        url: http://kanzo:4242/mcp
-        auth: none
-      watchskill:
-        transport: streamable-http
-        url: http://watch-skill.watch-skill.svc.cluster.local:8748/mcp
-        auth: static
-        headers:
-          Authorization: Bearer ${WATCHSKILL_MCP_TOKEN}
-      graphiti:
-        transport: streamable-http
-        url: http://graphiti.graphiti.svc.cluster.local:8000/mcp
-        auth: none
-      agentbrowser:
-        transport: streamable-http
-        url: http://agent-browser.agent-browser.svc.cluster.local:8080/mcp
-        auth: static
-        headers:
-          Authorization: Bearer ${AGENT_BROWSER_MCP_TOKEN}
-      searxng:
-        transport: stdio
-        command: [python3, /opt/mcp-servers/searxng-mcp.py]
-        env:
-          SEARXNG_BASE_URL: http://searxng.search.svc.cluster.local:8080
-    policy:
-      allowed_tools:
-        - search
-        - resolve-library-id
-        - query-docs
-        - check_datasources_health
-        - create_folder
-        - get_dashboard_by_uid
-        - get_dashboard_panel_queries
-        - get_dashboard_property
-        - get_dashboard_summary
-        - list_dashboard_versions
-        - list_datasources
-        - list_prometheus_label_names
-        - list_prometheus_label_values
-        - list_prometheus_metric_metadata
-        - list_prometheus_metric_names
-        - query_prometheus
-        - query_prometheus_histogram
-        - search_dashboards
-        - search_folders
-        - update_dashboard
-        - memory_query
-        - memory_recent
-        - memory_status
-        - memory_briefing
-        - memory_explore
-        - memory_read_page
-        - memory_read_session_observations
-        - query_graph
-        - get_node
-        - get_neighbors
-        - shortest_path
-        - get_community
-        - god_nodes
-        - graph_stats
-        - add_comment
-        - create_project
-        - create_task
-        - get_task
-        - link_repo
-        - list_projects
-        - list_tasks
-        - next_task
-        - update_task
-        - watch_video
-        - ask_video
-        - get_moment
-        - search_nodes
-        - search_memory_facts
-        - get_entity_edge
-        - get_episodes
-        - get_episode_entities
-        - get_status
-        - agent_browser_open
-        - agent_browser_read
-        - agent_browser_back
-        - agent_browser_forward
-        - agent_browser_reload
-        - agent_browser_snapshot
-        - agent_browser_click
-        - agent_browser_fill
-        - agent_browser_type
-        - agent_browser_press
-        - agent_browser_check
-        - agent_browser_uncheck
-        - agent_browser_select
-        - agent_browser_scroll
-        - agent_browser_wait_ms
-        - agent_browser_wait_for_selector
-        - agent_browser_wait_for_text
-        - agent_browser_wait_for_load
-        - agent_browser_screenshot
-        - agent_browser_get_text
-        - agent_browser_get_url
-        - agent_browser_get_title
-        - agent_browser_tab_new
-        - agent_browser_tab_list
-        - agent_browser_tab_switch
-        - agent_browser_tab_close
-        - agent_browser_close
-        - searxng_search
-        - "context7_resolve-library-id"
-        - "context7_query-docs"
-        - grafana_check_datasources_health
-        - grafana_get_dashboard_by_uid
-        - grafana_get_dashboard_panel_queries
-        - grafana_get_dashboard_property
-        - grafana_get_dashboard_summary
-        - grafana_list_dashboard_versions
-        - grafana_list_datasources
-        - grafana_list_prometheus_label_names
-        - grafana_list_prometheus_label_values
-        - grafana_list_prometheus_metric_metadata
-        - grafana_list_prometheus_metric_names
-        - grafana_query_prometheus
-        - grafana_query_prometheus_histogram
-        - grafana_search_dashboards
-        - grafana_search_folders
-        - grafana_create_folder
-        - grafana_update_dashboard
-        - ai-memory_memory_query
-        - ai-memory_memory_recent
-        - ai-memory_memory_status
-        - ai-memory_memory_briefing
-        - ai-memory_memory_explore
-        - ai-memory_memory_read_page
-        - ai-memory_memory_read_session_observations
-        - graphify_query_graph
-        - graphify_get_node
-        - graphify_get_neighbors
-        - graphify_shortest_path
-        - graphify_get_community
-        - graphify_god_nodes
-        - graphify_graph_stats
-        - kanzo_add_comment
-        - kanzo_create_project
-        - kanzo_create_task
-        - kanzo_get_task
-        - kanzo_link_repo
-        - kanzo_list_projects
-        - kanzo_list_tasks
-        - kanzo_next_task
-        - kanzo_update_task
-        - watchskill_watch_video
-        - watchskill_ask_video
-        - watchskill_get_moment
-        - graphiti_search_nodes
-        - graphiti_search_memory_facts
-        - graphiti_get_episode_entities
-        - graphiti_get_entity_edge
-        - graphiti_get_episodes
-        - graphiti_get_status
-        - agentbrowser_agent_browser_open
-        - agentbrowser_agent_browser_read
-        - agentbrowser_agent_browser_back
-        - agentbrowser_agent_browser_forward
-        - agentbrowser_agent_browser_reload
-        - agentbrowser_agent_browser_snapshot
-        - agentbrowser_agent_browser_click
-        - agentbrowser_agent_browser_fill
-        - agentbrowser_agent_browser_type
-        - agentbrowser_agent_browser_press
-        - agentbrowser_agent_browser_check
-        - agentbrowser_agent_browser_uncheck
-        - agentbrowser_agent_browser_select
-        - agentbrowser_agent_browser_scroll
-        - agentbrowser_agent_browser_wait_ms
-        - agentbrowser_agent_browser_wait_for_selector
-        - agentbrowser_agent_browser_wait_for_text
-        - agentbrowser_agent_browser_wait_for_load
-        - agentbrowser_agent_browser_screenshot
-        - agentbrowser_agent_browser_get_text
-        - agentbrowser_agent_browser_get_url
-        - agentbrowser_agent_browser_get_title
-        - agentbrowser_agent_browser_tab_new
-        - agentbrowser_agent_browser_tab_list
-        - agentbrowser_agent_browser_tab_switch
-        - agentbrowser_agent_browser_tab_close
-        - agentbrowser_agent_browser_close
-      denied_tools: []
-      approval_tools: []
-      on_rug_pull: kill
-      max_result_kb: 256
-      max_calls_per_session: 100
-    telemetry:
-      prometheus_path: /metrics
-      otlp_endpoint: alloy.monitoring.svc.cluster.local:4317
-      service_name: mcpproxy
-  oauth-proxy.py: |
-    import http.client
-    import json
-    import os
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from urllib.parse import urlsplit
-
-    UPSTREAM_HOST = "127.0.0.1"
-    UPSTREAM_PORT = 8081
-    PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "https://mcp.tail5389e9.ts.net").rstrip("/")
-    METADATA_PATHS = {
-        "/.well-known/oauth-protected-resource",
-        "/.well-known/oauth-protected-resource/mcp",
+  mcp_config.json: |
+    {
+      "listen": "0.0.0.0:8080",
+      "data_dir": "/data",
+      "trusted_proxies": ["10.42.0.0/16"],
+      "trusted_hosts": ["mcp.tail5389e9.ts.net"],
+      "require_mcp_auth": true,
+      "mcp_reject_query_apikey": true,
+      "enable_socket": false,
+      "health_check_interval": "60s",
+      "tool_discovery_interval": "5m",
+      "call_tool_timeout": "5m",
+      "audit_log": {
+        "enabled": true,
+        "stdout": true
+      },
+      "telemetry": {
+        "enabled": false
+      },
+      "features": {
+        "enable_web_ui": true
+      },
+      "update_check": {
+        "enabled": false
+      },
+      "observability": {
+        "metrics": {
+          "enabled": true
+        },
+        "tracing": {
+          "enabled": true,
+          "protocol": "grpc",
+          "endpoint": "alloy.monitoring.svc.cluster.local:4317",
+          "sample_rate": 1.0
+        }
+      },
+      "server_edition": {
+        "enabled": true,
+        "admin_emails": ["ddk3207@naver.com"],
+        "public_url": "https://mcp.tail5389e9.ts.net",
+        "session_cookie_secure": "auto",
+        "credential_encryption_key": "${env:MCPPROXY_CRED_KEY}",
+        "oauth": {
+          "provider": "oidc",
+          "issuer_url": "https://authentik.tail5389e9.ts.net/application/o/mcp-proxy/",
+          "client_id": "mcp-proxy",
+          "client_secret": "${env:OIDC_CLIENT_SECRET}",
+          "scopes": ["openid", "profile", "email"],
+          "email_verified_policy": "ignore",
+          "display_name": "Authentik"
+        }
+      },
+      "mcpServers": [
+        {
+          "name": "context7",
+          "url": "https://mcp.context7.com/mcp",
+          "protocol": "http",
+          "enabled": true
+        },
+        {
+          "name": "grafana",
+          "url": "http://grafana-mcp.grafana-mcp.svc.cluster.local:8000/mcp",
+          "protocol": "http",
+          "headers": {
+            "Authorization": "Bearer ${env:GRAFANA_MCP_SERVER_TOKEN}"
+          },
+          "enabled": true
+        },
+        {
+          "name": "ai-memory",
+          "url": "http://ai-memory.ai-memory.svc.cluster.local:49374/mcp",
+          "protocol": "http",
+          "headers": {
+            "Authorization": "Bearer ${env:AI_MEMORY_AUTH_TOKEN}"
+          },
+          "enabled": true
+        },
+        {
+          "name": "graphify",
+          "url": "http://graphify.graphify.svc.cluster.local:8080/mcp",
+          "protocol": "http",
+          "enabled": true
+        },
+        {
+          "name": "kanzo",
+          "url": "http://kanzo:4242/mcp",
+          "protocol": "http",
+          "enabled": true
+        },
+        {
+          "name": "watchskill",
+          "url": "http://watch-skill.watch-skill.svc.cluster.local:8748/mcp",
+          "protocol": "http",
+          "headers": {
+            "Authorization": "Bearer ${env:WATCHSKILL_MCP_TOKEN}"
+          },
+          "enabled": true
+        },
+        {
+          "name": "graphiti",
+          "url": "http://graphiti.graphiti.svc.cluster.local:8000/mcp",
+          "protocol": "http",
+          "enabled": true
+        },
+        {
+          "name": "agentbrowser",
+          "url": "http://agent-browser.agent-browser.svc.cluster.local:8080/mcp",
+          "protocol": "http",
+          "headers": {
+            "Authorization": "Bearer ${env:AGENT_BROWSER_MCP_TOKEN}"
+          },
+          "enabled": true
+        },
+        {
+          "name": "searxng",
+          "url": "http://searxng-mcp.mcp.svc.cluster.local:8090/mcp",
+          "protocol": "http",
+          "enabled": true
+        }
+      ]
     }
-    HOP_HEADERS = {
-        "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-        "te", "trailers", "transfer-encoding", "upgrade",
-    }
-
-    class Handler(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def do_GET(self):
-            if urlsplit(self.path).path == "/":
-                body = (
-                    "<!doctype html><html lang=\"ko\"><meta charset=\"utf-8\">"
-                    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-                    "<title>Home Server MCP Gateway</title>"
-                    "<main style=\"max-width:48rem;margin:3rem auto;padding:0 1rem;"
-                    "font:16px system-ui,sans-serif;line-height:1.6\">"
-                    "<h1>Home Server MCP Gateway</h1>"
-                    "<p>This deployment runs hoophq/mcpproxy v0.1.7, an MCP and OAuth gateway without a browser UI. The <code>/ui</code> route is not provided by this build.</p>"
-                    "<p>MCP endpoint: <code>" + PUBLIC_URL + "/mcp</code></p>"
-                    "<p>Codex에서 Remote MCP 서버로 위 endpoint를 등록하고 OAuth 로그인을 완료하세요.</p>"
-                    "<p><a href=\"/.well-known/oauth-protected-resource/mcp\">MCP 인증 메타데이터</a></p>"
-                    "</main></html>"
-                ).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("X-Content-Type-Options", "nosniff")
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            if urlsplit(self.path).path in METADATA_PATHS:
-                body = json.dumps({
-                    "resource": PUBLIC_URL + "/mcp",
-                    "authorization_servers": [PUBLIC_URL],
-                    "scopes_supported": ["openid", "email", "profile"],
-                    "resource_name": "Home Server MCP Gateway",
-                }).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            self._proxy()
-
-        def do_POST(self):
-            self._proxy()
-
-        def do_DELETE(self):
-            self._proxy()
-
-        def do_OPTIONS(self):
-            if urlsplit(self.path).path in METADATA_PATHS:
-                self.send_response(204)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            self.send_error(405)
-
-        def _proxy(self):
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length) if length else None
-            headers = {
-                key: value for key, value in self.headers.items()
-                if key.lower() not in HOP_HEADERS and key.lower() not in {"host", "content-length"}
-            }
-            headers["Host"] = f"{UPSTREAM_HOST}:{UPSTREAM_PORT}"
-            if body is not None:
-                headers["Content-Length"] = str(len(body))
-            conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=3600)
-            try:
-                conn.request(self.command, self.path, body=body, headers=headers)
-                upstream = conn.getresponse()
-                self.send_response(upstream.status, upstream.reason)
-                has_length = False
-                for key, value in upstream.getheaders():
-                    lower = key.lower()
-                    if lower in HOP_HEADERS:
-                        continue
-                    if lower == "content-length":
-                        has_length = True
-                    if lower == "www-authenticate" and upstream.status == 401:
-                        continue
-                    self.send_header(key, value)
-                if upstream.status == 401:
-                    self.send_header(
-                        "WWW-Authenticate",
-                        'Bearer resource_metadata="' + PUBLIC_URL + '/.well-known/oauth-protected-resource/mcp"',
-                    )
-                if not has_length and upstream.status not in (204, 304) and not 100 <= upstream.status < 200:
-                    self.send_header("Transfer-Encoding", "chunked")
-                self.end_headers()
-                if self.command != "HEAD" and upstream.status not in (204, 304) and not 100 <= upstream.status < 200:
-                    while True:
-                        chunk = upstream.read(65536)
-                        if not chunk:
-                            break
-                        if has_length:
-                            self.wfile.write(chunk)
-                        else:
-                            self.wfile.write(f"{len(chunk):X}\r\n".encode() + chunk + b"\r\n")
-                    if not has_length:
-                        self.wfile.write(b"0\r\n\r\n")
-            except (OSError, http.client.HTTPException) as exc:
-                self.close_connection = True
-                if not self.wfile.closed:
-                    try:
-                        self.send_error(502, "MCP upstream unavailable")
-                    except OSError:
-                        pass
-            finally:
-                conn.close()
-
-        def log_message(self, fmt, *args):
-            # Do not log callback query strings, which can contain OAuth codes.
-            print(f"mcp-auth-proxy {self.command} {urlsplit(self.path).path}", flush=True)
-
-    ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()

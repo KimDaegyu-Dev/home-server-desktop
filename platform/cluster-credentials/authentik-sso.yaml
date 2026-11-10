@@ -207,7 +207,7 @@ entries:
       client_secret: !Env AUTHENTIK_OIDC_MCPPROXY_CLIENT_SECRET
       redirect_uris:
         - matching_mode: strict
-          url: https://mcp.tail5389e9.ts.net/callback
+          url: https://mcp.tail5389e9.ts.net/api/v1/auth/callback
       property_mappings:
         - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'openid'"]]
         - !Find [authentik_providers_oauth2.scopemapping, [name, "authentik default OAuth Mapping: OpenID 'email'"]]

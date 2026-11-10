@@ -41,7 +41,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
         - name: seed-config
-          image: ghcr.io/runkids/skillshare:0.26.4
+          image: ghcr.io/runkids/skillshare:0.28.2@sha256:5a914b35332f20177cd6cf4710c11749789aac9007a0b798c09a036736c805cc
           imagePullPolicy: IfNotPresent
           command: [/bin/sh, -ec]
           args:
@@ -60,9 +60,9 @@ spec:
               readOnly: true
       containers:
         - name: skillshare
-          image: ghcr.io/runkids/skillshare:0.26.4
+          image: ghcr.io/runkids/skillshare:0.28.2@sha256:5a914b35332f20177cd6cf4710c11749789aac9007a0b798c09a036736c805cc
           imagePullPolicy: IfNotPresent
-          command: [skillshare, mcp, serve, --http, 0.0.0.0:8765]
+          command: [skillshare, mcp, serve, --http, 0.0.0.0:8765, --http-allow-insecure]
           env:
             - name: SKILLSHARE_MCP_TOKEN
               valueFrom:

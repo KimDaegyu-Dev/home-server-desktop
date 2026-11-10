@@ -131,6 +131,39 @@ spec:
             capabilities:
               drop: [ALL]
             readOnlyRootFilesystem: true
+        - name: kanzo-web-proxy
+          image: nginxinc/nginx-unprivileged:1.29-alpine@sha256:8059701048a6cc7d64e8ab2812a44be70161bfa9ecfc01d69e95b8ff2a648705
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: web-proxy
+              containerPort: 8080
+              protocol: TCP
+          volumeMounts:
+            - name: web-proxy-config
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+            - name: nginx-tmp
+              mountPath: /tmp
+          readinessProbe:
+            tcpSocket:
+              port: web-proxy
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: web-proxy
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
       volumes:
         - name: kanzo-binary
           emptyDir:
@@ -155,6 +188,13 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        - name: web-proxy-config
+          configMap:
+            name: kanzo-web-proxy
+            defaultMode: 0444
+        - name: nginx-tmp
+          emptyDir:
+            sizeLimit: 32Mi
 ---
 apiVersion: v1
 kind: Service
@@ -171,6 +211,23 @@ spec:
     - name: http
       port: 4242
       targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kanzo-web
+  namespace: kanzo
+  labels:
+    app.kubernetes.io/name: kanzo
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kanzo
+  ports:
+    - name: http
+      port: 8080
+      targetPort: web-proxy
       protocol: TCP
 ---
 apiVersion: batch/v1
@@ -269,3 +326,5 @@ spec:
       ports:
         - protocol: TCP
           port: 4242
+        - protocol: TCP
+          port: 8080

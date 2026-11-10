@@ -15,6 +15,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: kanzo
+                name: kanzo-web
                 port:
-                  number: 4242
+                  number: 8080

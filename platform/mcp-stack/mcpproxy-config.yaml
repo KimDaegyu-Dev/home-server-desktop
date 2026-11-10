@@ -263,7 +263,7 @@ data:
                     "<main style=\"max-width:48rem;margin:3rem auto;padding:0 1rem;"
                     "font:16px system-ui,sans-serif;line-height:1.6\">"
                     "<h1>Home Server MCP Gateway</h1>"
-                    "<p>이 주소는 MCP 클라이언트용 게이트웨이입니다. 웹 UI는 제공하지 않습니다.</p>"
+                    "<p>This deployment runs hoophq/mcpproxy v0.1.7, an MCP and OAuth gateway without a browser UI. The <code>/ui</code> route is not provided by this build.</p>"
                     "<p>MCP endpoint: <code>" + PUBLIC_URL + "/mcp</code></p>"
                     "<p>Codex에서 Remote MCP 서버로 위 endpoint를 등록하고 OAuth 로그인을 완료하세요.</p>"
                     "<p><a href=\"/.well-known/oauth-protected-resource/mcp\">MCP 인증 메타데이터</a></p>"

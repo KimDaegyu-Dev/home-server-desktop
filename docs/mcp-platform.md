@@ -26,7 +26,7 @@ Only the MCP gateway is intended to be reachable by agent clients. SearXNG and a
 
 MCPProxy reaches Grafana MCP over its ClusterIP DNS name. Grafana MCP's DNS-rebinding protection allowlists that exact service host and port. Keep the allowlist aligned with the backend URL; a custom `Host` entry in backend headers may not override the HTTP transport's host derived from the URL.
 
-Kanzo keeps its own Host and Origin guard enabled. Its pod hostname is fixed to `kanzo`; an `ExternalName` alias in the `mcp` namespace lets MCPProxy connect to `http://kanzo:4242/mcp`, so the request Host matches the hostname Kanzo accepts. The Kanzo NetworkPolicy still limits connections to pods in `mcp`.
+Kanzo keeps its own Host and Origin guard enabled. Its pod hostname is fixed to `kanzo`; an `ExternalName` alias in the `mcp` namespace lets MCPProxy connect to `http://kanzo:4242/mcp`, so the request Host matches the hostname Kanzo accepts. The Tailnet UI Ingress uses a small Nginx sidecar that permits only the exact Kanzo MagicDNS Host and HTTPS Origin, then rewrites them to Kanzo's expected in-pod HTTP origin. The NetworkPolicy allows TCP 4242 and the web-proxy port only from `mcp` and `tailscale` namespaces.
 
 MCPProxy exposes aggregated tool names as `<backend>_<tool>`, but its call policy evaluates the original upstream tool name. Keep both the prefixed and bare names in `allowed_tools`: the prefixed name keeps the tool visible in `tools/list`, and the bare name permits its routed call.
 

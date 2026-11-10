@@ -10,3 +10,7 @@ configMapGenerator:
       - config.toml
       - fetch-kanzo.py
       - backup-kanzo.py
+  - name: kanzo-web-proxy
+    namespace: kanzo
+    files:
+      - default.conf=nginx-kanzo.conf

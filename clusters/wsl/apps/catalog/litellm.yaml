@@ -82,6 +82,7 @@ spec:
           OTEL_SERVICE_NAME: litellm
           OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: span_only
           LITELLM_OTEL_LANGFUSE_SPAN_SCOPE: llm_only
+          LITELLM_OTEL_BAGGAGE_METADATA_KEYS: requester_metadata.trace_user_id,requester_metadata.session_id
           GENERIC_CLIENT_ID: litellm
           GENERIC_AUTHORIZATION_ENDPOINT: https://authentik.tail5389e9.ts.net/application/o/authorize/
           GENERIC_TOKEN_ENDPOINT: https://authentik.tail5389e9.ts.net/application/o/token/

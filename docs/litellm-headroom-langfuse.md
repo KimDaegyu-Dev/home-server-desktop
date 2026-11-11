@@ -42,6 +42,23 @@ LiteLLM에는 `coder`, `iq_3s` 별칭이 설정됩니다. 클라이언트는 `ht
 
 커스텀 LiteLLM 이미지의 `headroom_proxy_callback.instance`가 `HeadroomCallback` 인스턴스를 제공합니다. callback 오류가 나면 Headroom은 원본 메시지를 전달하는 fail-open 동작을 하므로 운영 로그에서 callback 오류를 살펴봅니다.
 
+## Langfuse 사용자와 세션 추적
+
+LiteLLM OTel v2는 요청 `metadata.trace_user_id`를 사용자 ID로, `metadata.session_id`를 세션 ID로 내보냅니다. LiteLLM의 metadata allowlist와 Alloy의 OTel 변환은 이 값을 Langfuse가 인식하는 `user.id`, `session.id` trace 속성으로 전달하도록 구성합니다.
+
+클라이언트는 요청마다 다음 metadata를 포함해야 합니다.
+
+```json
+{
+  "metadata": {
+    "trace_user_id": "home-server-user",
+    "session_id": "chat-session-unique-id"
+  }
+}
+```
+
+`trace_user_id`는 같은 사용자의 요청에서 안정적으로 유지하고, `session_id`는 같은 대화의 여러 요청에서 재사용한 뒤 새 대화마다 새 값으로 바꿉니다. 두 값은 200자 이하의 문자열이어야 합니다. 이메일 대신 `home-server-user`처럼 비식별 ID를 권장합니다. 클라이언트가 이 metadata를 보내지 않으면 LiteLLM만으로는 대화별 세션을 추론할 수 없습니다.
+
 ## 관측과 백업
 
 Grafana의 `LiteLLM gateway` 대시보드는 요청량, 토큰량, GenAI 호출 지연시간을 보여줍니다. 상세 프롬프트/응답 trace는 Langfuse에서 봅니다. 이번 구성에서는 Tempo와 Loki를 추가하지 않습니다.

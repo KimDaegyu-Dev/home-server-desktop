@@ -112,7 +112,7 @@ spec:
           args:
             - |
               mkdir -p /data/home
-              cp /config/config.yaml /data/home/config.yaml
+              cp -f /config/config.yaml /data/home/config.yaml
               chmod 0600 /data/home/config.yaml
               chown -R 10000:10000 /data/home
               chmod 0700 /data/home

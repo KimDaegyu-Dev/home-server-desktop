@@ -114,7 +114,6 @@ spec:
               mkdir -p /data/home
               cp -f /config/config.yaml /data/home/config.yaml
               chmod 0600 /data/home/config.yaml
-              chown -R 10000:10000 /data/home
               chmod 0700 /data/home
           volumeMounts:
             - name: hermes-home
@@ -131,12 +130,11 @@ spec:
               memory: 32Mi
           securityContext:
             allowPrivilegeEscalation: false
-            runAsNonRoot: false
-            runAsUser: 0
-            runAsGroup: 0
+            runAsNonRoot: true
+            runAsUser: 10000
+            runAsGroup: 10000
             capabilities:
               drop: [ALL]
-              add: [CHOWN]
       containers:
         - name: worker
           image: localhost/home-server/kanzo-agent-worker:0.1.0-hermes-v0.23.1

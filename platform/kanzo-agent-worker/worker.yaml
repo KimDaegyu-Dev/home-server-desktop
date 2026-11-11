@@ -129,8 +129,12 @@ spec:
               memory: 32Mi
           securityContext:
             allowPrivilegeEscalation: false
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
             capabilities:
               drop: [ALL]
+              add: [CHOWN]
       containers:
         - name: worker
           image: localhost/home-server/kanzo-agent-worker:0.1.0-hermes-v0.23.1

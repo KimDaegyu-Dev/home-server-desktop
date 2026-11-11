@@ -164,12 +164,46 @@ spec:
               hermes -p researcher tools enable kanban
               hermes -p builder tools enable kanban
               hermes -p reviewer tools enable kanban
+              hermes config set model.provider openai-api
+              hermes config set model.default iq_3s
+              python - <<'PY'
+              import os
+              from pathlib import Path
+
+              root = Path('/opt/data/home')
+              values = {
+                  'MCPPROXY_URL': os.environ['MCPPROXY_URL'],
+                  'MCPPROXY_AGENT_READ_TOKEN': os.environ.get('MCPPROXY_AGENT_READ_TOKEN', ''),
+                  'LITELLM_API_KEY': os.environ.get('LITELLM_API_KEY', ''),
+                  'LITELLM_BASE_URL': os.environ['LITELLM_BASE_URL'],
+                  'OPENAI_API_KEY': os.environ.get('LITELLM_API_KEY', ''),
+                  'OPENAI_BASE_URL': os.environ['LITELLM_BASE_URL'],
+                  'KANZO_ANALYSIS_MODEL': 'iq_3s',
+              }
+              homes = [root, *(root / 'profiles' / name for name in ('researcher', 'builder', 'reviewer'))]
+              for home in homes:
+                  path = home / '.env'
+                  existing = path.read_text(encoding='utf-8').splitlines() if path.exists() else []
+                  kept = [line for line in existing if line.partition('=')[0] not in values]
+                  path.write_text('\n'.join([*kept, *(f'{key}={value}' for key, value in values.items())]) + '\n', encoding='utf-8')
+                  path.chmod(0o600)
+              PY
               omh setup --no-interactive --json
               mkdir -p /opt/data/home/.omh/routing
               cp /routing/model-chains.json /opt/data/home/.omh/routing/model-chains.json
               omh model-chains show --json
               omh doctor --json
           env:
+            - name: MCPPROXY_URL
+              value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
+            - name: MCPPROXY_AGENT_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: MCPPROXY_AGENT_READ_TOKEN
+                  optional: true
+            - name: LITELLM_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
             - name: LITELLM_API_KEY
               valueFrom:
                 secretKeyRef:

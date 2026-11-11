@@ -1,6 +1,6 @@
 model:
   provider: openai-api
-  default: ${KANZO_ANALYSIS_MODEL}
+  default: iq_3s
   base_url: ${LITELLM_BASE_URL}
   api_key: ${LITELLM_API_KEY}
 

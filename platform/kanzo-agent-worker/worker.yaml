@@ -113,6 +113,7 @@ spec:
             - |
               cp /config/config.yaml /data/config.yaml
               chmod 0600 /data/config.yaml
+              chown -R 10000:10000 /data
           volumeMounts:
             - name: hermes-home
               mountPath: /data

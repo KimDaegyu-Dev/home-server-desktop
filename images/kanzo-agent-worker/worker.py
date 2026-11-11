@@ -358,6 +358,12 @@ class Worker:
         env = dict(self.env)
         env["HERMES_HOME"] = str(self.home)
         env["HOME"] = str(self.home)
+        # Hermes' openai-api provider reads the standard OpenAI environment
+        # names. Route those to the existing LiteLLM credentials and endpoint.
+        if env.get("LITELLM_API_KEY"):
+            env["OPENAI_API_KEY"] = env["LITELLM_API_KEY"]
+        if env.get("LITELLM_BASE_URL"):
+            env["OPENAI_BASE_URL"] = env["LITELLM_BASE_URL"]
         return env
 
     def _project_repo(self, project: str) -> str | None:
@@ -438,6 +444,8 @@ class Worker:
         command = [
             "hermes", "chat", "--query-file", str(prompt_path), "--oneshot",
             "--format", "stream-json", "--provider", provider, "--model", model,
+            "--toolsets",
+            "search,memory,skills,todo,terminal,file,delegation,code_execution,clarify,mcp-home_server",
         ]
         process = subprocess.Popen(
             command,
@@ -449,6 +457,7 @@ class Worker:
             bufsize=1,
         )
         text_parts: list[str] = []
+        diagnostics: list[str] = []
         last_heartbeat = time.monotonic()
         assert process.stdout is not None
         try:
@@ -456,9 +465,13 @@ class Worker:
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
+                    if line.strip():
+                        diagnostics.append(line.strip())
                     continue
                 if event.get("type") == "text" and isinstance(event.get("text"), str):
                     text_parts.append(event["text"])
+                elif event.get("type") in ("error", "error_detail", "tool_error"):
+                    diagnostics.append(json.dumps(event, ensure_ascii=False))
                 if time.monotonic() - last_heartbeat > 600:
                     self._comment(task.task_id, "작업이 계속 진행 중입니다. 아직 검증된 종료 결과는 없습니다.")
                     self.heartbeat_path.touch()
@@ -470,7 +483,12 @@ class Worker:
                 process.kill()
                 process.wait(timeout=10)
         if exit_code:
-            raise WorkerError(f"Hermes가 종료 코드 {exit_code}로 작업을 마쳤습니다.")
+            detail = "\n".join(diagnostics)[-1200:]
+            for name, value in agent_env.items():
+                if value and any(marker in name.upper() for marker in ("KEY", "TOKEN", "SECRET", "PASSWORD", "PAT")):
+                    detail = detail.replace(value, "[REDACTED]")
+            suffix = f"\n{detail}" if detail else ""
+            raise WorkerError(f"Hermes가 종료 코드 {exit_code}로 작업을 마쳤습니다.{suffix}")
         return "".join(text_parts).strip()
 
     def _publish_draft_pr(self, task: Task, checkout: Path, summary: str) -> str:

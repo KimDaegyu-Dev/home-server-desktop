@@ -1,6 +1,7 @@
 model:
   provider: openai-api
   default: iq_3s
+  context_length: 65536
   base_url: ${LITELLM_BASE_URL}
   api_key: ${LITELLM_API_KEY}
 

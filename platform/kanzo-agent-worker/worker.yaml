@@ -166,6 +166,9 @@ spec:
               hermes -p reviewer tools enable kanban
               hermes config set model.provider openai-api
               hermes config set model.default iq_3s
+              hermes config set model.context_length 65536
+              hermes -p researcher config set model.context_length 65536
+              hermes -p reviewer config set model.context_length 65536
               python - <<'PY'
               import os
               from pathlib import Path

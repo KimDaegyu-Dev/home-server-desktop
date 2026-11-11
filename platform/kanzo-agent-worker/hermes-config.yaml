@@ -7,10 +7,28 @@ model:
 terminal:
   backend: local
 
+toolsets:
+  - search
+  - memory
+  - skills
+  - todo
+  - terminal
+  - file
+  - delegation
+  - code_execution
+  - clarify
+  - mcp-home_server
+
 agent:
   max_turns: 40
   reasoning_effort: xhigh
   tool_use_enforcement: true
+  disabled_toolsets:
+    - browser
+    - computer_use
+
+web:
+  search_backend: searxng
 
 mcp_servers:
   home_server:

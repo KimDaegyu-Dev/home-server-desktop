@@ -50,6 +50,8 @@ spec:
                   key: AUTH_AUTHENTIK_CLIENT_SECRET
             - name: AUTH_AUTHENTIK_ISSUER
               value: https://authentik.tail5389e9.ts.net/application/o/langfuse
+            - name: LANGFUSE_LLM_CONNECTION_WHITELISTED_HOST
+              value: litellm.litellm.svc.cluster.local
           ingress:
             enabled: false
           web:

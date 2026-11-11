@@ -59,6 +59,9 @@ spec:
                 model: openai/iq_3s
                 api_base: http://strata-bridge.litellm.svc.cluster.local:18081/v1
                 api_key: os.environ/STRATA_BRIDGE_TOKEN
+              model_info:
+                supports_reasoning: true
+                supports_xhigh_reasoning_effort: true
           general_settings:
             master_key: os.environ/PROXY_MASTER_KEY
             store_model_in_db: false

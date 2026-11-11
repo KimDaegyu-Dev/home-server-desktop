@@ -6,9 +6,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --chown=10000:10000 worker.py /opt/kanzo-agent/worker.py
 COPY --chown=10000:10000 entrypoint.sh /opt/kanzo-agent/entrypoint.sh
-RUN chmod 0555 /opt/kanzo-agent/entrypoint.sh /opt/kanzo-agent/worker.py
+RUN chmod 0555 /opt/kanzo-agent/entrypoint.sh
 
 USER 10000:10000
 ENV HERMES_HOME=/opt/data \

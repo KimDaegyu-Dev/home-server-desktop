@@ -7,5 +7,7 @@ configMapGenerator:
     namespace: mcp
     files:
       - config.yaml=hermes-config.yaml
-generatorOptions:
-  disableNameSuffixHash: true
+  - name: kanzo-agent-worker-code
+    namespace: mcp
+    files:
+      - worker.py=worker.py

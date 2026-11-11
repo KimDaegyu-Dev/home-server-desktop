@@ -201,6 +201,10 @@ spec:
           volumeMounts:
             - name: hermes-home
               mountPath: /opt/data
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/worker.py
+              subPath: worker.py
+              readOnly: true
             - name: workspace
               mountPath: /workspace
             - name: tmp
@@ -248,6 +252,10 @@ spec:
         - name: hermes-config
           configMap:
             name: kanzo-agent-hermes-config
+            defaultMode: 0444
+        - name: worker-code
+          configMap:
+            name: kanzo-agent-worker-code
             defaultMode: 0444
 ---
 apiVersion: v1

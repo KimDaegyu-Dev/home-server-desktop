@@ -27,6 +27,33 @@
     ],
     "unspecified-high": [
       { "model": "iq_3s", "reasoning_effort": "xhigh" }
+    ],
+    "capable": [
+      { "model": "iq_3s", "reasoning_effort": "high" }
+    ],
+    "simple-work": [
+      { "model": "iq_3s", "reasoning_effort": "low" }
+    ],
+    "deep-work": [
+      { "model": "iq_3s", "reasoning_effort": "xhigh" }
+    ],
+    "google-search": [
+      { "model": "iq_3s", "reasoning_effort": "high" }
+    ],
+    "x-search": [
+      { "model": "iq_3s", "reasoning_effort": "high" }
+    ],
+    "review": [
+      { "model": "iq_3s", "reasoning_effort": "xhigh" }
+    ],
+    "swarm": [
+      { "model": "iq_3s", "reasoning_effort": "low" }
+    ],
+    "forensics": [
+      { "model": "iq_3s", "reasoning_effort": "xhigh" }
+    ],
+    "synthesize": [
+      { "model": "iq_3s", "reasoning_effort": "xhigh" }
     ]
   }
 }

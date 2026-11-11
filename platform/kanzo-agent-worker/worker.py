@@ -432,6 +432,7 @@ class Worker:
                 raise WorkerError("LiteLLM 분석 모델 또는 전용 API 키가 설정되지 않았습니다.")
 
         prompt = task_prompt(task, code)
+        reasoning = "high" if code else "xhigh"
         prompt_path = self.workspace / f"prompt-{uuid.uuid4().hex}.txt"
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
         prompt_path.write_text(prompt, encoding="utf-8")
@@ -449,6 +450,7 @@ class Worker:
         command = [
             "hermes", "chat", "--query-file", str(prompt_path), "--oneshot",
             "--format", "stream-json", "--provider", provider, "--model", model,
+            "--reasoning", reasoning,
             "--toolsets",
             "search,memory,skills,todo,terminal,file,delegation,code_execution,clarify,kanban,mcp-home_server",
         ]

@@ -5,7 +5,7 @@ The deployment has a Kanzo bridge worker and a Hermes gateway sidecar in the `mc
 ## Task behavior
 
 - Kanzo `next_task` is called with `-is:human -is:waiting`; Kanzo also skips waiting tasks itself. Tasks that need a person are moved back to `todo` with `human=true`, with the reason in a comment. Clear Human after resolving the blocker to retry.
-- Analysis and review use the LiteLLM `iq_3s` alias with extra-high reasoning. Implementation uses the LiteLLM `coder` alias. Both stay behind the shared LiteLLM endpoint; no Codex or Anthropic login is required for this initial route. There is no silent model fallback.
+- Analysis and review use the LiteLLM `iq_3s` alias with extra-high reasoning. Implementation uses the LiteLLM `coder` alias with high reasoning. OMH model categories are pinned to these active aliases so unset upstream recommendations cannot select unavailable models. Both stay behind the shared LiteLLM endpoint; no Codex or Anthropic login is required for this initial route. There is no silent model fallback.
 - Oh My Hermes is pinned in `versions.yml` and installed into Hermes' own Python environment so its plugin bridge and Kanban board engine are importable. The persistent Hermes home is bootstrapped with three profiles: `researcher` (`iq_3s`), `builder` (`coder`), and `reviewer` (`iq_3s`).
 - The parent agent uses `/dag-ulw` for bounded parallel work and the Hermes Kanban board for durable cross-profile work. It waits for child handoffs and returns the combined result to the original Kanzo card.
 - Code tasks require a repo linked to the Kanzo project or present in `KANZO_PROJECT_REPOS_JSON`. The current copilot project maps to `KimDaegyu-Dev/home-server-desktop`; add other mappings in the ConfigMap when needed.

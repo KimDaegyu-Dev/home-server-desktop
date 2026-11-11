@@ -23,6 +23,7 @@ from typing import Any
 LOG = logging.getLogger("kanzo-agent-worker")
 TASK_ID_RE = re.compile(r"\b([a-zA-Z0-9._-]+#\d+)\b")
 TASK_LINE_RE = re.compile(r"^\s*([^\s]+#\d+)\s+\[([^]]+)\]\s+(.*)$", re.MULTILINE)
+TASK_HEADER_RE = re.compile(r"^\s*([a-zA-Z0-9._-]+#\d+)\s+(.+)$", re.MULTILINE)
 DEFAULT_MCP_URL = "http://mcpproxy.mcp.svc.cluster.local:8080/mcp"
 MCP_PROTOCOL_VERSION = "2025-03-26"
 
@@ -178,9 +179,18 @@ class Task:
 
 def parse_task_line(text: str) -> tuple[str, str, str] | None:
     match = TASK_LINE_RE.search(text)
+    if match:
+        return match.group(1), match.group(2).strip().lower(), match.group(3).strip()
+    # MCPProxy's Kanzo adapter returns a prose preamble followed by a task header
+    # and a details block, rather than the legacy `[doing]` single-line form.
+    match = TASK_HEADER_RE.search(text)
     if not match:
         return None
-    return match.group(1), match.group(2).strip().lower(), match.group(3).strip()
+    status_match = re.search(r"\bMoved to ([a-zA-Z_-]+):", text)
+    if not status_match:
+        status_match = re.search(r"^status:\s*([a-zA-Z_-]+)", text, re.IGNORECASE | re.MULTILINE)
+    status = status_match.group(1).strip().lower() if status_match else "doing"
+    return match.group(1), status, match.group(2).strip()
 
 
 def parse_tags(title_line: str) -> tuple[str, ...]:

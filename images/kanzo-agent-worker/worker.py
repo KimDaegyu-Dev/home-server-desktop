@@ -110,18 +110,52 @@ class McpClient:
     def call(self, suffix: str, args: dict[str, Any]) -> str:
         if not self.tools:
             self.connect()
+        direct = [name for name in self.tools if name.lower().replace("-", "_").endswith(suffix)]
+        if len(direct) == 1:
+            return self._invoke(direct[0], args)
+
+        discovered = self.call("retrieve_tools", {
+            "query": f"Kanzo {suffix.replace('_', ' ')}",
+            "server": "kanzo",
+            "detail": "compact",
+            "limit": 20,
+        })
+        try:
+            start, end = discovered.index("{"), discovered.rindex("}") + 1
+            catalog = json.loads(discovered[start:end])
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise McpError(f"MCPProxy tool discovery returned invalid JSON for {suffix!r}") from exc
+        matches = [
+            tool for tool in catalog.get("tools", [])
+            if str(tool.get("id", tool.get("name", ""))).lower().endswith(":" + suffix.lower())
+        ]
+        if len(matches) != 1:
+            raise McpError(f"Expected one discovered Kanzo tool for {suffix!r}, found {len(matches)}")
+        tool = matches[0]
+        route = tool.get("call_with")
+        if route not in ("call_tool_read", "call_tool_write", "call_tool_destructive"):
+            raise McpError(f"MCPProxy returned an unsupported call route for {suffix!r}")
+        tool_id = tool.get("id", tool.get("name"))
+        return self.call(route, {
+            "name": tool_id,
+            "args": args,
+            "intent_reason": "Process the user-authorized Kanzo task",
+            "intent_data_sensitivity": "internal",
+        })
+
+    def _invoke(self, name: str, args: dict[str, Any]) -> str:
         self.request_id += 1
         reply = self._post({
             "jsonrpc": "2.0",
             "id": self.request_id,
             "method": "tools/call",
-            "params": {"name": self.tool_name(suffix), "arguments": args},
+            "params": {"name": name, "arguments": args},
         })
         if not reply or "error" in reply:
-            raise McpError(f"MCP tool {suffix} failed: {reply}")
+            raise McpError(f"MCP tool {name} failed: {reply}")
         result = reply.get("result", {})
         if result.get("isError"):
-            raise McpError(f"MCP tool {suffix} returned an error: {result}")
+            raise McpError(f"MCP tool {name} returned an error: {result}")
         parts = [item.get("text", "") for item in result.get("content", []) if item.get("type") == "text"]
         return "\n".join(parts).strip()
 

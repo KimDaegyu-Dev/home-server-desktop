@@ -1,0 +1,19 @@
+model:
+  provider: openai-api
+  default: ${KANZO_ANALYSIS_MODEL}
+  base_url: ${LITELLM_BASE_URL}
+  api_key: ${LITELLM_API_KEY}
+
+terminal:
+  backend: local
+
+agent:
+  max_turns: 40
+  reasoning_effort: medium
+  tool_use_enforcement: true
+
+mcp_servers:
+  home_server:
+    url: ${MCPPROXY_URL}
+    headers:
+      X-API-Key: ${MCPPROXY_AGENT_READ_TOKEN}

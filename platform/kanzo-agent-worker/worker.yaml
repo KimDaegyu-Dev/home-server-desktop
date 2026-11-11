@@ -1,0 +1,325 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kanzo-agent-hermes-home
+  namespace: mcp
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 3Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kanzo-agent-worker
+  namespace: mcp
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kanzo-agent-vault-auth
+  namespace: mcp
+automountServiceAccountToken: false
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: kanzo-agent
+  namespace: mcp
+spec:
+  vaultConnectionRef: vault-secrets-operator-system/default
+  method: kubernetes
+  mount: kubernetes
+  kubernetes:
+    role: kanzo-agent-vso
+    serviceAccount: kanzo-agent-vault-auth
+    audiences:
+      - vault
+      - https://kubernetes.default.svc.cluster.local
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: kanzo-agent-credentials
+  namespace: mcp
+spec:
+  vaultAuthRef: kanzo-agent
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: kanzo-agent-worker
+  mount: kv
+  path: mcp/kanzo-agent
+  type: kv-v2
+  refreshAfter: 1h
+  hmacSecretData: true
+  destination:
+    create: true
+    name: kanzo-agent-credentials
+    overwrite: true
+    transformation:
+      excludes:
+        - .*
+      templates:
+        MCPPROXY_KANZO_AGENT_TOKEN:
+          text: '{{- get .Secrets "MCPPROXY_KANZO_AGENT_TOKEN" -}}'
+        MCPPROXY_AGENT_READ_TOKEN:
+          text: '{{- get .Secrets "MCPPROXY_AGENT_READ_TOKEN" -}}'
+        LITELLM_API_KEY:
+          text: '{{- get .Secrets "LITELLM_API_KEY" -}}'
+        GITHUB_TOKEN:
+          text: '{{- get .Secrets "GITHUB_TOKEN" -}}'
+      excludeRaw: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kanzo-agent-worker
+  namespace: mcp
+  labels:
+    app.kubernetes.io/name: kanzo-agent-worker
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo-agent-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kanzo-agent-worker
+    spec:
+      serviceAccountName: kanzo-agent-worker
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: seed-hermes-config
+          image: busybox:1.37.0@sha256:66a6306db78bf2dbf3487f293aa8d6990d8e506fdffab9cc43fe422becf886e4
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              cp /config/config.yaml /data/config.yaml
+              chmod 0600 /data/config.yaml
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /data
+            - name: hermes-config
+              mountPath: /config
+              readOnly: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: worker
+          image: localhost/home-server/kanzo-agent-worker:0.1.0-hermes-v0.23.1
+          imagePullPolicy: Never
+          ports:
+            - name: metrics
+              containerPort: 9105
+              protocol: TCP
+          env:
+            - name: HERMES_HOME
+              value: /opt/data
+            - name: HOME
+              value: /opt/data
+            - name: KANZO_WORKSPACE
+              value: /workspace
+            - name: MCPPROXY_URL
+              value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
+            - name: LITELLM_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: KANZO_POLL_SECONDS
+              value: "300"
+            - name: KANZO_ENABLED
+              value: "false"
+            - name: KANZO_PROJECT_REPOS_JSON
+              value: '{"k3s-ai-ops-copilot":"KimDaegyu-Dev/home-server-desktop"}'
+            - name: KANZO_CODE_PROVIDER
+              value: openai-codex
+            - name: KANZO_CODE_MODEL
+              value: ""
+            - name: KANZO_ANALYSIS_PROVIDER
+              value: openai-api
+            - name: KANZO_ANALYSIS_MODEL
+              value: "iq_3s extra high"
+            - name: METRICS_PORT
+              value: "9105"
+            - name: MCPPROXY_KANZO_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: MCPPROXY_KANZO_AGENT_TOKEN
+                  optional: true
+            - name: MCPPROXY_AGENT_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: MCPPROXY_AGENT_READ_TOKEN
+                  optional: true
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: GITHUB_TOKEN
+                  optional: true
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1536Mi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: hermes-home
+          persistentVolumeClaim:
+            claimName: kanzo-agent-hermes-home
+        - name: workspace
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: hermes-config
+          configMap:
+            name: kanzo-agent-hermes-config
+            defaultMode: 0444
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kanzo-agent-worker
+  namespace: mcp
+  labels:
+    app.kubernetes.io/name: kanzo-agent-worker
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kanzo-agent-worker
+  ports:
+    - name: metrics
+      port: 9105
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kanzo-agent-worker-egress
+  namespace: mcp
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo-agent-worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mcp
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: litellm
+      ports:
+        - protocol: TCP
+          port: 4000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kanzo-agent-worker
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [mcp]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo-agent-worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

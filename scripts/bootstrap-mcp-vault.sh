@@ -251,6 +251,17 @@ vault_cmd write auth/kubernetes/role/ai-memory-vso \
   bound_service_account_names=ai-memory-vault-auth \
   bound_service_account_namespaces=ai-memory \
   audience=vault token_policies=mcp-vso token_ttl=1h >/dev/null
+kanzo_agent_policy_file="$tmp/kanzo-agent-vso.hcl"
+cat >"$kanzo_agent_policy_file" <<'POLICY'
+path "kv/data/mcp/kanzo-agent" { capabilities = ["read"] }
+POLICY
+chmod 0600 "$kanzo_agent_policy_file"
+k3s kubectl cp "$kanzo_agent_policy_file" "vault/vault-0:$pod_policy" >/dev/null
+vault_cmd policy write kanzo-agent-vso "$pod_policy" >/dev/null
+vault_cmd write auth/kubernetes/role/kanzo-agent-vso \
+  bound_service_account_names=kanzo-agent-vault-auth \
+  bound_service_account_namespaces=mcp \
+  audience=vault token_policies=kanzo-agent-vso token_ttl=1h >/dev/null
 vault_cmd write auth/kubernetes/role/watch-skill-vso \
   bound_service_account_names=watch-skill-vault-auth \
   bound_service_account_namespaces=watch-skill \

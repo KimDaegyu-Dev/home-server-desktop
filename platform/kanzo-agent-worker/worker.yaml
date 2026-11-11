@@ -162,7 +162,7 @@ spec:
             - name: KANZO_ANALYSIS_PROVIDER
               value: openai-api
             - name: KANZO_ANALYSIS_MODEL
-              value: "iq_3s extra high"
+              value: "iq_3s"
             - name: METRICS_PORT
               value: "9105"
             - name: MCPPROXY_KANZO_AGENT_TOKEN

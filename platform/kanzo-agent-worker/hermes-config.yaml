@@ -9,7 +9,7 @@ terminal:
 
 agent:
   max_turns: 40
-  reasoning_effort: medium
+  reasoning_effort: xhigh
   tool_use_enforcement: true
 
 mcp_servers:

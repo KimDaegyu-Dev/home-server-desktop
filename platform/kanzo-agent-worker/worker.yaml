@@ -112,8 +112,10 @@ spec:
           args:
             - |
               mkdir -p /data/home
-              cp -f /config/config.yaml /data/home/config.yaml
-              chmod 0600 /data/home/config.yaml
+              if [ ! -f /data/home/config.yaml ]; then
+                cp /config/config.yaml /data/home/config.yaml
+                chmod 0600 /data/home/config.yaml
+              fi
               chmod 0700 /data/home
           volumeMounts:
             - name: hermes-home
@@ -135,9 +137,68 @@ spec:
             runAsGroup: 10000
             capabilities:
               drop: [ALL]
+        - name: bootstrap-omh
+          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          imagePullPolicy: Never
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              export HERMES_HOME=/opt/data/home HOME=/opt/data/home
+              hermes kanban init
+              hermes config set kanban.dispatch_in_gateway true
+              hermes config set kanban.dispatch_interval_seconds 60
+              hermes config set kanban.review_dispatch true
+              hermes profile list | grep -Eq '(^|[[:space:]])researcher([[:space:]]|$)' || \
+                hermes profile create researcher --clone-from default --description "Analyzes source code, official docs, and external information; returns evidence-linked findings." --no-alias
+              hermes profile list | grep -Eq '(^|[[:space:]])builder([[:space:]]|$)' || \
+                hermes profile create builder --clone-from default --description "Implements scoped changes using the local coder model and returns changed files plus verification evidence." --no-alias
+              hermes profile list | grep -Eq '(^|[[:space:]])reviewer([[:space:]]|$)' || \
+                hermes profile create reviewer --clone-from default --description "Reviews proposed work for correctness, regressions, and missing evidence; reports findings without owning implementation." --no-alias
+              hermes -p researcher config set model.provider openai-api
+              hermes -p researcher config set model.default iq_3s
+              hermes -p builder config set model.provider openai-api
+              hermes -p builder config set model.default coder
+              hermes -p reviewer config set model.provider openai-api
+              hermes -p reviewer config set model.default iq_3s
+              hermes tools enable kanban
+              hermes -p researcher tools enable kanban
+              hermes -p builder tools enable kanban
+              hermes -p reviewer tools enable kanban
+              omh setup --no-interactive --json
+              mkdir -p /opt/data/home/.omh/routing
+              cp /routing/model-chains.json /opt/data/home/.omh/routing/model-chains.json
+              omh model-chains show --json
+              omh doctor --json
+          env:
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: omh-routing
+              mountPath: /routing
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10000
+            runAsGroup: 10000
+            capabilities:
+              drop: [ALL]
       containers:
         - name: worker
-          image: localhost/home-server/kanzo-agent-worker:0.1.0-hermes-v0.23.1
+          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
           imagePullPolicy: Never
           ports:
             - name: metrics
@@ -165,9 +226,9 @@ spec:
             - name: KANZO_PROJECT_REPOS_JSON
               value: '{"k3s-ai-ops-copilot":"KimDaegyu-Dev/home-server-desktop"}'
             - name: KANZO_CODE_PROVIDER
-              value: openai-codex
+              value: openai-api
             - name: KANZO_CODE_MODEL
-              value: ""
+              value: coder
             - name: KANZO_ANALYSIS_PROVIDER
               value: openai-api
             - name: KANZO_ANALYSIS_MODEL
@@ -239,6 +300,62 @@ spec:
             capabilities:
               drop: [ALL]
             readOnlyRootFilesystem: true
+        - name: hermes-gateway
+          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          imagePullPolicy: Never
+          command: [hermes, gateway, run]
+          env:
+            - name: HERMES_HOME
+              value: /opt/data/home
+            - name: HOME
+              value: /opt/data/home
+            - name: MCPPROXY_URL
+              value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
+            - name: MCPPROXY_AGENT_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: MCPPROXY_AGENT_READ_TOKEN
+                  optional: true
+            - name: HERMES_WRITE_SAFE_ROOT
+              value: /opt/data/home:/workspace
+            - name: KANZO_ANALYSIS_MODEL
+              value: iq_3s
+            - name: LITELLM_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+            - name: OPENAI_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
       volumes:
         - name: hermes-home
           persistentVolumeClaim:
@@ -252,6 +369,10 @@ spec:
         - name: hermes-config
           configMap:
             name: kanzo-agent-hermes-config
+            defaultMode: 0444
+        - name: omh-routing
+          configMap:
+            name: kanzo-agent-omh-routing
             defaultMode: 0444
         - name: worker-code
           configMap:

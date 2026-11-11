@@ -18,6 +18,11 @@ agent:
     - browser
     - computer_use
 
+kanban:
+  dispatch_in_gateway: true
+  dispatch_interval_seconds: 60
+  review_dispatch: true
+
 web:
   search_backend: searxng
 

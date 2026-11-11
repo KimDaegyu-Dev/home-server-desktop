@@ -11,3 +11,7 @@ configMapGenerator:
     namespace: mcp
     files:
       - worker.py=worker.py
+  - name: kanzo-agent-omh-routing
+    namespace: mcp
+    files:
+      - model-chains.json=model-chains.json

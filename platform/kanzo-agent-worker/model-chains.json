@@ -1,0 +1,32 @@
+{
+  "schema_version": "mixture_chain_overrides/v1",
+  "categories": {
+    "quick": [
+      { "model": "iq_3s", "reasoning_effort": "low" }
+    ],
+    "unspecified-low": [
+      { "model": "iq_3s", "reasoning_effort": "low" }
+    ],
+    "writing": [
+      { "model": "iq_3s", "reasoning_effort": "high" }
+    ],
+    "visual-engineering": [
+      { "model": "coder", "reasoning_effort": "high" }
+    ],
+    "artistry": [
+      { "model": "iq_3s", "reasoning_effort": "high" }
+    ],
+    "ultrabrain": [
+      { "model": "iq_3s", "reasoning_effort": "xhigh" }
+    ],
+    "deep": [
+      { "model": "iq_3s", "reasoning_effort": "xhigh" }
+    ],
+    "architect": [
+      { "model": "iq_3s", "reasoning_effort": "xhigh" }
+    ],
+    "unspecified-high": [
+      { "model": "iq_3s", "reasoning_effort": "xhigh" }
+    ]
+  }
+}

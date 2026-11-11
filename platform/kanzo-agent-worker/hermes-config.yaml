@@ -8,16 +8,7 @@ terminal:
   backend: local
 
 toolsets:
-  - search
-  - memory
-  - skills
-  - todo
-  - terminal
-  - file
-  - delegation
-  - code_execution
-  - clarify
-  - mcp-home_server
+  - hermes-cli
 
 agent:
   max_turns: 40

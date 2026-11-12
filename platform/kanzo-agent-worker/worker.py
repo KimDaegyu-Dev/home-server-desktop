@@ -6,7 +6,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import re
+import signal
 import shutil
 import subprocess
 import threading
@@ -368,6 +370,32 @@ class Worker:
             env["OPENAI_BASE_URL"] = env["LITELLM_BASE_URL"]
         return env
 
+    @staticmethod
+    def _stop_hermes_process(process: subprocess.Popen[str]) -> None:
+        """Stop Hermes and any child tools it started, with a bounded grace period."""
+        if os.name != "posix" and process.poll() is not None:
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            pass
+        if process.poll() is None:
+            process.wait(timeout=10)
+
     def _project_repo(self, project: str) -> str | None:
         repos_from_kanzo = parse_projects(self._call("list_projects", {}))
         if project in repos_from_kanzo:
@@ -462,13 +490,58 @@ class Worker:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=(os.name == "posix"),
         )
         text_parts: list[str] = []
         diagnostics: list[str] = []
-        last_heartbeat = time.monotonic()
+        started_at = time.monotonic()
+        deadline = started_at + 2700
+        last_heartbeat = started_at
+        last_progress = started_at
         assert process.stdout is not None
+
+        stream: queue.Queue[tuple[str, str | Exception | None]] = queue.Queue()
+
+        def read_output() -> None:
+            try:
+                for output_line in process.stdout:
+                    stream.put(("line", output_line))
+            except Exception as exc:
+                stream.put(("error", exc))
+            finally:
+                stream.put(("eof", None))
+
+        reader = threading.Thread(target=read_output, daemon=True, name="hermes-output-reader")
+        reader.start()
         try:
-            for line in process.stdout:
+            stream_finished = False
+            while not stream_finished:
+                now = time.monotonic()
+                remaining = deadline - now
+                if remaining <= 0:
+                    raise WorkerError("Hermes exceeded the 2700-second task deadline.")
+                try:
+                    event_type, payload = stream.get(timeout=min(30, remaining))
+                except queue.Empty:
+                    event_type, payload = "heartbeat", None
+
+                now = time.monotonic()
+                if event_type == "heartbeat":
+                    if now - last_heartbeat >= 30:
+                        self.heartbeat_path.touch()
+                        last_heartbeat = now
+                    if now - last_progress >= 600:
+                        self._comment(task.task_id, "작업이 계속 진행 중입니다. 아직 검증된 종료 결과는 없습니다.")
+                        self.heartbeat_path.touch()
+                        last_progress = now
+                    continue
+                if event_type == "eof":
+                    stream_finished = True
+                    continue
+                if event_type == "error":
+                    raise WorkerError(f"Failed while reading Hermes output: {payload}")
+
+                line = str(payload)
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
@@ -479,16 +552,26 @@ class Worker:
                     text_parts.append(event["text"])
                 elif event.get("type") in ("error", "error_detail", "tool_error"):
                     diagnostics.append(json.dumps(event, ensure_ascii=False))
-                if time.monotonic() - last_heartbeat > 600:
+                if now - last_heartbeat >= 30:
+                    self.heartbeat_path.touch()
+                    last_heartbeat = now
+                if now - last_progress >= 600:
                     self._comment(task.task_id, "작업이 계속 진행 중입니다. 아직 검증된 종료 결과는 없습니다.")
                     self.heartbeat_path.touch()
-                    last_heartbeat = time.monotonic()
-            exit_code = process.wait(timeout=2700)
+                    last_progress = now
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise WorkerError("Hermes exceeded the 2700-second task deadline.")
+            exit_code = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            raise WorkerError("Hermes exceeded the 2700-second task deadline.") from exc
         finally:
             prompt_path.unlink(missing_ok=True)
             if process.poll() is None:
-                process.kill()
-                process.wait(timeout=10)
+                self._stop_hermes_process(process)
+            if process.stdout:
+                process.stdout.close()
+            reader.join(timeout=5)
         if exit_code:
             detail = "\n".join(diagnostics)[-1200:]
             for name, value in agent_env.items():

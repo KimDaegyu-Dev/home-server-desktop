@@ -398,7 +398,7 @@ spec:
         - name: hermes-dashboard
           image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
           imagePullPolicy: Never
-          command: [hermes, dashboard, --no-open, --host, 0.0.0.0, --port, "9119"]
+          command: [hermes, serve, --host, 0.0.0.0, --port, "9119"]
           ports:
             - name: dashboard
               containerPort: 9119
@@ -428,6 +428,24 @@ spec:
               mountPath: /opt/data
             - name: tmp
               mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /api/status
+              port: dashboard
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: dashboard
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: dashboard
+            periodSeconds: 30
+            failureThreshold: 3
           resources:
             requests:
               cpu: 250m

@@ -1,6 +1,6 @@
 # Kanzo Hermes worker
 
-The deployment has a Kanzo bridge worker, a Hermes gateway, a Hermes Dashboard endpoint, and a read-only Hermes executor in the `mcp` namespace. The bridge polls the `kanzo-project-catalog` every five minutes and handles one parent task at a time. Only project cards in `doing` are active; `todo` is inactive, `review` pauses claims, and `done` archives the project. Kanzo's MCP interface currently exposes task operations but no task-change subscription or webhook, so the bridge cannot be made event-driven without adding push support to Kanzo. The gateway owns Hermes Kanban dispatch. `Recreate` prevents overlapping bridge/gateway pods.
+The deployment has a Kanzo bridge worker, a Hermes gateway, a Hermes `serve` endpoint for Desktop, and a read-only Hermes executor in the `mcp` namespace. The bridge polls the `kanzo-project-catalog` every five minutes and handles one parent task at a time. Only project cards in `doing` are active; `todo` is inactive, `review` pauses claims, and `done` archives the project. Kanzo's MCP interface currently exposes task operations but no task-change subscription or webhook, so the bridge cannot be made event-driven without adding push support to Kanzo. The gateway owns Hermes Kanban dispatch. `Recreate` prevents overlapping bridge/gateway pods.
 
 ## Task behavior
 
@@ -12,7 +12,7 @@ The deployment has a Kanzo bridge worker, a Hermes gateway, a Hermes Dashboard e
 - `read_only: true` routes Hermes through a sidecar with its own isolated Hermes home and gateway, plus a read-only `/workspace` mount. It syncs the selected profile's settings, skills, and auth state into that separate home before each task. The executor has no Kanzo write token or GitHub credential. It can still use terminal and code execution, but repository writes fail at the filesystem boundary; the parent task always returns to `review`. If the sidecar is unavailable, the worker fails closed.
 - Writable code tasks use an ephemeral checkout. The agent process does not receive the GitHub write token. The worker commits, pushes, opens a draft PR, links it on the Kanzo card, and moves it to `review`. It never merges or deploys.
 - Hermes home and OAuth state live on the `kanzo-agent-hermes-home` PVC. The workspace is ephemeral. Prometheus scrapes worker health and task counters at `/metrics`.
-- Hermes Desktop connects to the remote `hermes dashboard` service on port `9119`, not directly to the Gateway process. The service is published only through the Tailscale Ingress at `https://hermes.tail5389e9.ts.net`; the dashboard uses its own username/password gate and stable signing secret. These values come from Vault as `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET`.
+- Hermes Desktop connects to the remote `hermes serve` service on port `9119`, not to `hermes gateway run`. The service is published only through the Tailscale Ingress at `https://hermes.tail5389e9.ts.net`; it uses a username/password gate and stable signing secret. These values come from Vault as `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET`.
 
 ## Credentials and enablement
 
@@ -26,7 +26,7 @@ The deployment has a Kanzo bridge worker, a Hermes gateway, a Hermes Dashboard e
 
 Keep all OAuth login state in Hermes' persistent home, not in this repository. When Codex or Anthropic is added later, create and authenticate a dedicated profile rather than sharing single-use OAuth state across profiles.
 
-To connect Hermes Desktop, open **Settings → Gateways → Remote gateway**, enter `https://hermes.tail5389e9.ts.net`, sign in with the dashboard credentials in Vault, then save and reconnect. The Windows device must be connected to the same Tailscale tailnet.
+To connect Hermes Desktop, open **Settings → Gateways → Remote gateway**, enter `https://hermes.tail5389e9.ts.net`, sign in with the Hermes credentials in Vault, then save and reconnect. The Windows device must be connected to the same Tailscale tailnet.
 
 ## Local checks
 

@@ -259,7 +259,7 @@ spec:
             - name: KANZO_ENABLED
               value: "true"
             - name: KANZO_PROJECT
-              value: babmukdang
+              value: hermes-harness-lab
             - name: KANZO_PROJECT_REPOS_JSON
               value: '{"k3s-ai-ops-copilot":"KimDaegyu-Dev/home-server-desktop"}'
             - name: KANZO_CODE_PROVIDER

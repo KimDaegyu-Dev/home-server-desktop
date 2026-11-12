@@ -613,6 +613,8 @@ class Worker:
                             parts.append(event["text"])
                         elif event.get("type") == "executor_exit":
                             if event.get("code"):
+                                if event.get("error"):
+                                    diagnostics.append(str(event["error"]))
                                 raise WorkerError(f"Read-only Hermes exited with code {event['code']}: {' '.join(diagnostics)[-1000:]}")
                         elif event.get("type") in ("error", "error_detail", "tool_error"):
                             diagnostics.append(json.dumps(event, ensure_ascii=False))

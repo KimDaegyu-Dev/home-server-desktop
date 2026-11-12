@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
 import signal
 import subprocess
 import threading
@@ -14,7 +15,38 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 WORKSPACE = Path(os.environ.get("KANZO_WORKSPACE", "/workspace")).resolve()
-HOME = Path(os.environ.get("HERMES_HOME", "/opt/data/home"))
+PROFILE_SOURCE_HOME = Path(os.environ.get("HERMES_PROFILE_SOURCE_HOME", "/opt/data/home"))
+ISOLATED_HOME_ROOT = Path(os.environ.get("HERMES_HOME", "/opt/data/readonly-hermes"))
+
+
+def sync_profile(profile: str) -> Path:
+    """Copy user-managed profile settings into a separate gateway home.
+
+    Hermes chat is a gateway client; without this separate home it attaches to
+    the shared writable gateway, whose tools do not inherit this container's
+    read-only workspace mount.
+    """
+    if profile not in {"researcher", "builder", "reviewer"}:
+        raise ValueError("unsupported Hermes profile")
+    source = PROFILE_SOURCE_HOME / "profiles" / profile
+    destination = ISOLATED_HOME_ROOT / "profiles" / profile
+    if not (source / "config.yaml").is_file():
+        raise ValueError(f"Hermes profile {profile!r} is not initialized")
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in (
+        "config.yaml", ".env", "SOUL.md", "USER.md", "MEMORY.md",
+        "system_prompt.md", "AGENTS.md", "CLAUDE.md", ".cursorrules",
+    ):
+        src, dst = source / name, destination / name
+        if src.is_file():
+            shutil.copy2(src, dst)
+    for name in ("skills", "plugins", "scripts", ".omh"):
+        src, dst = source / name, destination / name
+        if src.is_dir():
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+    return destination
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -41,9 +73,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
+        profile = command[2]
+        try:
+            hermes_home = sync_profile(profile)
+        except Exception as exc:
+            self.wfile.write((json.dumps({"type": "executor_exit", "code": 1, "error": str(exc)}) + "\n").encode())
+            self.wfile.flush()
+            return
         env = dict(os.environ)
-        env["HOME"] = str(HOME)
-        env["HERMES_HOME"] = str(HOME)
+        env["HOME"] = str(hermes_home)
+        env["HERMES_HOME"] = str(hermes_home)
         if env.get("LITELLM_API_KEY"):
             env["OPENAI_API_KEY"] = env["LITELLM_API_KEY"]
         if env.get("LITELLM_BASE_URL"):
@@ -52,8 +91,12 @@ class Handler(BaseHTTPRequestHandler):
         env.pop("GITHUB_TOKEN", None)
         env.pop("GH_TOKEN", None)
         try:
+            # Drop --profile because HERMES_HOME now names the isolated
+            # profile directory itself. This starts/attaches only to the
+            # gateway whose tool processes share this container's RO mount.
+            isolated_command = [command[0], *command[3:]]
             process = subprocess.Popen(
-                command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                isolated_command, cwd=cwd, env=env, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True,
             )
             assert process.stdout is not None

@@ -1,7 +1,9 @@
 import unittest
+import tempfile
 from unittest.mock import patch
 from pathlib import Path
 
+import readonly_executor
 from worker import (McpClient, Task, Worker, extract_waits_on, parse_catalog_cards,
                     parse_project_route, parse_projects, parse_task_line, parse_task_id)
 
@@ -77,6 +79,22 @@ read_only: true"""
             self.assertFalse(worker.process_one())
         self.assertEqual(calls[-1], ("next_task", {"project": "hermes-harness-lab", "filter": "-is:human -is:waiting"}))
         self.assertTrue(all(call[1].get("project") not in ("all", "kanzo-project-catalog") for call in calls if call[0] == "next_task"))
+
+    def test_readonly_executor_uses_an_isolated_profile_home(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source" / "profiles" / "researcher"
+            source.mkdir(parents=True)
+            (source / "config.yaml").write_text("model: iq_3s", encoding="utf-8")
+            (source / ".env").write_text("MCPPROXY_AGENT_READ_TOKEN=read-only", encoding="utf-8")
+            (source / "state.db").write_text("shared database must not be copied", encoding="utf-8")
+            target_root = root / "isolated"
+            with patch.object(readonly_executor, "PROFILE_SOURCE_HOME", root / "source"), patch.object(readonly_executor, "ISOLATED_HOME_ROOT", target_root):
+                target = readonly_executor.sync_profile("researcher")
+            self.assertEqual((target / "config.yaml").read_text(encoding="utf-8"), "model: iq_3s")
+            self.assertTrue((target / ".env").is_file())
+            self.assertFalse((target / "state.db").exists())
+            self.assertNotEqual(target.resolve(), source.resolve())
 
     def test_code_tasks_are_explicit(self):
         self.assertTrue(Task("ops#1", "ops", "todo", "Fix parser", ("code",), "").is_code)

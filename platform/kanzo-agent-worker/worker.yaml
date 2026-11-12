@@ -395,8 +395,10 @@ spec:
           command: [python, /opt/kanzo-agent/readonly_executor.py]
           env:
             - name: HERMES_HOME
-              value: /opt/data/home
+              value: /opt/data/readonly-hermes
             - name: HOME
+              value: /opt/data/readonly-hermes
+            - name: HERMES_PROFILE_SOURCE_HOME
               value: /opt/data/home
             - name: KANZO_WORKSPACE
               value: /workspace

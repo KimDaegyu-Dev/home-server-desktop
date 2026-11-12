@@ -73,6 +73,12 @@ spec:
           text: '{{- get .Secrets "LITELLM_API_KEY" -}}'
         GITHUB_TOKEN:
           text: '{{- get .Secrets "GITHUB_TOKEN" -}}'
+        HERMES_DASHBOARD_BASIC_AUTH_USERNAME:
+          text: '{{- get .Secrets "HERMES_DASHBOARD_BASIC_AUTH_USERNAME" -}}'
+        HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:
+          text: '{{- get .Secrets "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD" -}}'
+        HERMES_DASHBOARD_BASIC_AUTH_SECRET:
+          text: '{{- get .Secrets "HERMES_DASHBOARD_BASIC_AUTH_SECRET" -}}'
       excludeRaw: true
 ---
 apiVersion: apps/v1
@@ -389,6 +395,51 @@ spec:
             capabilities:
               drop: [ALL]
             readOnlyRootFilesystem: true
+        - name: hermes-dashboard
+          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          imagePullPolicy: Never
+          command: [hermes, dashboard, --no-open, --host, 0.0.0.0, --port, "9119"]
+          ports:
+            - name: dashboard
+              containerPort: 9119
+              protocol: TCP
+          env:
+            - name: HERMES_HOME
+              value: /opt/data/home
+            - name: HOME
+              value: /opt/data/home
+            - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+            - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+            - name: HERMES_DASHBOARD_BASIC_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: HERMES_DASHBOARD_BASIC_AUTH_SECRET
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
         - name: readonly-executor
           image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
           imagePullPolicy: Never
@@ -480,6 +531,10 @@ spec:
     - name: metrics
       port: 9105
       targetPort: metrics
+      protocol: TCP
+    - name: dashboard
+      port: 9119
+      targetPort: dashboard
       protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1

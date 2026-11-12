@@ -1,6 +1,6 @@
 # Kanzo Hermes worker
 
-The deployment has a Kanzo bridge worker, a Hermes gateway, and a read-only Hermes executor in the `mcp` namespace. The bridge polls the `kanzo-project-catalog` every five minutes and handles one parent task at a time. Only project cards in `doing` are active; `todo` is inactive, `review` pauses claims, and `done` archives the project. The gateway owns Hermes Kanban dispatch. `Recreate` prevents overlapping bridge/gateway pods.
+The deployment has a Kanzo bridge worker, a Hermes gateway, a Hermes Dashboard endpoint, and a read-only Hermes executor in the `mcp` namespace. The bridge polls the `kanzo-project-catalog` every five minutes and handles one parent task at a time. Only project cards in `doing` are active; `todo` is inactive, `review` pauses claims, and `done` archives the project. Kanzo's MCP interface currently exposes task operations but no task-change subscription or webhook, so the bridge cannot be made event-driven without adding push support to Kanzo. The gateway owns Hermes Kanban dispatch. `Recreate` prevents overlapping bridge/gateway pods.
 
 ## Task behavior
 
@@ -12,6 +12,7 @@ The deployment has a Kanzo bridge worker, a Hermes gateway, and a read-only Herm
 - `read_only: true` routes Hermes through a sidecar with its own isolated Hermes home and gateway, plus a read-only `/workspace` mount. It syncs the selected profile's settings, skills, and auth state into that separate home before each task. The executor has no Kanzo write token or GitHub credential. It can still use terminal and code execution, but repository writes fail at the filesystem boundary; the parent task always returns to `review`. If the sidecar is unavailable, the worker fails closed.
 - Writable code tasks use an ephemeral checkout. The agent process does not receive the GitHub write token. The worker commits, pushes, opens a draft PR, links it on the Kanzo card, and moves it to `review`. It never merges or deploys.
 - Hermes home and OAuth state live on the `kanzo-agent-hermes-home` PVC. The workspace is ephemeral. Prometheus scrapes worker health and task counters at `/metrics`.
+- Hermes Desktop connects to the remote `hermes dashboard` service on port `9119`, not directly to the Gateway process. The service is published only through the Tailscale Ingress at `https://hermes.tail5389e9.ts.net`; the dashboard uses its own username/password gate and stable signing secret. These values come from Vault as `HERMES_DASHBOARD_BASIC_AUTH_USERNAME`, `HERMES_DASHBOARD_BASIC_AUTH_PASSWORD`, and `HERMES_DASHBOARD_BASIC_AUTH_SECRET`.
 
 ## Credentials and enablement
 
@@ -19,10 +20,13 @@ The deployment has a Kanzo bridge worker, a Hermes gateway, and a read-only Herm
 2. Run `sudo bash scripts/bootstrap-mcp-vault.sh` to install the dedicated read-only Vault policy and Kubernetes role for `kv/mcp/kanzo-agent`.
 3. In MCPProxy, create two agent tokens. The worker token should allow only Kanzo task read/claim/comment/update operations. The Hermes token should allow only read-only services and tools needed for research and context. Store them in Vault as `MCPPROXY_KANZO_AGENT_TOKEN` and `MCPPROXY_AGENT_READ_TOKEN`.
 4. Create a LiteLLM virtual key restricted to the local analysis model alias and store it as `LITELLM_API_KEY`. Store a repository-scoped GitHub token as `GITHUB_TOKEN`; grant only repository contents write and pull-request write. Add all four values to Vault path `kv/mcp/kanzo-agent`. Never put them in Git or a task description.
+   The same Vault path also contains the Hermes Desktop dashboard login values listed above. The dashboard password and signing secret are generated randomly and must remain in Vault.
 5. The initial active catalog card is `hermes-harness-lab`, read-only, on `openai-api/iq_3s` with high reasoning. Add or edit project cards in `kanzo-project-catalog`; no per-project deployment is needed.
 6. `KANZO_ENABLED=true` enables the catalog-driven worker. Invalid or duplicate active cards are moved to `review` before project tasks are claimed.
 
 Keep all OAuth login state in Hermes' persistent home, not in this repository. When Codex or Anthropic is added later, create and authenticate a dedicated profile rather than sharing single-use OAuth state across profiles.
+
+To connect Hermes Desktop, open **Settings → Gateways → Remote gateway**, enter `https://hermes.tail5389e9.ts.net`, sign in with the dashboard credentials in Vault, then save and reconnect. The Windows device must be connected to the same Tailscale tailnet.
 
 ## Local checks
 

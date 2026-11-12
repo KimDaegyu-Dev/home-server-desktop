@@ -35,7 +35,7 @@ def sync_profile(profile: str) -> Path:
     destination.mkdir(parents=True, exist_ok=True)
     for name in (
         "config.yaml", ".env", "SOUL.md", "USER.md", "MEMORY.md",
-        "system_prompt.md", "AGENTS.md", "CLAUDE.md", ".cursorrules",
+        "system_prompt.md", "AGENTS.md", "CLAUDE.md", ".cursorrules", "auth.json",
     ):
         src, dst = source / name, destination / name
         if src.is_file():

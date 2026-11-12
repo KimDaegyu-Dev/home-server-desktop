@@ -87,12 +87,14 @@ read_only: true"""
             source.mkdir(parents=True)
             (source / "config.yaml").write_text("model: iq_3s", encoding="utf-8")
             (source / ".env").write_text("MCPPROXY_AGENT_READ_TOKEN=read-only", encoding="utf-8")
+            (source / "auth.json").write_text("profile auth state", encoding="utf-8")
             (source / "state.db").write_text("shared database must not be copied", encoding="utf-8")
             target_root = root / "isolated"
             with patch.object(readonly_executor, "PROFILE_SOURCE_HOME", root / "source"), patch.object(readonly_executor, "ISOLATED_HOME_ROOT", target_root):
                 target = readonly_executor.sync_profile("researcher")
             self.assertEqual((target / "config.yaml").read_text(encoding="utf-8"), "model: iq_3s")
             self.assertTrue((target / ".env").is_file())
+            self.assertTrue((target / "auth.json").is_file())
             self.assertFalse((target / "state.db").exists())
             self.assertNotEqual(target.resolve(), source.resolve())
 

@@ -450,9 +450,9 @@ class Worker:
                 return False, f"선행 태스크 {dependency}가 아직 완료되지 않았습니다."
         return True, ""
 
-    def _auth_ready(self, provider: str) -> bool:
+    def _auth_ready(self, provider: str, profile: str) -> bool:
         result = subprocess.run(
-            ["hermes", "auth", "status", provider],
+            ["hermes", "--profile", profile, "auth", "status", provider],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -551,6 +551,7 @@ class Worker:
 
     def _run_hermes(self, task: Task, code: bool, cwd: Path) -> str:
         route = task.route
+        profile = route.profile if route else "researcher"
         if code:
             provider = route.provider if route else self.env.get("KANZO_CODE_PROVIDER", "openai-codex")
             model = route.model if route else self.env.get("KANZO_CODE_MODEL", "")
@@ -559,7 +560,7 @@ class Worker:
             if provider in ("openai-api", "openai_compatible"):
                 if not self.env.get("LITELLM_API_KEY"):
                     raise WorkerError("LiteLLM API key is missing for the configured code model.")
-            elif not self._auth_ready(provider):
+            elif not self._auth_ready(provider, profile):
                 raise WorkerError(f"Hermes의 {provider} 인증이 아직 완료되지 않았습니다.")
         else:
             provider = route.provider if route else self.env.get("KANZO_ANALYSIS_PROVIDER", "openai-api")
@@ -567,12 +568,11 @@ class Worker:
             if not model or (provider in ("openai-api", "openai_compatible") and not self.env.get("LITELLM_API_KEY")):
                 raise WorkerError("LiteLLM 분석 모델 또는 전용 API 키가 설정되지 않았습니다.")
 
-        if provider not in ("openai-api", "openai_compatible") and not self._auth_ready(provider):
+        if provider not in ("openai-api", "openai_compatible") and not self._auth_ready(provider, profile):
             raise WorkerError(f"Hermes is not authenticated for provider {provider}.")
         prompt = task_prompt(task, code)
         lane = route.model_lane if route else ("coding" if code else "analysis")
         reasoning = route.reason if route else ("high" if code else "xhigh")
-        profile = route.profile if route else "researcher"
         prompt = f"Selected Hermes profile: {profile}.\n\n" + prompt
         prompt_path = Path("/tmp") / f"prompt-{uuid.uuid4().hex}.txt"
         prompt_path.parent.mkdir(parents=True, exist_ok=True)

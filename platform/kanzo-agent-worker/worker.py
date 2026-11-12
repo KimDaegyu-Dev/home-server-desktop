@@ -271,7 +271,7 @@ def parse_worker_outcome(result: str) -> tuple[str, str]:
 def format_worker_comment(result: str) -> str:
     """Restore Markdown block boundaries lost when Hermes joins adjacent stream text events."""
     text = result.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"(?<!\n)(?=#{1,6}\s)", "\n\n", text)
+    text = re.sub(r"(?<![\n#])(?=#{1,6}\s)", "\n\n", text)
     text = re.sub(r"(?<!\n)(?=-\s)", "\n", text)
     text = re.sub(r"(?<!\n)(?=\d+\.\s)", "\n", text)
     text = re.sub(r"(?m)^\s*Worker note: Hermes exited without an explicit outcome marker; routed for human review\.\s*$", "", text)

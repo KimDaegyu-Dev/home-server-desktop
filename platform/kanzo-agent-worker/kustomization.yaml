@@ -11,6 +11,7 @@ configMapGenerator:
     namespace: mcp
     files:
       - worker.py=worker.py
+      - readonly_executor.py=readonly_executor.py
   - name: kanzo-agent-omh-routing
     namespace: mcp
     files:

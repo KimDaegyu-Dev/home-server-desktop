@@ -173,12 +173,93 @@ class Task:
     title: str
     tags: tuple[str, ...]
     details: str
+    route: "ProjectRoute | None" = None
 
     @property
     def is_code(self) -> bool:
         tag_text = " ".join(self.tags).lower()
         title_text = f"{self.title}\n{self.details}".lower()
         return "code" in tag_text.split() or "code task" in title_text or "implementation" in title_text
+
+
+@dataclass(frozen=True)
+class ProjectRoute:
+    slug: str
+    repo: str | None
+    model_lane: str
+    provider: str
+    model: str
+    reason: str
+    profile: str
+    read_only: bool
+
+
+LANE_DEFAULTS = {
+    "analysis": ("openai-api", "iq_3s", "researcher"),
+    "coding": ("openai-api", "iq_3s", "builder"),
+    "review": ("openai-api", "iq_3s", "reviewer"),
+}
+ALLOWED_REASONING = {"low", "medium", "high", "xhigh"}
+ALLOWED_PROFILES = {"researcher", "builder", "reviewer"}
+
+
+def parse_project_route(title: str, description: str) -> ProjectRoute:
+    fields: dict[str, str] = {}
+    for line in f"{title}\n{description}".splitlines():
+        match = re.match(r"^\s*([a-z_]+)\s*:\s*(.*?)\s*$", line, re.IGNORECASE)
+        if match:
+            fields[match.group(1).lower()] = match.group(2)
+    slug = fields.get("slug", "")
+    lane = fields.get("model_lane", "").lower()
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", slug):
+        raise WorkerError("Catalog card requires a valid slug field.")
+    if lane not in LANE_DEFAULTS:
+        raise WorkerError(f"Catalog card {slug} has invalid model_lane.")
+    default_provider, default_model, default_profile = LANE_DEFAULTS[lane]
+    provider, model = fields.get("provider", "").strip(), fields.get("model", "").strip()
+    if bool(provider) != bool(model):
+        raise WorkerError(f"Catalog card {slug} must specify both provider and model, or neither.")
+    repo = fields.get("repo", "").strip()
+    if repo.lower() == "none":
+        repo = ""
+    elif repo:
+        repo = repo.removeprefix("https://github.com/").removesuffix(".git").strip("/")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+            raise WorkerError(f"Catalog card {slug} has invalid repo.")
+    elif "repo" not in fields:
+        raise WorkerError(f"Catalog card {slug} requires repo: none or owner/name.")
+    read_only = fields.get("read_only", "").lower()
+    if read_only not in ("true", "false"):
+        raise WorkerError(f"Catalog card {slug} requires read_only: true or false.")
+    profile = fields.get("profile", default_profile)
+    if profile not in ALLOWED_PROFILES:
+        raise WorkerError(f"Catalog card {slug} has unsupported profile {profile!r}.")
+    reason = fields.get("reason", "high").lower()
+    if reason not in ALLOWED_REASONING:
+        raise WorkerError(f"Catalog card {slug} has invalid reason.")
+    return ProjectRoute(slug, repo or None, lane, provider or default_provider, model or default_model, reason, profile, read_only == "true")
+
+
+def parse_catalog_cards(text: str) -> list[ProjectRoute]:
+    """Parse Kanzo list_tasks output, accepting only complete task cards."""
+    header_re = re.compile(r"^\s*([a-zA-Z0-9._-]+#\d+)\s+(?:\[([^]]+)\]\s+)?(.*)$", re.MULTILINE)
+    headers = list(header_re.finditer(text))
+    routes: list[ProjectRoute] = []
+    seen: set[str] = set()
+    for index, match in enumerate(headers):
+        task_id = match.group(1)
+        if task_id.rsplit("#", 1)[0] == "kanzo-project-catalog":
+            end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+            details = text[match.end():end]
+            status = (match.group(2) or status_from_details(details) or "").lower()
+            if status != "doing":
+                continue
+            route = parse_project_route(match.group(3), details)
+            if route.slug in seen:
+                raise WorkerError(f"Catalog contains duplicate active card for {route.slug}.")
+            seen.add(route.slug)
+            routes.append(route)
+    return routes
 
 
 def parse_task_line(text: str) -> tuple[str, str, str] | None:
@@ -421,6 +502,8 @@ class Worker:
             process.wait(timeout=10)
 
     def _project_repo(self, project: str) -> str | None:
+        if getattr(self, "_current_route", None) and self._current_route.slug == project:
+            return self._current_route.repo
         repos_from_kanzo = parse_projects(self._call("list_projects", {}))
         if project in repos_from_kanzo:
             return repos_from_kanzo[project]
@@ -467,9 +550,10 @@ class Worker:
         return checkout
 
     def _run_hermes(self, task: Task, code: bool, cwd: Path) -> str:
+        route = task.route
         if code:
-            provider = self.env.get("KANZO_CODE_PROVIDER", "openai-codex")
-            model = self.env.get("KANZO_CODE_MODEL", "")
+            provider = route.provider if route else self.env.get("KANZO_CODE_PROVIDER", "openai-codex")
+            model = route.model if route else self.env.get("KANZO_CODE_MODEL", "")
             if not model:
                 raise WorkerError("KANZO_CODE_MODEL을 설정해야 코드 태스크를 실행할 수 있습니다.")
             if provider in ("openai-api", "openai_compatible"):
@@ -478,18 +562,22 @@ class Worker:
             elif not self._auth_ready(provider):
                 raise WorkerError(f"Hermes의 {provider} 인증이 아직 완료되지 않았습니다.")
         else:
-            provider = self.env.get("KANZO_ANALYSIS_PROVIDER", "openai-api")
-            model = self.env.get("KANZO_ANALYSIS_MODEL", "")
-            if not model or not self.env.get("LITELLM_API_KEY"):
+            provider = route.provider if route else self.env.get("KANZO_ANALYSIS_PROVIDER", "openai-api")
+            model = route.model if route else self.env.get("KANZO_ANALYSIS_MODEL", "")
+            if not model or (provider in ("openai-api", "openai_compatible") and not self.env.get("LITELLM_API_KEY")):
                 raise WorkerError("LiteLLM 분석 모델 또는 전용 API 키가 설정되지 않았습니다.")
 
+        if provider not in ("openai-api", "openai_compatible") and not self._auth_ready(provider):
+            raise WorkerError(f"Hermes is not authenticated for provider {provider}.")
         prompt = task_prompt(task, code)
-        reasoning = "high" if code else "xhigh"
-        prompt_path = self.workspace / f"prompt-{uuid.uuid4().hex}.txt"
+        lane = route.model_lane if route else ("coding" if code else "analysis")
+        reasoning = route.reason if route else ("high" if code else "xhigh")
+        profile = route.profile if route else "researcher"
+        prompt = f"Selected Hermes profile: {profile}.\n\n" + prompt
+        prompt_path = Path("/tmp") / f"prompt-{uuid.uuid4().hex}.txt"
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
         prompt_path.write_text(prompt, encoding="utf-8")
         agent_env = self._hermes_env()
-        agent_env["HERMES_WRITE_SAFE_ROOT"] = os.pathsep.join((str(self.home), str(cwd)))
         # The agent gets a separate read-only MCP token; the controller's Kanzo
         # mutation token and GitHub write credential stay out of its environment.
         agent_env.pop("MCPPROXY_KANZO_AGENT_TOKEN", None)
@@ -500,12 +588,45 @@ class Worker:
         agent_env.pop("GITHUB_TOKEN", None)
         agent_env.pop("GH_TOKEN", None)
         command = [
-            "hermes", "chat", "--query-file", str(prompt_path), "--oneshot",
+            "hermes", "--profile", profile, "chat", "--query-file", str(prompt_path), "--oneshot",
             "--format", "stream-json", "--provider", provider, "--model", model,
             "--reasoning", reasoning,
             "--toolsets",
             "search,memory,skills,todo,terminal,file,delegation,code_execution,clarify,kanban,mcp-home_server",
         ]
+        if route and route.read_only:
+            payload = json.dumps({"command": command, "cwd": str(cwd)}, ensure_ascii=False).encode()
+            request = urllib.request.Request("http://127.0.0.1:8765/run", payload, {"Content-Type": "application/json"}, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=2730) as response:
+                    parts: list[str] = []
+                    diagnostics: list[str] = []
+                    last_progress = time.monotonic()
+                    for raw_line in response:
+                        try:
+                            event = json.loads(raw_line.decode("utf-8", errors="replace"))
+                        except json.JSONDecodeError:
+                            diagnostics.append(raw_line.decode("utf-8", errors="replace").strip())
+                            continue
+                        self.heartbeat_path.touch()
+                        if event.get("type") == "text" and isinstance(event.get("text"), str):
+                            parts.append(event["text"])
+                        elif event.get("type") == "executor_exit":
+                            if event.get("code"):
+                                raise WorkerError(f"Read-only Hermes exited with code {event['code']}: {' '.join(diagnostics)[-1000:]}")
+                        elif event.get("type") in ("error", "error_detail", "tool_error"):
+                            diagnostics.append(json.dumps(event, ensure_ascii=False))
+                        if time.monotonic() - last_progress >= 600:
+                            self._comment(task.task_id, "작업이 계속 실행 중입니다. 출력과 제한 시간을 확인하며 진행 중입니다.")
+                            last_progress = time.monotonic()
+                    result = "".join(parts).strip()
+                    if not result:
+                        raise WorkerError("Read-only Hermes exited without returning a result.")
+                    return result
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise WorkerError(f"Read-only Hermes executor unavailable; refusing writable fallback: {exc}") from exc
+            finally:
+                prompt_path.unlink(missing_ok=True)
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -684,19 +805,62 @@ class Worker:
             return False
         self.client = McpClient(self.mcp_url, self.token)
         self.client.connect()
-        # Kanzo's next_task is the authoritative claim operation; it excludes tasks marked for humans.
-        project = self.env.get("KANZO_PROJECT", "all").strip() or "all"
-        claimed = self._call("next_task", {"project": project, "filter": "-is:human -is:waiting"})
-        parsed = parse_task_line(claimed)
+        # Doing catalog cards are the sole project activation switch.
+        catalog = self.env.get("KANZO_CATALOG_PROJECT", "").strip()
+        route_by_slug: dict[str, ProjectRoute] = {}
+        if catalog:
+            cards = self._call("list_tasks", {"project": catalog, "status": "doing", "filter": ""})
+            header_re = re.compile(r"^\s*([a-zA-Z0-9._-]+#\d+)\s+\[([^]]+)\]\s+(.*)$", re.MULTILINE)
+            routes: list[ProjectRoute] = []
+            for match in header_re.finditer(cards):
+                if match.group(1).rsplit("#", 1)[0] != catalog or match.group(2).strip().lower() != "doing":
+                    continue
+                details = self._call("get_task", {"id": match.group(1)})
+                try:
+                    routes.append(parse_project_route(match.group(3), details))
+                except WorkerError as exc:
+                    self._comment(match.group(1), f"프로젝트 카탈로그 설정 오류로 비활성화했습니다. 수정 후 doing으로 옮겨 다시 활성화하세요.\n\n오류: {exc}")
+                    self._call("update_task", {"id": match.group(1), "status": "review", "human": True})
+            if len({route.slug for route in routes}) != len(routes):
+                duplicates = {route.slug for route in routes if sum(item.slug == route.slug for item in routes) > 1}
+                for match in header_re.finditer(cards):
+                    if match.group(1).rsplit("#", 1)[0] != catalog or match.group(2).strip().lower() != "doing":
+                        continue
+                    details = self._call("get_task", {"id": match.group(1)})
+                    try:
+                        route = parse_project_route(match.group(3), details)
+                    except WorkerError:
+                        continue
+                    if route.slug in duplicates:
+                        self._comment(match.group(1), f"중복 활성 프로젝트 카드({route.slug})가 있어 카드를 비활성화했습니다. 하나의 카드만 남기고 doing으로 설정하세요.")
+                        self._call("update_task", {"id": match.group(1), "status": "review", "human": True})
+                routes = [route for route in routes if route.slug not in duplicates]
+            if not routes:
+                LOG.info("Project catalog has no active doing cards; fail closed")
+                return False
+            route_by_slug = {route.slug: route for route in routes}
+            projects = list(route_by_slug)
+            cursor = getattr(self, "_project_cursor", 0) % len(projects)
+            projects = projects[cursor:] + projects[:cursor]
+            self._project_cursor = (cursor + 1) % len(route_by_slug)
+        else:
+            projects = [self.env.get("KANZO_PROJECT", "all").strip() or "all"]
+        parsed = None
+        for project in projects:
+            claimed = self._call("next_task", {"project": project, "filter": "-is:human -is:waiting"})
+            parsed = parse_task_line(claimed)
+            if parsed:
+                break
         if not parsed:
-            LOG.info("No agent-eligible Kanzo task is available")
+            LOG.info("No agent-eligible task is available in active projects")
             return False
         task_id, status, title_line = parsed
         if status != "doing":
             LOG.warning("Kanzo next_task returned %s in status %s", task_id, status)
         details = self._call("get_task", {"id": task_id})
         project = task_id.rsplit("#", 1)[0]
-        task = Task(task_id, project, status, title_line, parse_tags(title_line), details)
+        task = Task(task_id, project, status, title_line, parse_tags(title_line), details, route_by_slug.get(project))
+        self._current_route = task.route
         run_id = uuid.uuid4().hex[:12]
         self._comment(task_id, f"Hermes 워커가 작업을 가져왔습니다. 실행 ID: `{run_id}`\n\n작업을 확인하고 결과와 검증 내용을 댓글로 남기겠습니다.")
         self.metrics["active"] = 1
@@ -721,14 +885,15 @@ class Worker:
             outcome_note = ""
             if not WORKER_OUTCOME_RE.search(result):
                 outcome_note = "\n\nWorker note: Hermes exited without an explicit outcome marker; routed for human review."
-            if task.is_code:
+            if task.is_code and not (task.route and task.route.read_only):
                 pr_url = self._publish_draft_pr(task, checkout, summary)
                 self._comment(task_id, f"작업 결과:\n\n{summary[:5000]}{outcome_note}\n\n초안 PR: {pr_url}")
                 self._call("update_task", {"id": task_id, "status": "review", "url": pr_url})
                 outcome = "review"
             else:
                 self._comment(task_id, f"작업 결과:\n\n{summary[:5000] or '작업이 완료되었습니다. 상세 출력은 Hermes 실행 기록에 있습니다.'}{outcome_note}")
-                if outcome == "review":
+                if (task.route and task.route.read_only) or outcome == "review":
+                    outcome = "review"
                     self._call("update_task", {"id": task_id, "status": "review", "human": True})
                 else:
                     self._call("update_task", {"id": task_id, "status": "done", "human": False})

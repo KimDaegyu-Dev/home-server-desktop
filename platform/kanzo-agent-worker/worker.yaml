@@ -258,10 +258,8 @@ spec:
               value: "300"
             - name: KANZO_ENABLED
               value: "true"
-            - name: KANZO_PROJECT
-              value: hermes-harness-lab
-            - name: KANZO_PROJECT_REPOS_JSON
-              value: '{"k3s-ai-ops-copilot":"KimDaegyu-Dev/home-server-desktop"}'
+            - name: KANZO_CATALOG_PROJECT
+              value: kanzo-project-catalog
             - name: KANZO_CODE_PROVIDER
               value: openai-api
             - name: KANZO_CODE_MODEL
@@ -354,8 +352,6 @@ spec:
                   name: kanzo-agent-credentials
                   key: MCPPROXY_AGENT_READ_TOKEN
                   optional: true
-            - name: HERMES_WRITE_SAFE_ROOT
-              value: /opt/data/home:/workspace
             - name: KANZO_ANALYSIS_MODEL
               value: iq_3s
             - name: LITELLM_BASE_URL
@@ -379,6 +375,57 @@ spec:
               mountPath: /opt/data
             - name: workspace
               mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+        - name: readonly-executor
+          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          imagePullPolicy: Never
+          command: [python, /opt/kanzo-agent/readonly_executor.py]
+          env:
+            - name: HERMES_HOME
+              value: /opt/data/home
+            - name: HOME
+              value: /opt/data/home
+            - name: KANZO_WORKSPACE
+              value: /workspace
+            - name: MCPPROXY_URL
+              value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
+            - name: MCPPROXY_AGENT_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: MCPPROXY_AGENT_READ_TOKEN
+                  optional: true
+            - name: LITELLM_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/readonly_executor.py
+              subPath: readonly_executor.py
+              readOnly: true
+            - name: workspace
+              mountPath: /workspace
+              readOnly: true
             - name: tmp
               mountPath: /tmp
           resources:

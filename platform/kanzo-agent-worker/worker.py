@@ -613,8 +613,8 @@ class Worker:
             suffix = f"\n{detail}" if detail else ""
             raise WorkerError(f"Hermes가 종료 코드 {exit_code}로 작업을 마쳤습니다.{suffix}")
         result = "".join(text_parts).strip()
-        if not WORKER_OUTCOME_RE.search(result):
-            raise WorkerError("Hermes exited successfully without a KANZO_WORKER_OUTCOME marker.")
+        if not result:
+            raise WorkerError("Hermes exited successfully without returning a result.")
         return result
 
     def _publish_draft_pr(self, task: Task, checkout: Path, summary: str) -> str:
@@ -708,13 +708,16 @@ class Worker:
                 checkout = self._checkout_repo(task)
             result = self._run_hermes(task, task.is_code, checkout)
             outcome, summary = parse_worker_outcome(result)
+            outcome_note = ""
+            if not WORKER_OUTCOME_RE.search(result):
+                outcome_note = "\n\nWorker note: Hermes exited without an explicit outcome marker; routed for human review."
             if task.is_code:
                 pr_url = self._publish_draft_pr(task, checkout, summary)
-                self._comment(task_id, f"작업 결과:\n\n{summary[:5000]}\n\n초안 PR: {pr_url}")
+                self._comment(task_id, f"작업 결과:\n\n{summary[:5000]}{outcome_note}\n\n초안 PR: {pr_url}")
                 self._call("update_task", {"id": task_id, "status": "review", "url": pr_url})
                 outcome = "review"
             else:
-                self._comment(task_id, f"작업 결과:\n\n{summary[:5000] or '작업이 완료되었습니다. 상세 출력은 Hermes 실행 기록에 있습니다.'}")
+                self._comment(task_id, f"작업 결과:\n\n{summary[:5000] or '작업이 완료되었습니다. 상세 출력은 Hermes 실행 기록에 있습니다.'}{outcome_note}")
                 if outcome == "review":
                     self._call("update_task", {"id": task_id, "status": "review", "human": True})
                 else:

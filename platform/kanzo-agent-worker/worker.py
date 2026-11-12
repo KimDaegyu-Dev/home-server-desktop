@@ -26,8 +26,8 @@ LOG = logging.getLogger("kanzo-agent-worker")
 TASK_ID_RE = re.compile(r"\b([a-zA-Z0-9._-]+#\d+)\b")
 TASK_LINE_RE = re.compile(r"^\s*([^\s]+#\d+)\s+\[([^]]+)\]\s+(.*)$", re.MULTILINE)
 TASK_HEADER_RE = re.compile(r"^\s*([a-zA-Z0-9._-]+#\d+)\s+(.+)$", re.MULTILINE)
-WORKER_OUTCOME_RE = re.compile(r"(?im)^KANZO_WORKER_OUTCOME:\s*(done|review)\s*$")
-WORKER_SUMMARY_RE = re.compile(r"(?im)^KANZO_WORKER_SUMMARY:\s*(.+?)\s*$")
+WORKER_OUTCOME_RE = re.compile(r"(?i)KANZO_WORKER_OUTCOME:\s*(done|review)(?=KANZO_WORKER_SUMMARY:|\s|$)")
+WORKER_SUMMARY_RE = re.compile(r"(?im)KANZO_WORKER_SUMMARY:\s*.*$")
 DEFAULT_MCP_URL = "http://mcpproxy.mcp.svc.cluster.local:8080/mcp"
 MCP_PROTOCOL_VERSION = "2025-03-26"
 
@@ -261,13 +261,23 @@ Use the available Skillshare procedure when relevant and consult official docs f
 def parse_worker_outcome(result: str) -> tuple[str, str]:
     """Parse the executor recommendation; missing or conflicting markers require review."""
     outcomes = [item.lower() for item in WORKER_OUTCOME_RE.findall(result)]
-    summaries = WORKER_SUMMARY_RE.findall(result)
     if not outcomes or len(set(outcomes)) != 1:
-        return "review", result.strip()
+        return "review", format_worker_comment(result)
     clean_result = WORKER_OUTCOME_RE.sub("", result)
     clean_result = WORKER_SUMMARY_RE.sub("", clean_result).strip()
-    summary = clean_result or (summaries[-1].strip() if summaries else "")
-    return outcomes[-1], summary
+    return outcomes[-1], format_worker_comment(clean_result)
+
+
+def format_worker_comment(result: str) -> str:
+    """Restore Markdown block boundaries lost when Hermes joins adjacent stream text events."""
+    text = result.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"(?<!\n)(?=#{1,6}\s)", "\n\n", text)
+    text = re.sub(r"(?<!\n)(?=-\s)", "\n", text)
+    text = re.sub(r"(?<!\n)(?=\d+\.\s)", "\n", text)
+    text = re.sub(r"(?m)^\s*Worker note: Hermes exited without an explicit outcome marker; routed for human review\.\s*$", "", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 class Worker:

@@ -205,10 +205,19 @@ ALLOWED_PROFILES = {"researcher", "builder", "reviewer"}
 
 def parse_project_route(title: str, description: str) -> ProjectRoute:
     fields: dict[str, str] = {}
-    for line in f"{title}\n{description}".splitlines():
-        match = re.match(r"^\s*([a-z_]+)\s*:\s*(.*?)\s*$", line, re.IGNORECASE)
-        if match:
-            fields[match.group(1).lower()] = match.group(2)
+    structured = re.search(r"^agent_config:\s*(\{.*\})\s*$", description, re.IGNORECASE | re.MULTILINE)
+    if structured:
+        try:
+            config = json.loads(structured.group(1))
+            if isinstance(config, dict) and config.get("slug"):
+                fields = {key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in config.items()}
+        except json.JSONDecodeError as exc:
+            raise WorkerError(f"Catalog card has invalid structured agent configuration: {exc}") from exc
+    if not fields:
+        for line in f"{title}\n{description}".splitlines():
+            match = re.match(r"^\s*([a-z_]+)\s*:\s*(.*?)\s*$", line, re.IGNORECASE)
+            if match:
+                fields[match.group(1).lower()] = match.group(2)
     slug = fields.get("slug", "")
     lane = fields.get("model_lane", "").lower()
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", slug):
@@ -368,12 +377,13 @@ class Worker:
         self.token = self.env.get("MCPPROXY_KANZO_AGENT_TOKEN", "")
         self.workspace = Path(self.env.get("KANZO_WORKSPACE", "/workspace"))
         self.home = Path(self.env.get("HERMES_HOME", "/opt/data"))
-        self.poll_seconds = max(30, int(self.env.get("KANZO_POLL_SECONDS", "300")))
+        self.heartbeat_stale_seconds = max(90, int(self.env.get("KANZO_HEARTBEAT_STALE_SECONDS", "900")))
         self.run_once = self.env.get("KANZO_RUN_ONCE", "false").lower() == "true"
         self.enabled = self.env.get("KANZO_ENABLED", "false").lower() == "true"
         self.client: McpClient | None = None
         self.metrics = {"cycles": {}, "tasks": {}, "active": 0, "last_success": 0}
         self.heartbeat_path = self.home / "worker-heartbeat"
+        self.wake_queue: queue.Queue[str] = queue.Queue(maxsize=1)
 
     def start_metrics_server(self) -> None:
         worker = self
@@ -382,7 +392,7 @@ class Worker:
             def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
                 if self.path in ("/healthz", "/readyz"):
                     age = time.time() - worker.heartbeat_path.stat().st_mtime if worker.heartbeat_path.exists() else 10**9
-                    ok = age < max(worker.poll_seconds * 3, 900)
+                    ok = age < worker.heartbeat_stale_seconds
                     self.send_response(200 if ok else 503)
                     self.end_headers()
                     self.wfile.write(b"ok\n" if ok else b"stale\n")
@@ -392,7 +402,7 @@ class Worker:
                     self.end_headers()
                     return
                 lines = [
-                    "# HELP kanzo_worker_cycles_total Completed queue polling cycles.",
+                    "# HELP kanzo_worker_cycles_total Completed event dispatch cycles.",
                     "# TYPE kanzo_worker_cycles_total counter",
                 ]
                 for result, count in worker.metrics["cycles"].items():
@@ -418,6 +428,21 @@ class Worker:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+                if self.path != "/wake" or self.client_address[0] not in ("127.0.0.1", "::1"):
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                try:
+                    length = min(int(self.headers.get("Content-Length", "0")), 4096)
+                    if length:
+                        self.rfile.read(length)
+                    worker.wake_queue.put_nowait("event")
+                except queue.Full:
+                    pass  # Wake notifications are hints; a queued wake already covers this change.
+                self.send_response(202)
+                self.end_headers()
 
             def log_message(self, *_: Any) -> None:
                 return
@@ -915,19 +940,35 @@ class Worker:
         self.home.mkdir(parents=True, exist_ok=True)
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.start_metrics_server()
+        try:
+            self.wake_queue.put_nowait("startup")
+        except queue.Full:
+            pass
+        retry_delay = 2
         while True:
             self.heartbeat_path.touch()
             try:
-                found = self.process_one()
-                result = "task" if found else "idle"
+                self.wake_queue.get(timeout=30)
+                found_any = False
+                while self.process_one():
+                    found_any = True
+                result = "task" if found_any else "idle"
+                retry_delay = 2
+            except queue.Empty:
+                result = "idle"
             except Exception:
                 LOG.exception("Kanzo worker cycle failed")
                 result = "error"
+                time.sleep(retry_delay)
+                try:
+                    self.wake_queue.put_nowait("retry")
+                except queue.Full:
+                    pass
+                retry_delay = min(retry_delay * 2, 300)
             self.metrics["cycles"][result] = self.metrics["cycles"].get(result, 0) + 1
             self.heartbeat_path.touch()
             if self.run_once:
                 return 0
-            time.sleep(self.poll_seconds)
 
 
 def main() -> int:

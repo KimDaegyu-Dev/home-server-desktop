@@ -1,0 +1,884 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 9ac0129..23d8f67 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -75,7 +75,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -175,9 +175,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+ 
+ [[package]]
+ name = "cc"
+-version = "1.10.0"
++version = "1.11.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "86e055fa6e3e40ad6187ba25b6855eeb635d5271f8e0f0e1e9a5826b8d75bea0"
++checksum = "4ff2a8126fff0f8c839080d619675a585e61720bb12d2baceae45769fd66f155"
+ dependencies = [
+  "find-msvc-tools",
+  "shlex",
+@@ -243,7 +243,7 @@ dependencies = [
+  "heck",
+  "proc-macro2",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -260,9 +260,9 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
+ 
+ [[package]]
+ name = "const-oid"
+-version = "0.10.2"
++version = "0.10.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
++checksum = "be95d4a884358a21a199689323c29e9256b4a1b315e22f183d155422041d3a9a"
+ 
+ [[package]]
+ name = "core-foundation-sys"
+@@ -308,7 +308,7 @@ dependencies = [
+  "proc-macro2",
+  "quote",
+  "strsim",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -319,7 +319,7 @@ checksum = "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
+ dependencies = [
+  "darling_core",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -368,9 +368,9 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
+ 
+ [[package]]
+ name = "errno"
+-version = "0.3.14"
++version = "0.3.15"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
++checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
+ dependencies = [
+  "libc",
+  "windows-sys",
+@@ -471,7 +471,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -687,15 +687,15 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
+ 
+ [[package]]
+ name = "itoa"
+-version = "1.0.18"
++version = "1.0.19"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
++checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
+ 
+ [[package]]
+ name = "js-sys"
+-version = "0.3.106"
++version = "0.3.107"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "7883d941dae510fb2d978fc3fe018c71c9e2892fd38854de3e8b92c2e5ad9cc5"
++checksum = "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a"
+ dependencies = [
+  "cfg-if",
+  "futures-util",
+@@ -719,6 +719,7 @@ dependencies = [
+  "serde_json",
+  "tempfile",
+  "tokio",
++ "tokio-stream",
+  "tokio-util",
+  "toml",
+ ]
+@@ -757,9 +758,9 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+ 
+ [[package]]
+ name = "log"
+-version = "0.4.34"
++version = "0.4.35"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
++checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+ 
+ [[package]]
+ name = "matchit"
+@@ -775,9 +776,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+ 
+ [[package]]
+ name = "mime"
+-version = "0.3.17"
++version = "0.3.18"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
++checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
+ 
+ [[package]]
+ name = "mio"
+@@ -909,7 +910,7 @@ checksum = "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -956,7 +957,7 @@ dependencies = [
+  "proc-macro2",
+  "quote",
+  "serde_json",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -985,9 +986,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "rustix"
+-version = "1.1.5"
++version = "1.1.6"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
++checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
+ dependencies = [
+  "bitflags",
+  "errno",
+@@ -1031,7 +1032,7 @@ dependencies = [
+  "proc-macro2",
+  "quote",
+  "serde_derive_internals",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -1061,7 +1062,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -1072,7 +1073,7 @@ checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -1101,9 +1102,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "serde_spanned"
+-version = "1.1.2"
++version = "1.1.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "4e7523beb55eece201a2356bee0bbca0d1ab466c14c07703b2e0ee6d42cb0c2c"
++checksum = "9c187e0a369471c550af028cba56d4f4fa2a489ad28151ae95a4d340a2a8b782"
+ dependencies = [
+  "serde_core",
+ ]
+@@ -1155,9 +1156,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+ 
+ [[package]]
+ name = "smallvec"
+-version = "1.16.4"
++version = "1.16.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
++checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
+ 
+ [[package]]
+ name = "socket2"
+@@ -1171,9 +1172,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "sqlite-wasm-rs"
+-version = "0.6.2"
++version = "0.6.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "36bd8e29bf08189a005b2df1df99823aa0861cabe9044e5f31ed54ca292ee618"
++checksum = "a6cd504cecbfe7eef649988840f9a6cb768d11085efec138f8e99f160632d867"
+ dependencies = [
+  "cc",
+  "rsqlite-vfs",
+@@ -1211,9 +1212,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "syn"
+-version = "3.0.9"
++version = "3.0.10"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
++checksum = "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+@@ -1256,7 +1257,7 @@ checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -1283,7 +1284,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+ ]
+ 
+ [[package]]
+@@ -1295,6 +1296,7 @@ dependencies = [
+  "futures-core",
+  "pin-project-lite",
+  "tokio",
++ "tokio-util",
+ ]
+ 
+ [[package]]
+@@ -1313,9 +1315,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "toml"
+-version = "1.2.0+spec-1.1.0"
++version = "1.2.1+spec-1.1.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "c5ffcdf8f50436dbbfd675c1fe1b8e0854f42b7defea8584bdebe1aee900e561"
++checksum = "d5755c51863cdac711f1956baf8eb9588e060755f7d3c4c979e70ea1e1f32cd7"
+ dependencies = [
+  "indexmap",
+  "serde_core",
+@@ -1328,9 +1330,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "toml_datetime"
+-version = "1.1.2+spec-1.1.0"
++version = "1.1.3+spec-1.1.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
++checksum = "173f25c883cd2176a2d8212155638c0a60d484a9d84546d270866f40f56b6e49"
+ dependencies = [
+  "serde_core",
+ ]
+@@ -1428,9 +1430,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
+ 
+ [[package]]
+ name = "uuid"
+-version = "1.29.0"
++version = "1.29.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
++checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
+ dependencies = [
+  "getrandom",
+  "js-sys",
+@@ -1451,12 +1453,11 @@ checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
+ 
+ [[package]]
+ name = "wasm-bindgen"
+-version = "0.2.129"
++version = "0.2.130"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "9bb54f33acc68fd454578d9820b0bde1a1a3d17aa17bb7b6595806d02886d409"
++checksum = "a0181c14ddd6c7b8b0b0132a5f1ea2f32be0d893cd3ea97b6e3b28886b8a3d1c"
+ dependencies = [
+  "cfg-if",
+- "once_cell",
+  "rustversion",
+  "wasm-bindgen-macro",
+  "wasm-bindgen-shared",
+@@ -1464,9 +1465,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "wasm-bindgen-macro"
+-version = "0.2.129"
++version = "0.2.130"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "2e29d0c35b16e224a7eeb5cd2d25e3e1968fbd65604117b44d3b789d00ee8535"
++checksum = "6e931a02a39abdbf66966fc35902b5ed58344750a70885bed4ebb3d8eaf28ed9"
+ dependencies = [
+  "quote",
+  "wasm-bindgen-macro-support",
+@@ -1474,22 +1475,22 @@ dependencies = [
+ 
+ [[package]]
+ name = "wasm-bindgen-macro-support"
+-version = "0.2.129"
++version = "0.2.130"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "6f501a8bc3719dba86ef8ae4728879c08001bea749eb1333ac5b91e040e2a6b7"
++checksum = "2ca4b54280e455bd831e33a6b8e734baf432fe63fbc35c42ac14ce67a043a53a"
+ dependencies = [
+  "bumpalo",
+  "proc-macro2",
+  "quote",
+- "syn 3.0.9",
++ "syn 3.0.10",
+  "wasm-bindgen-shared",
+ ]
+ 
+ [[package]]
+ name = "wasm-bindgen-shared"
+-version = "0.2.129"
++version = "0.2.130"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
++checksum = "3b1f9c3798725016c6ee5f2f57869ec0831e8bbc0ab0310a86e787e97f41389e"
+ dependencies = [
+  "unicode-ident",
+ ]
+@@ -1564,9 +1565,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "winnow"
+-version = "1.0.4"
++version = "1.0.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
++checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
+ 
+ [[package]]
+ name = "zmij"
+diff --git a/Cargo.toml b/Cargo.toml
+index a72176d..c8ff7ab 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -30,6 +30,7 @@ serde = { version = "1.0.229", features = ["derive"] }
+ serde_json = "1.0.154"
+ tokio = { version = "1.54.1", features = ["rt", "macros", "net", "signal", "io-util", "sync", "time"] }
+ tokio-util = { version = "0.7.20", features = ["io"] }
++tokio-stream = { version = "0.1.19", features = ["sync"] }
+ # Kanzo reads config.toml and never writes TOML.
+ toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "serde"] }
+ 
+diff --git a/src/app.js b/src/app.js
+index ffbf7df..f160c6b 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -16,6 +16,7 @@ if (!HTMLFormElement.prototype.requestSubmit) {
+ 
+ const $ = (sel, root = document) => root.querySelector(sel);
+ const STATUS_COLORS = ["#8a8a83", "#3b82f6", "#e8a317", "#2f9e44", "#ae3ec9", "#e8590c"];
++const AGENT_CATALOG_PROJECT = "kanzo-project-catalog";
+ 
+ const state = {
+   project: "all",
+@@ -1253,6 +1254,7 @@ async function refreshTask() {
+   // A board on an older version sends neither list.
+   const { task, comments, images, waits_on = [], blocks = [] } = data;
+   panelTask = task;
++  renderAgentConfig(task);
+   panelWaits = waits_on.map(key).join(", ");
+   $("#p-key").textContent = key(task);
+   $("#p-key").title = tr("Copy {0}", key(task));
+@@ -1291,6 +1293,50 @@ async function refreshTask() {
+   }));
+ }
+ 
++function renderAgentConfig(task) {
++  const section = $("#p-agent-config");
++  section.hidden = task.project !== AGENT_CATALOG_PROJECT;
++  if (section.hidden) return;
++  const config = task.agent_config || Object.fromEntries(
++    (task.description || "").split(/\r?\n/).map((line) => {
++      const match = line.match(/^\s*(slug|repo|model_lane|provider|model|reason|profile|read_only)\s*:\s*(.*?)\s*$/i);
++      return match ? [match[1].toLowerCase(), match[2]] : null;
++    }).filter(Boolean));
++  const fields = [
++    ["#p-agent-slug", config.slug || ""], ["#p-agent-repo", config.repo || ""],
++    ["#p-agent-lane", config.model_lane || "analysis"], ["#p-agent-profile", config.profile || "researcher"],
++    ["#p-agent-provider", config.provider || "openai-api"], ["#p-agent-model", config.model || "iq_3s"],
++    ["#p-agent-reason", config.reason || "high"],
++  ];
++  for (const [selector, value] of fields) {
++    const field = $(selector);
++    if (document.activeElement !== field) field.value = value;
++  }
++  if (document.activeElement !== $("#p-agent-read-only")) {
++    $("#p-agent-read-only").checked = config.read_only === true || String(config.read_only).toLowerCase() === "true";
++  }
++}
++
++function saveAgentConfig() {
++  if (!panelTask || panelTask.project !== AGENT_CATALOG_PROJECT) return;
++  const config = {
++    slug: $("#p-agent-slug").value.trim(),
++    repo: $("#p-agent-repo").value.trim(),
++    model_lane: $("#p-agent-lane").value,
++    provider: $("#p-agent-provider").value.trim(),
++    model: $("#p-agent-model").value.trim(),
++    reason: $("#p-agent-reason").value,
++    profile: $("#p-agent-profile").value.trim(),
++    read_only: $("#p-agent-read-only").checked,
++  };
++  if (!config.slug) return;
++  patchTask({ agent_config: config });
++}
++
++for (const field of $("#p-agent-config").querySelectorAll("input, select")) {
++  field.addEventListener("change", saveAgentConfig);
++}
++
+ async function deleteComment(c) {
+   if (!confirm(tr("Delete this comment? This cannot be undone."))) return;
+   try {
+diff --git a/src/index.html b/src/index.html
+index f27d0f6..f0a0196 100644
+--- a/src/index.html
++++ b/src/index.html
+@@ -383,6 +383,10 @@ html:not([data-hide~="waiting"]) .card.waiting:not(:hover) { opacity: .6; }
+ .thumb .remove-image .icon svg { width: 14px; height: 14px; }
+ @media (hover: none) { .thumb .remove-image { display: grid; place-items: center; } }
+ .section.dropping { background: var(--hover); border-radius: 12px; }
++  .routing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
++  .routing-grid label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
++  .routing-grid .field { width: 100%; min-width: 0; }
++  .routing-grid .check { display: flex; align-items: center; gap: 8px; min-height: 34px; }
+ .composer.dropping { background: var(--active); }
+ 
+ .composer { position: relative; margin-top: 6px; background: var(--field); border-radius: 20px; }
+@@ -613,6 +617,20 @@ html:not(.ready) aside { visibility: hidden; }
+       <div class="inline md desc-view" id="p-desc-view" tabindex="0" role="button" aria-label="Edit description" hidden></div>
+       <div class="thumbs" id="p-images"></div>
+     </div>
++    <section class="section" id="p-agent-config" hidden>
++      <h3>Agent routing</h3>
++      <p class="hint">Structured worker settings for project catalog cards.</p>
++      <div class="routing-grid">
++        <label>Project slug<input class="field" id="p-agent-slug" autocomplete="off" spellcheck="false" placeholder="my-project"></label>
++        <label>Repository<input class="field" id="p-agent-repo" autocomplete="off" spellcheck="false" placeholder="owner/repository or none"></label>
++        <label>Model lane<select class="field" id="p-agent-lane"><option value="analysis">analysis</option><option value="coding">coding</option><option value="review">review</option></select></label>
++        <label>Hermes profile<select class="field" id="p-agent-profile"><option value="researcher">researcher</option><option value="builder">builder</option><option value="reviewer">reviewer</option></select></label>
++        <label>Provider<input class="field" id="p-agent-provider" autocomplete="off" spellcheck="false" placeholder="openai-api"></label>
++        <label>Model<input class="field" id="p-agent-model" autocomplete="off" spellcheck="false" placeholder="iq_3s"></label>
++        <label>Reasoning<select class="field" id="p-agent-reason"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">extra high</option></select></label>
++        <label class="check"><input type="checkbox" id="p-agent-read-only"> Read only</label>
++      </div>
++    </section>
+     <div class="section" data-prop="comments">
+       <h3>Comments <span class="count" id="p-comment-count"></span></h3>
+       <div id="p-comments"></div>
+diff --git a/src/mcp.rs b/src/mcp.rs
+index 23ff9d8..6b89a2b 100644
+--- a/src/mcp.rs
++++ b/src/mcp.rs
+@@ -233,6 +233,8 @@ struct CreateTaskArgs {
+     human: Option<bool>,
+     /// Tasks it waits on, like api#12.
+     waits_on: Option<String>,
++    /// Structured routing configuration for agent project-catalog cards.
++    agent_config: Option<store::AgentConfig>,
+ }
+ 
+ #[derive(Deserialize, JsonSchema)]
+@@ -253,6 +255,8 @@ struct UpdateTaskArgs {
+     url: Option<String>,
+     /// Tasks it waits on, like api#12; "" clears.
+     waits_on: Option<String>,
++    /// Structured routing configuration for agent project-catalog cards.
++    agent_config: Option<store::AgentConfig>,
+ }
+ 
+ #[derive(Deserialize, JsonSchema)]
+@@ -484,10 +488,10 @@ impl Kanzo {
+     ) -> Result<CallToolResult, ErrorData> {
+         Ok(self
+             .run_for(&ext, move |ctx, store| {
+-                let CreateTaskArgs { title, description, project, tags, status, human, waits_on } = args;
++                let CreateTaskArgs { title, description, project, tags, status, human, waits_on, agent_config } = args;
+                 let project = ctx.project(store, project.as_deref())?;
+                 let status = status.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+-                let patch = TaskPatch { description, status, tags, human, waits_on, ..Default::default() };
++                let patch = TaskPatch { description, status, tags, human, waits_on, agent_config, ..Default::default() };
+                 let t = store.create_task_in(project.id, &title, patch)?;
+                 Ok(format!("Created {} in {}: {}{}", t.key(), t.status, t.title, waits_note(store, &t)?))
+             })
+@@ -511,6 +515,7 @@ impl Kanzo {
+                         human: args.human,
+                         url: args.url,
+                         waits_on: args.waits_on,
++                        agent_config: args.agent_config,
+                     },
+                 )?;
+                 let moved = if before.status != after.status {
+@@ -695,6 +700,9 @@ fn task_detail(ctx: &Ctx, store: &Store, t: &Task) -> store::Result<String> {
+     if !t.description.is_empty() && shown(&hidden, "description") {
+         let _ = writeln!(out, "\n{}", t.description);
+     }
++    if let Some(config) = &t.agent_config {
++        let _ = writeln!(out, "\nagent_config: {}", serde_json::to_string(config).unwrap_or_default());
++    }
+     let own = paths(None);
+     if !own.is_empty() {
+         let _ = writeln!(out, "\nImages: {}", own.join(", "));
+diff --git a/src/store.rs b/src/store.rs
+index 8205f50..ca61887 100644
+--- a/src/store.rs
++++ b/src/store.rs
+@@ -6,12 +6,15 @@
+ use std::collections::HashMap;
+ use std::fmt;
+ use std::path::Path;
++use std::sync::OnceLock;
+ use std::time::Duration;
+ 
+ use rusqlite::functions::FunctionFlags;
+ use rusqlite::types::Value;
+ use rusqlite::{Connection, OptionalExtension, Row, params};
+-use serde::Serialize;
++use serde::{Deserialize, Serialize};
++use tokio::sync::broadcast;
++use tokio_stream::wrappers::BroadcastStream;
+ 
+ /// The oldest schema version whose Kanzo can still use a database at the latest one.
+ /// Adding a table or a column with a default leaves older versions working, so a board
+@@ -54,8 +57,19 @@ const MIGRATIONS: &[&str] = &[
+      CREATE TRIGGER task_waits_insert AFTER INSERT ON task_waits BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;
+      CREATE TRIGGER task_waits_delete AFTER DELETE ON task_waits BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;",
+     "ALTER TABLE projects ADD COLUMN position REAL;",
++    "ALTER TABLE tasks ADD COLUMN agent_config_json TEXT NOT NULL DEFAULT 'null';",
+ ];
+ 
++static CHANGE_EVENTS: OnceLock<broadcast::Sender<()>> = OnceLock::new();
++
++fn change_events() -> &'static broadcast::Sender<()> {
++    CHANGE_EVENTS.get_or_init(|| broadcast::channel(256).0)
++}
++
++pub fn subscribe_changes() -> BroadcastStream<()> {
++    BroadcastStream::new(change_events().subscribe())
++}
++
+ const PROJECT_COLORS: &[&str] = &["gray", "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"];
+ 
+ const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
+@@ -124,6 +138,21 @@ pub struct Task {
+     /// The tasks this one waits on that aren't done yet. Left out when there are none, as on most tasks.
+     #[serde(skip_serializing_if = "Vec::is_empty")]
+     pub waiting_on: Vec<i64>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub agent_config: Option<AgentConfig>,
++}
++
++#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
++#[serde(default)]
++pub struct AgentConfig {
++    pub slug: String,
++    pub repo: String,
++    pub model_lane: String,
++    pub provider: String,
++    pub model: String,
++    pub reason: String,
++    pub profile: String,
++    pub read_only: bool,
+ }
+ 
+ impl Task {
+@@ -169,6 +198,7 @@ pub struct TaskPatch {
+     pub human: Option<bool>,
+     /// Task keys, comma-separated; it replaces the list.
+     pub waits_on: Option<String>,
++    pub agent_config: Option<AgentConfig>,
+ }
+ 
+ const STATUSES: [&str; 4] = ["todo", "doing", "review", "done"];
+@@ -258,10 +288,15 @@ impl Store {
+ 
+     /// Immediate, so concurrent writers queue up on the busy timeout instead of failing halfway.
+     fn write<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
++        let changes_before = self.conn.total_changes();
+         self.conn.execute_batch("BEGIN IMMEDIATE")?;
+         match f(&self.conn) {
+             Ok(v) => {
++                let changed = self.conn.total_changes() != changes_before;
+                 self.conn.execute_batch("COMMIT")?;
++                if changed {
++                    let _ = change_events().send(());
++                }
+                 Ok(v)
+             }
+             Err(e) => {
+@@ -438,9 +473,9 @@ impl Store {
+     pub fn unlink_repo(&self, slug: &str, repo: &str) -> Result<Project> {
+         let project = self.find_project(slug)?;
+         let repo = repo_from_url(repo).unwrap_or_else(|| repo.trim().to_ascii_lowercase());
+-        let removed = self
+-            .conn
+-            .execute("DELETE FROM project_repos WHERE repo = ?1 AND project_id = ?2", params![repo, project.id])?;
++        let removed = self.write(|c| {
++            Ok(c.execute("DELETE FROM project_repos WHERE repo = ?1 AND project_id = ?2", params![repo, project.id])?)
++        })?;
+         if removed == 0 {
+             return Err(Error::NotFound(format!("repo {repo} is not linked to project {}", project.slug)));
+         }
+@@ -460,7 +495,10 @@ impl Store {
+             return Err(Error::Invalid("project name is empty".into()));
+         }
+         let project = self.find_project(slug)?;
+-        self.conn.execute("UPDATE projects SET name = ?1 WHERE id = ?2", params![name, project.id])?;
++        self.write(|c| {
++            c.execute("UPDATE projects SET name = ?1 WHERE id = ?2", params![name, project.id])?;
++            Ok(())
++        })?;
+         self.find_project(&project.slug)
+     }
+ 
+@@ -469,7 +507,10 @@ impl Store {
+             return Err(Error::Invalid(format!("unknown color {color:?}; use one of: {}", PROJECT_COLORS.join(", "))));
+         }
+         let project = self.find_project(slug)?;
+-        self.conn.execute("UPDATE projects SET color = ?1 WHERE id = ?2", params![color, project.id])?;
++        self.write(|c| {
++            c.execute("UPDATE projects SET color = ?1 WHERE id = ?2", params![color, project.id])?;
++            Ok(())
++        })?;
+         self.find_project(&project.slug)
+     }
+ 
+@@ -511,13 +552,16 @@ impl Store {
+     pub fn delete_project(&self, slug: &str) -> Result<Project> {
+         let project = self.find_project(slug)?;
+         // Tasks and comments go with it through ON DELETE CASCADE.
+-        self.conn.execute("DELETE FROM projects WHERE id = ?1", [project.id])?;
++        self.write(|c| {
++            c.execute("DELETE FROM projects WHERE id = ?1", [project.id])?;
++            Ok(())
++        })?;
+         Ok(project)
+     }
+ 
+     const TASK_SELECT: &str = "SELECT t.id, p.slug, t.title, t.description, t.status, t.position,
+             t.created_at, t.updated_at, (SELECT count(*) FROM comments c WHERE c.task_id = t.id), t.tags, t.human,
+-            t.url
++            t.url, t.agent_config_json
+         FROM tasks t JOIN projects p ON p.id = t.project_id";
+ 
+     fn task_row(r: &Row) -> rusqlite::Result<Task> {
+@@ -535,6 +579,8 @@ impl Store {
+             updated_at: r.get(7)?,
+             comments: r.get(8)?,
+             waiting_on: Vec::new(),
++            agent_config: serde_json::from_str::<Option<AgentConfig>>(&r.get::<_, String>(12)?)
++                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(12, rusqlite::types::Type::Text, Box::new(e)))?,
+         })
+     }
+ 
+@@ -684,19 +730,21 @@ impl Store {
+     }
+ 
+     // One write, or an agent could take a task before it's human, or before it waits.
+-    // Uses description, status, tags, human, waits_on.
++    // Uses description, status, tags, human, waits_on, and agent routing settings.
+     pub fn create_task_in(&self, project_id: i64, title: &str, patch: TaskPatch) -> Result<Task> {
+         let title = clean_title(title)?;
+         let status = patch.status.as_deref().unwrap_or(STATUSES[0]);
+         self.check_status(status)?;
+         let description = patch.description.as_deref().unwrap_or("").trim();
+         let tags = clean_tags(patch.tags.as_deref().unwrap_or("")).join(",");
++        let agent_config = patch.agent_config.as_ref().map(serde_json::to_string).transpose()
++            .map_err(|e| Error::Invalid(format!("invalid agent configuration: {e}")))?;
+         let id = self.write(|c| {
+             let position = Self::end_of_column(c, status, 0)?;
+             c.execute(
+-                "INSERT INTO tasks (project_id, title, description, status, position, tags, human) \
+-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+-                params![project_id, title, description, status, position, tags, patch.human.unwrap_or(false)],
++                "INSERT INTO tasks (project_id, title, description, status, position, tags, human, agent_config_json) \
++                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, coalesce(?8, 'null'))",
++                params![project_id, title, description, status, position, tags, patch.human.unwrap_or(false), agent_config],
+             )?;
+             let id = c.last_insert_rowid();
+             if let Some(keys) = &patch.waits_on {
+@@ -756,6 +804,8 @@ impl Store {
+         if let Some(s) = &patch.status {
+             self.check_status(s)?;
+         }
++        let agent_config = patch.agent_config.as_ref().map(serde_json::to_string).transpose()
++            .map_err(|e| Error::Invalid(format!("invalid agent configuration: {e}")))?;
+         self.write(|c| {
+             let current = self.get_task(id)?;
+             // Only what the patch changes is written, and only then is the task newer.
+@@ -764,10 +814,11 @@ impl Store {
+                 &format!(
+                     "UPDATE tasks SET title = coalesce(?1, title), project_id = coalesce(?2, project_id),
+                        human = coalesce(?3, human), tags = coalesce(?4, tags),
+-                       description = coalesce(?5, description), url = coalesce(?7, url), updated_at = {NOW}
++                       description = coalesce(?5, description), url = coalesce(?7, url),
++                       agent_config_json = coalesce(?8, agent_config_json), updated_at = {NOW}
+                      WHERE id = ?6 AND (coalesce(?1, title), coalesce(?2, project_id), coalesce(?3, human),
+-                       coalesce(?4, tags), coalesce(?5, description), coalesce(?7, url))
+-                       <> (title, project_id, human, tags, description, url)"
++                       coalesce(?4, tags), coalesce(?5, description), coalesce(?7, url), coalesce(?8, agent_config_json))
++                       <> (title, project_id, human, tags, description, url, agent_config_json)"
+                 ),
+                 params![
+                     title,
+@@ -776,7 +827,8 @@ impl Store {
+                     tags,
+                     patch.description.as_deref().map(str::trim),
+                     id,
+-                    url
++                    url,
++                    agent_config
+                 ],
+             )?;
+             if let Some(s) = &patch.status
+@@ -947,7 +999,10 @@ impl Store {
+ 
+     pub fn delete_task(&self, id: i64) -> Result<Task> {
+         let task = self.get_task(id)?;
+-        self.conn.execute("DELETE FROM tasks WHERE id = ?1", [id])?;
++        self.write(|c| {
++            c.execute("DELETE FROM tasks WHERE id = ?1", [id])?;
++            Ok(())
++        })?;
+         Ok(task)
+     }
+ 
+@@ -1007,15 +1062,21 @@ impl Store {
+ 
+     pub fn delete_comment(&self, id: i64) -> Result<Comment> {
+         let comment = self.get_comment(id)?;
+-        self.conn.execute("DELETE FROM comments WHERE id = ?1", [id])?;
++        self.write(|c| {
++            c.execute("DELETE FROM comments WHERE id = ?1", [id])?;
++            Ok(())
++        })?;
+         Ok(comment)
+     }
+ 
+     pub fn add_image(&self, task_id: i64, file: &str) -> Result<Image> {
+         check_image(file)?;
+         self.get_task(task_id)?;
+-        self.conn.execute("INSERT INTO images (task_id, file) VALUES (?1, ?2)", params![task_id, file])?;
+-        Ok(Image { id: self.conn.last_insert_rowid(), task_id, comment_id: None, file: file.into() })
++        let id = self.write(|c| {
++            c.execute("INSERT INTO images (task_id, file) VALUES (?1, ?2)", params![task_id, file])?;
++            Ok(c.last_insert_rowid())
++        })?;
++        Ok(Image { id, task_id, comment_id: None, file: file.into() })
+     }
+ 
+     pub fn list_images(&self, task_id: i64) -> Result<Vec<Image>> {
+@@ -1036,7 +1097,10 @@ impl Store {
+             .query_row(&format!("{} WHERE id = ?1", Self::IMAGE_SELECT), [id], Self::image_row)
+             .optional()?
+             .ok_or_else(|| Error::NotFound(format!("no image {id}")))?;
+-        self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
++        self.write(|c| {
++            c.execute("DELETE FROM images WHERE id = ?1", [id])?;
++            Ok(())
++        })?;
+         Ok(image)
+     }
+ 
+diff --git a/src/web.rs b/src/web.rs
+index 0c6ab81..394062f 100644
+--- a/src/web.rs
++++ b/src/web.rs
+@@ -1,4 +1,5 @@
+ use std::collections::{HashMap, HashSet};
++use std::convert::Infallible;
+ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+ use std::sync::{Arc, Mutex, OnceLock};
+ use std::time::{Duration, Instant};
+@@ -8,12 +9,13 @@ use axum::body::Bytes;
+ use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
+ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+ use axum::middleware::{self, Next};
+-use axum::response::{Html, IntoResponse, Response};
++use axum::response::{sse::{Event, KeepAlive, Sse}, Html, IntoResponse, Response};
+ use axum::routing::{delete, get, patch, post};
+ use axum::{Extension, Json, Router};
+ use serde::{Deserialize, Serialize};
+ use serde_json::json;
+ use tokio::net::TcpListener;
++use tokio_stream::StreamExt;
+ use tokio_util::sync::CancellationToken;
+ 
+ use crate::home::Home;
+@@ -199,6 +201,9 @@ fn router(home: Home, guard: Arc<Guard>, shutdown: CancellationToken) -> Router
+         .route("/api/sync", get(sync_status).post(sync_now).put(sync_repo))
+         .route("/api/settings", patch(update_settings))
+         .route_layer(middleware::from_fn_with_state(guard.clone(), forward));
++    let unguarded_events = Router::new()
++        // A task-free wake signal for in-cluster consumers. The stream contains no board data.
++        .route("/api/events", get(events));
+     Router::new()
+         .route("/", get(|| async { Html(INDEX) }))
+         .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], APP_JS) }))
+@@ -223,6 +228,13 @@ fn router(home: Home, guard: Arc<Guard>, shutdown: CancellationToken) -> Router
+         .layer(middleware::from_fn_with_state(guard, protect))
+         .layer(middleware::map_response(stamp_version))
+         .with_state(Arc::new(home))
++        .merge(unguarded_events)
++}
++
++async fn events() -> impl IntoResponse {
++    let stream = store::subscribe_changes()
++        .map(|_| Ok::<_, Infallible>(Event::default().event("kanzo.changed").data("{}")));
++    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(20)).text("keep-alive"))
+ }
+ 
+ /// Pages compare it with the version they loaded with, and reload after an update. Set on
+@@ -562,12 +574,13 @@ struct NewTask {
+     project: String,
+     title: String,
+     description: Option<String>,
++    agent_config: Option<store::AgentConfig>,
+ }
+ 
+ async fn create_task(State(home): Shared, Json(t): Json<NewTask>) -> Response {
+     with_store(home, move |_, s| {
+         let project = s.find_project(&t.project)?;
+-        s.create_task_in(project.id, &t.title, TaskPatch { description: t.description, ..Default::default() })
++        s.create_task_in(project.id, &t.title, TaskPatch { description: t.description, agent_config: t.agent_config, ..Default::default() })
+     })
+     .await
+ }
+@@ -619,6 +632,7 @@ struct Patch {
+     human: Option<bool>,
+     url: Option<String>,
+     waits_on: Option<String>,
++    agent_config: Option<store::AgentConfig>,
+ }
+ 
+ async fn update_task(State(home): Shared, Path(id): Path<i64>, Json(p): Json<Patch>) -> Response {
+@@ -635,6 +649,7 @@ async fn update_task(State(home): Shared, Path(id): Path<i64>, Json(p): Json<Pat
+                 human: p.human,
+                 url: p.url,
+                 waits_on: p.waits_on,
++                agent_config: p.agent_config,
+             },
+         )
+     })

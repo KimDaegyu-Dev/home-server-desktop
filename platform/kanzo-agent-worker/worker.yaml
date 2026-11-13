@@ -260,8 +260,8 @@ spec:
               value: http://litellm.litellm.svc.cluster.local:4000/v1
             - name: SEARXNG_URL
               value: http://searxng.search.svc.cluster.local:8080
-            - name: KANZO_POLL_SECONDS
-              value: "300"
+            - name: KANZO_HEARTBEAT_STALE_SECONDS
+              value: "900"
             - name: KANZO_ENABLED
               value: "true"
             - name: KANZO_CATALOG_PROJECT
@@ -336,6 +336,32 @@ spec:
             limits:
               cpu: "2"
               memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+        - name: kanzo-event-adapter
+          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          imagePullPolicy: Never
+          command: [python, /opt/kanzo-agent/event_adapter.py]
+          env:
+            - name: KANZO_EVENTS_URL
+              value: http://kanzo.kanzo.svc.cluster.local:4242/api/events
+            - name: KANZO_WAKE_URL
+              value: http://127.0.0.1:9105/wake
+          volumeMounts:
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/event_adapter.py
+              subPath: event_adapter.py
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -573,6 +599,13 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kanzo
+      ports:
+        - protocol: TCP
+          port: 4242
     - to:
         - namespaceSelector:
             matchLabels:

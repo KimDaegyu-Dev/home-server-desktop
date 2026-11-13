@@ -8,7 +8,6 @@ configMapGenerator:
     namespace: kanzo
     files:
       - config.toml
-      - fetch-kanzo.py
       - backup-kanzo.py
   - name: kanzo-web-proxy
     namespace: kanzo

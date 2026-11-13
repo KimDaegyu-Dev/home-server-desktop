@@ -1,11 +1,11 @@
 # Kanzo Hermes worker
 
-The deployment has a Kanzo bridge worker, a Hermes gateway, a Hermes `serve` endpoint for Desktop, and a read-only Hermes executor in the `mcp` namespace. The bridge polls the `kanzo-project-catalog` every five minutes and handles one parent task at a time. Only project cards in `doing` are active; `todo` is inactive, `review` pauses claims, and `done` archives the project. Kanzo's MCP interface currently exposes task operations but no task-change subscription or webhook, so the bridge cannot be made event-driven without adding push support to Kanzo. The gateway owns Hermes Kanban dispatch. `Recreate` prevents overlapping bridge/gateway pods.
+The deployment has Kanzo, a small SSE event adapter, a Hermes dispatcher, a Hermes gateway, a Hermes `serve` endpoint for Desktop, and a read-only Hermes executor in the `mcp` namespace. Kanzo publishes task-free change events from its in-process write notifications. The adapter keeps one stream open and wakes the dispatcher through loopback; it reconnects with backoff and requests a queue reconciliation after every connection. The dispatcher claims work through Kanzo MCP only after a wake, drains all currently eligible tasks, then sleeps without querying Kanzo. Kanzo remains the durable source of truth, so events are hints rather than task payloads. Only project cards in `doing` are active; `todo` is inactive, `review` pauses claims, and `done` archives the project. `Recreate` prevents overlapping dispatcher/gateway pods.
 
 ## Task behavior
 
 - Kanzo `next_task` is called with `-is:human -is:waiting`; Kanzo also skips waiting tasks itself. Tasks that need a person are moved back to `todo` with `human=true`, with the reason in a comment. Clear Human after resolving the blocker to retry.
-- Each active project card declares `slug`, `repo`, `model_lane`, and `read_only`; `provider` and `model` default to `openai-api` and `iq_3s`, and `reason` defaults to `high`. Optional `profile` defaults by lane (`researcher`, `builder`, or `reviewer`). A provider/model override must include both fields. Provider authentication is checked before a task runs; there is no silent model fallback.
+- Open a task in the `kanzo-project-catalog` project to edit **Agent routing** fields: project slug, repository, model lane, Hermes profile, provider, model, reasoning, and read-only mode. Kanzo stores these separately from the task description and exposes them through MCP. Existing cards with `slug:`, `repo:`, `model_lane:`, and related description lines remain readable; saving their form converts the settings to structured fields. Provider/model overrides must be supplied together. Provider authentication is checked before a task runs; there is no silent model fallback.
 - Oh My Hermes is pinned in `versions.yml` and installed into Hermes' own Python environment so its plugin bridge and Kanban board engine are importable. The persistent Hermes home is bootstrapped with three profiles: `researcher` (`iq_3s`), `builder` (`coder`), and `reviewer` (`iq_3s`).
 - The parent agent uses `/dag-ulw` for bounded parallel work and the Hermes Kanban board for durable cross-profile work. It waits for child handoffs and returns the combined result to the original Kanzo card.
 - Hermes output is drained asynchronously under a 45-minute wall-clock deadline. The bridge refreshes its liveness heartbeat while the model is silent, and a timeout terminates the Hermes process group so Kanzo can record the task as needing human review instead of leaving it in `doing`.
@@ -16,13 +16,14 @@ The deployment has a Kanzo bridge worker, a Hermes gateway, a Hermes `serve` end
 
 ## Credentials and enablement
 
-1. Build and import the pinned image with `sudo bash scripts/build-kanzo-agent-worker.sh`, then allow Argo CD to create the `kanzo-agent-vault-auth` ServiceAccount and `VaultAuth`.
-2. Run `sudo bash scripts/bootstrap-mcp-vault.sh` to install the dedicated read-only Vault policy and Kubernetes role for `kv/mcp/kanzo-agent`.
-3. In MCPProxy, create two agent tokens. The worker token should allow only Kanzo task read/claim/comment/update operations. The Hermes token should allow only read-only services and tools needed for research and context. Store them in Vault as `MCPPROXY_KANZO_AGENT_TOKEN` and `MCPPROXY_AGENT_READ_TOKEN`.
-4. Create a LiteLLM virtual key restricted to the local analysis model alias and store it as `LITELLM_API_KEY`. Store a repository-scoped GitHub token as `GITHUB_TOKEN`; grant only repository contents write and pull-request write. Add all four values to Vault path `kv/mcp/kanzo-agent`. Never put them in Git or a task description.
+1. Build and import the pinned Kanzo overlay with `sudo bash scripts/build-kanzo.sh`. The overlay patch is applied to the upstream tag and commit pinned in `versions.yml`; worker and adapter code are deployed from ConfigMaps.
+2. Allow Argo CD to create the `kanzo-agent-vault-auth` ServiceAccount and `VaultAuth`.
+3. Run `sudo bash scripts/bootstrap-mcp-vault.sh` to install the dedicated read-only Vault policy and Kubernetes role for `kv/mcp/kanzo-agent`.
+4. In MCPProxy, create two agent tokens. The worker token should allow only Kanzo task read/claim/comment/update operations. The Hermes token should allow only read-only services and tools needed for research and context. Store them in Vault as `MCPPROXY_KANZO_AGENT_TOKEN` and `MCPPROXY_AGENT_READ_TOKEN`.
+5. Create a LiteLLM virtual key restricted to the local analysis model alias and store it as `LITELLM_API_KEY`. Store a repository-scoped GitHub token as `GITHUB_TOKEN`; grant only repository contents write and pull-request write. Add all four values to Vault path `kv/mcp/kanzo-agent`. Never put them in Git or a task description.
    The same Vault path also contains the Hermes Desktop dashboard login values listed above. The dashboard password and signing secret are generated randomly and must remain in Vault.
-5. The initial active catalog card is `hermes-harness-lab`, read-only, on `openai-api/iq_3s` with high reasoning. Add or edit project cards in `kanzo-project-catalog`; no per-project deployment is needed.
-6. `KANZO_ENABLED=true` enables the catalog-driven worker. Invalid or duplicate active cards are moved to `review` before project tasks are claimed.
+6. The initial active catalog card is `hermes-harness-lab`, read-only, on `openai-api/iq_3s` with high reasoning. Add or edit project cards in `kanzo-project-catalog`; no per-project deployment is needed.
+7. `KANZO_ENABLED=true` enables the catalog-driven worker. Invalid or duplicate active cards are moved to `review` before project tasks are claimed.
 
 Keep all OAuth login state in Hermes' persistent home, not in this repository. When Codex or Anthropic is added later, create and authenticate a dedicated profile rather than sharing single-use OAuth state across profiles.
 

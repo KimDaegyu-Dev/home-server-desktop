@@ -56,36 +56,37 @@ spec:
         fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
-        - name: install-kanzo
-          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+        - name: seed-kanzo-config
+          image: busybox:1.37.0@sha256:66a6306db78bf2dbf3487f293aa8d6990d8e506fdffab9cc43fe422becf886e4
           imagePullPolicy: IfNotPresent
-          command: [python3, /installer/fetch-kanzo.py]
+          command: [/bin/sh, -ec]
+          args:
+            - if [ ! -f /data/config.toml ]; then cp /seed/config.toml /data/config.toml; fi
           volumeMounts:
-            - name: kanzo-binary
-              mountPath: /opt/kanzo
-            - name: installer
-              mountPath: /installer
+            - name: kanzo-data
+              mountPath: /data
+            - name: seed-config
+              mountPath: /seed
               readOnly: true
           resources:
             requests:
-              cpu: 10m
-              memory: 64Mi
+              cpu: 5m
+              memory: 8Mi
             limits:
-              cpu: 200m
-              memory: 256Mi
+              cpu: 50m
+              memory: 32Mi
           securityContext:
             allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
             capabilities:
               drop: [ALL]
       containers:
         - name: kanzo
-          image: python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
-          imagePullPolicy: IfNotPresent
-          command: [/bin/sh, -ec]
-          args:
-            - >-
-              if [ ! -f /data/config.toml ]; then cp /seed/config.toml /data/config.toml; fi;
-              exec /opt/kanzo/kanzo --home /data --port 4242 --no-open
+          image: localhost/home-server/kanzo:0.4.2-agent.1
+          imagePullPolicy: Never
+          command: [/kanzo, --home, /data, --port, "4242", --no-open]
           env:
             - name: KANZO_HOME
               value: /data
@@ -96,9 +97,6 @@ spec:
               containerPort: 4242
               protocol: TCP
           volumeMounts:
-            - name: kanzo-binary
-              mountPath: /opt/kanzo
-              readOnly: true
             - name: kanzo-data
               mountPath: /data
             - name: seed-config
@@ -165,16 +163,6 @@ spec:
               drop: [ALL]
             readOnlyRootFilesystem: true
       volumes:
-        - name: kanzo-binary
-          emptyDir:
-            sizeLimit: 32Mi
-        - name: installer
-          configMap:
-            name: kanzo-seed-config
-            defaultMode: 0444
-            items:
-              - key: fetch-kanzo.py
-                path: fetch-kanzo.py
         - name: seed-config
           configMap:
             name: kanzo-seed-config

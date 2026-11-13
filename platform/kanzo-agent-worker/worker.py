@@ -38,6 +38,10 @@ class WorkerError(RuntimeError):
     pass
 
 
+class TaskCancelled(WorkerError):
+    """The user explicitly moved the active task to review with human=true."""
+
+
 class McpError(WorkerError):
     pass
 
@@ -440,9 +444,13 @@ class Worker:
         self.run_once = self.env.get("KANZO_RUN_ONCE", "false").lower() == "true"
         self.enabled = self.env.get("KANZO_ENABLED", "false").lower() == "true"
         self.client: McpClient | None = None
+        self.mcp_lock = threading.Lock()
         self.metrics = {"cycles": {}, "tasks": {}, "active": 0, "last_success": 0}
         self.heartbeat_path = self.home / "worker-heartbeat"
         self.wake_queue: queue.Queue[str] = queue.Queue(maxsize=1)
+        self.active_change = threading.Event()
+        self.active_lock = threading.Lock()
+        self.active_run: dict[str, Any] | None = None
 
     def start_metrics_server(self) -> None:
         worker = self
@@ -481,6 +489,14 @@ class Worker:
                     "# TYPE kanzo_worker_last_success_timestamp_seconds gauge",
                     f"kanzo_worker_last_success_timestamp_seconds {worker.metrics['last_success']}",
                 ]
+                with worker.active_lock:
+                    active = worker.active_run
+                    if active:
+                        lines += [
+                            "# HELP kanzo_worker_active_task_info Identity of the task and run currently executing.",
+                            "# TYPE kanzo_worker_active_task_info gauge",
+                            f'kanzo_worker_active_task_info{{task_id="{active["task_id"]}",run_id="{active["run_id"]}"}} 1',
+                        ]
                 body = ("\n".join(lines) + "\n").encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -497,6 +513,7 @@ class Worker:
                     length = min(int(self.headers.get("Content-Length", "0")), 4096)
                     if length:
                         self.rfile.read(length)
+                    worker.active_change.set()
                     worker.wake_queue.put_nowait("event")
                 except queue.Full:
                     pass  # Wake notifications are hints; a queued wake already covers this change.
@@ -510,10 +527,130 @@ class Worker:
         threading.Thread(target=server.serve_forever, daemon=True, name="metrics-server").start()
 
     def _call(self, suffix: str, args: dict[str, Any]) -> str:
-        if not self.client:
-            self.client = McpClient(self.mcp_url, self.token)
-            self.client.connect()
-        return self.client.call(suffix, args)
+        with self.mcp_lock:
+            if not self.client:
+                self.client = McpClient(self.mcp_url, self.token)
+                self.client.connect()
+            return self.client.call(suffix, args)
+
+    def _active_task_cancel_requested(self, active: dict[str, Any]) -> bool:
+        try:
+            details = self._call("get_task", {"id": active["task_id"]})
+        except Exception:
+            LOG.exception("Could not inspect active task %s after a Kanzo event", active["task_id"])
+            return False
+        return (
+            status_from_details(details) == "review"
+            and bool(re.search(r"^human:\s*true\b", details, re.IGNORECASE | re.MULTILINE))
+        )
+
+    def _cancel_active_executor(self, active: dict[str, Any]) -> None:
+        """Stop only the executor owned by this exact task/run pair."""
+        if active.get("read_only"):
+            payload = json.dumps({"task_id": active["task_id"], "run_id": active["run_id"]}).encode()
+            request = urllib.request.Request(
+                "http://127.0.0.1:8765/cancel", payload,
+                {"Content-Type": "application/json"}, method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    if response.status not in (200, 202, 404):
+                        LOG.warning("Read-only executor rejected cancel for %s/%s", active["task_id"], active["run_id"])
+            except Exception:
+                LOG.exception("Could not deliver read-only cancel for %s/%s", active["task_id"], active["run_id"])
+            return
+        with self.active_lock:
+            process = active.get("process")
+        if process is not None and process.poll() is None:
+            self._stop_hermes_process(process)
+
+    def _watch_active_task(self, active: dict[str, Any]) -> None:
+        while not active["stop_monitor"].is_set():
+            if not self.active_change.wait(timeout=1):
+                continue
+            self.active_change.clear()
+            if active["stop_monitor"].is_set():
+                return
+            with self.active_lock:
+                current = self.active_run
+                if current is None or current["task_id"] != active["task_id"] or current["run_id"] != active["run_id"]:
+                    return
+                if not active["accept_cancel"]:
+                    continue
+            if self._active_task_cancel_requested(active):
+                active["cancelled"].set()
+                self._cancel_active_executor(active)
+                return
+
+    @staticmethod
+    def _raise_if_cancelled(active: dict[str, Any] | None) -> None:
+        if active and active["cancelled"].is_set():
+            raise TaskCancelled(f"User cancelled active run {active['run_id']} by setting review and human=true.")
+
+    def _run_active_command(
+        self,
+        command: list[str],
+        active: dict[str, Any] | None,
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        timeout: int | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        self._refresh_cancel_state(active)
+        process = subprocess.Popen(
+            command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, start_new_session=(os.name == "posix"),
+        )
+        if active is not None:
+            with self.active_lock:
+                active["process"] = process
+        try:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self._stop_hermes_process(process)
+                raise WorkerError(f"Command exceeded its {timeout}-second deadline: {command[0]}")
+            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        finally:
+            if active is not None:
+                with self.active_lock:
+                    if active.get("process") is process:
+                        active["process"] = None
+
+    @staticmethod
+    def _remove_published_branch(checkout: Path, env: dict[str, str]) -> None:
+        branch = subprocess.run(
+            ["git", "-C", str(checkout), "branch", "--show-current"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        if branch:
+            subprocess.run(
+                ["git", "-C", str(checkout), "push", "origin", "--delete", branch],
+                env=env, capture_output=True, text=True, timeout=60, check=False,
+            )
+
+    def _refresh_cancel_state(self, active: dict[str, Any] | None) -> None:
+        if active is None:
+            return
+        self._raise_if_cancelled(active)
+        if self._active_task_cancel_requested(active):
+            active["cancelled"].set()
+            self._cancel_active_executor(active)
+            self._raise_if_cancelled(active)
+
+    def _record_cancelled_run(self, task_id: str, run_id: str) -> None:
+        # The user's review/human state is already the durable cancellation signal.
+        # Never write a status here: a later user change or a completed run must win.
+        try:
+            details = self._call("get_task", {"id": task_id})
+            state = status_from_details(details)
+            human = bool(re.search(r"^human:\s*true\b", details, re.IGNORECASE | re.MULTILINE))
+            suffix = "The task remains in review with human=true." if state == "review" and human else (
+                f"The task changed to {state or 'an unknown state'} during cancellation; its latest Kanzo state was preserved."
+            )
+            self._comment(task_id, f"Run `{run_id}` was cancelled after the review + human=true signal. No commit, PR, or automatic retry was created. {suffix}")
+        except Exception:
+            LOG.exception("Could not record cancellation for %s/%s", task_id, run_id)
 
     def _comment(self, task_id: str, body: str) -> None:
         self._call("add_comment", {"id": task_id, "body": body, "author": "Hermes Kanzo Worker"})
@@ -755,7 +892,7 @@ class Worker:
         repo = repo.removeprefix("https://github.com/").removesuffix(".git").strip("/")
         return repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) else None
 
-    def _checkout_repo(self, task: Task) -> Path:
+    def _checkout_repo(self, task: Task, active: dict[str, Any] | None = None) -> Path:
         repo = self._project_repo(task.project)
         token = self.env.get("GITHUB_TOKEN", "")
         if not repo:
@@ -768,26 +905,23 @@ class Worker:
         checkout = (self.workspace / f"{task.project}-{task.task_id.split('#')[-1]}").resolve()
         if self.workspace.resolve() not in checkout.parents:
             raise WorkerError("Resolved checkout path escapes the workspace.")
+        if active is not None:
+            active["checkout"] = checkout
         if checkout.exists():
             shutil.rmtree(checkout)
         auth_env = self._hermes_env()
         auth_env["GH_TOKEN"] = token
-        result = subprocess.run(
-            ["gh", "repo", "clone", repo, str(checkout)],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=180,
-            check=False,
-            env=auth_env,
-        )
+        result = self._run_active_command(["gh", "repo", "clone", repo, str(checkout)], active, timeout=180, env=auth_env)
         if result.returncode:
             raise WorkerError(f"GitHub 저장소를 가져오지 못했습니다: {result.stdout[-1000:]}")
         branch = "kanzo/" + re.sub(r"[^a-zA-Z0-9._/-]+", "-", task.task_id.lower())
-        subprocess.run(["git", "-C", str(checkout), "checkout", "-b", branch], check=True, capture_output=True, text=True)
+        checked_out = self._run_active_command(["git", "-C", str(checkout), "checkout", "-b", branch], active, timeout=120)
+        if checked_out.returncode:
+            raise WorkerError(f"git checkout failed: {checked_out.stderr[-1000:]}")
         return checkout
 
-    def _run_hermes(self, task: Task, code: bool, cwd: Path) -> str:
+    def _run_hermes(self, task: Task, code: bool, cwd: Path, active: dict[str, Any] | None = None) -> str:
+        self._raise_if_cancelled(active)
         route = task.route
         profile = route.profile if route else "researcher"
         if code:
@@ -833,7 +967,12 @@ class Worker:
             "search,memory,skills,todo,terminal,file,delegation,code_execution,clarify,kanban,mcp-home_server",
         ]
         if route and route.read_only:
-            payload = json.dumps({"command": command, "cwd": str(cwd)}, ensure_ascii=False).encode()
+            if active is None:
+                raise WorkerError("Read-only run is missing its task/run cancellation identity.")
+            payload = json.dumps({
+                "command": command, "cwd": str(cwd),
+                "task_id": active["task_id"], "run_id": active["run_id"],
+            }, ensure_ascii=False).encode()
             request = urllib.request.Request("http://127.0.0.1:8765/run", payload, {"Content-Type": "application/json"}, method="POST")
             try:
                 with urllib.request.urlopen(request, timeout=2730) as response:
@@ -850,6 +989,8 @@ class Worker:
                         if event.get("type") == "text" and isinstance(event.get("text"), str):
                             parts.append(event["text"])
                         elif event.get("type") == "executor_exit":
+                            if active["cancelled"].is_set():
+                                raise TaskCancelled(f"Read-only run {active['run_id']} was cancelled by the user.")
                             if event.get("code"):
                                 if event.get("error"):
                                     diagnostics.append(str(event["error"]))
@@ -864,6 +1005,7 @@ class Worker:
                         raise WorkerError("Read-only Hermes exited without returning a result.")
                     return result
             except (urllib.error.URLError, TimeoutError) as exc:
+                self._raise_if_cancelled(active)
                 raise WorkerError(f"Read-only Hermes executor unavailable; refusing writable fallback: {exc}") from exc
             finally:
                 prompt_path.unlink(missing_ok=True)
@@ -877,6 +1019,9 @@ class Worker:
             bufsize=1,
             start_new_session=(os.name == "posix"),
         )
+        if active is not None:
+            with self.active_lock:
+                active["process"] = process
         text_parts: list[str] = []
         diagnostics: list[str] = []
         started_at = time.monotonic()
@@ -901,6 +1046,7 @@ class Worker:
         reader = threading.Thread(target=read_output, daemon=True, name="hermes-output-reader")
         reader.start()
         try:
+            self._raise_if_cancelled(active)
             stream_finished = False
             while not stream_finished:
                 now = time.monotonic()
@@ -976,6 +1122,7 @@ class Worker:
             if process.stdout:
                 process.stdout.close()
             reader.join(timeout=5)
+        self._raise_if_cancelled(active)
         if exit_code:
             detail = "\n".join(diagnostics)[-1200:]
             for name, value in agent_env.items():
@@ -988,23 +1135,32 @@ class Worker:
             raise WorkerError("Hermes exited successfully without returning a result.")
         return result
 
-    def _publish_draft_pr(self, task: Task, checkout: Path, summary: str) -> str:
+    def _publish_draft_pr(self, task: Task, checkout: Path, summary: str, active: dict[str, Any] | None = None) -> str:
         token = self.env.get("GITHUB_TOKEN", "")
         if not token:
             raise WorkerError("검토용 PR을 만들 GitHub 토큰이 없습니다.")
-        diff = subprocess.run(["git", "-C", str(checkout), "diff", "--check"], capture_output=True, text=True)
+        diff = self._run_active_command(["git", "-C", str(checkout), "diff", "--check"], active, timeout=120)
         if diff.returncode:
             raise WorkerError(f"git diff --check 실패: {diff.stdout}{diff.stderr}"[:1200])
-        changed = subprocess.run(["git", "-C", str(checkout), "status", "--short"], capture_output=True, text=True, check=True).stdout.strip()
+        changed_result = self._run_active_command(["git", "-C", str(checkout), "status", "--short"], active, timeout=120)
+        if changed_result.returncode:
+            raise WorkerError(f"git status failed: {changed_result.stderr[-1000:]}")
+        changed = changed_result.stdout.strip()
         if not changed:
             raise WorkerError("코드 태스크에서 파일 변경이 발견되지 않았습니다.")
-        subprocess.run(["git", "-C", str(checkout), "add", "-A"], check=True)
-        subprocess.run(
+        self._refresh_cancel_state(active)
+        add = self._run_active_command(["git", "-C", str(checkout), "add", "-A"], active, timeout=120)
+        if add.returncode:
+            raise WorkerError(f"git add failed: {add.stderr[-1000:]}")
+        self._refresh_cancel_state(active)
+        commit = self._run_active_command(
             ["git", "-C", str(checkout), "-c", "user.name=Hermes Kanzo Worker", "-c", "user.email=hermes-kanzo-worker@users.noreply.github.com", "commit", "-m", f"kanzo: {task.title}"],
-            check=True,
-            capture_output=True,
-            text=True,
+            active, timeout=120,
         )
+        if active and active["cancelled"].is_set():
+            raise TaskCancelled(f"Run {active['run_id']} was cancelled before publishing its local commit.")
+        if commit.returncode:
+            raise WorkerError(f"git commit failed: {commit.stderr[-1000:]}")
         auth_env = self._hermes_env()
         auth_env["GH_TOKEN"] = token
         askpass = self.workspace / f"git-askpass-{uuid.uuid4().hex}.sh"
@@ -1015,23 +1171,28 @@ class Worker:
         git_env["GIT_ASKPASS"] = str(askpass)
         git_env["GIT_TERMINAL_PROMPT"] = "0"
         try:
-            push = subprocess.run(["git", "-C", str(checkout), "push", "-u", "origin", "HEAD"], env=git_env, capture_output=True, text=True)
+            push = self._run_active_command(["git", "-C", str(checkout), "push", "-u", "origin", "HEAD"], active, env=git_env, timeout=300)
         finally:
             askpass.unlink(missing_ok=True)
+        if active and active["cancelled"].is_set():
+            self._remove_published_branch(checkout, git_env)
+            raise TaskCancelled(f"Run {active['run_id']} was cancelled during branch publication; the branch was removed.")
         if push.returncode:
             raise WorkerError(f"GitHub 브랜치 push 실패: {push.stderr[-1000:]}")
-        pr = subprocess.run(
+        pr = self._run_active_command(
             [
                 "gh", "pr", "create", "--draft", "--title", task.title[:200],
                 "--body", (summary or "Automated implementation; see task discussion for context.")[:5000],
                 "--head", subprocess.run(["git", "-C", str(checkout), "branch", "--show-current"], capture_output=True, text=True, check=True).stdout.strip(),
             ],
-            cwd=checkout,
-            env=auth_env,
-            capture_output=True,
-            text=True,
-            timeout=120,
+            active, cwd=checkout, env=auth_env, timeout=120,
         )
+        if active and active["cancelled"].is_set():
+            branch = subprocess.run(["git", "-C", str(checkout), "branch", "--show-current"], capture_output=True, text=True, check=False).stdout.strip()
+            if branch:
+                subprocess.run(["gh", "pr", "close", branch, "--delete-branch"], cwd=checkout, env=auth_env, capture_output=True, text=True, timeout=60, check=False)
+            self._remove_published_branch(checkout, git_env)
+            raise TaskCancelled(f"Run {active['run_id']} was cancelled while creating its draft PR; published artifacts were cleaned up.")
         if pr.returncode:
             raise WorkerError(f"초안 PR 생성 실패: {pr.stderr[-1000:]}")
         return pr.stdout.strip()
@@ -1116,11 +1277,31 @@ class Worker:
             self.metrics["tasks"]["unknown|blocked"] = self.metrics["tasks"].get("unknown|blocked", 0) + 1
             return True
 
+        active = {
+            "task_id": task_id,
+            "run_id": run_id,
+            "read_only": bool(task.route and task.route.read_only),
+            "process": None,
+            "cancelled": threading.Event(),
+            "stop_monitor": threading.Event(),
+            "accept_cancel": True,
+        }
+        with self.active_lock:
+            self.active_run = active
+        monitor = threading.Thread(target=self._watch_active_task, args=(active,), daemon=True, name=f"cancel-watch-{run_id}")
+        monitor.start()
+
         checkout = self.workspace
         try:
+            self._refresh_cancel_state(active)
             if task.is_code:
-                checkout = self._checkout_repo(task)
-            result = self._run_hermes(task, task.is_code, checkout)
+                checkout = self._checkout_repo(task, active)
+            self._refresh_cancel_state(active)
+            result = self._run_hermes(task, task.is_code, checkout, active)
+            # Keep watching through result processing and publication. Turn it
+            # off immediately before the worker itself performs a final state
+            # transition, so its own review/human update cannot look like cancel.
+            self._refresh_cancel_state(active)
             outcome, summary = parse_worker_outcome(result)
             human_actions = parse_marked_tasks(result, HUMAN_ACTION_RE, default_human=True)
             backlog_proposals = parse_marked_tasks(result, BACKLOG_PROPOSAL_RE)
@@ -1132,17 +1313,24 @@ class Worker:
                 handoff_summary = summary + outcome_note
                 if backlog_notes:
                     handoff_summary += "\n\n" + "\n".join(backlog_notes)
+                self._refresh_cancel_state(active)
+                active["accept_cancel"] = False
                 self._create_human_handoff(task, human_actions, handoff_summary)
                 outcome = "waiting"
             elif task.is_code and not (task.route and task.route.read_only):
-                pr_url = self._publish_draft_pr(task, checkout, summary)
+                self._refresh_cancel_state(active)
+                pr_url = self._publish_draft_pr(task, checkout, summary, active)
                 notes = "\n\n" + "\n".join(backlog_notes) if backlog_notes else ""
                 self._comment(task_id, f"Task result:\n\n{summary[:5000]}{outcome_note}{notes}\n\nDraft PR: {pr_url}")
+                self._refresh_cancel_state(active)
+                active["accept_cancel"] = False
                 self._call("update_task", {"id": task_id, "status": "review", "url": pr_url})
                 outcome = "review"
             else:
                 notes = "\n\n" + "\n".join(backlog_notes) if backlog_notes else ""
                 self._comment(task_id, f"Task result:\n\n{summary[:5000] or 'Task completed. See the Hermes run for details.'}{outcome_note}{notes}")
+                self._refresh_cancel_state(active)
+                active["accept_cancel"] = False
                 if (task.route and task.route.read_only) or outcome == "review":
                     outcome = "review"
                     self._call("update_task", {"id": task_id, "status": "review", "human": True})
@@ -1151,6 +1339,12 @@ class Worker:
             self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|{outcome}"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|{outcome}", 0) + 1
             self.metrics["last_success"] = int(time.time())
         except Exception as exc:
+            if isinstance(exc, TaskCancelled) or active["cancelled"].is_set():
+                LOG.info("Task %s run %s cancelled by user", task_id, run_id)
+                self._record_cancelled_run(task_id, run_id)
+                self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|cancelled"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|cancelled", 0) + 1
+                return True
+            active["accept_cancel"] = False
             LOG.exception("Task execution failed for %s", task_id)
             try:
                 if self._handoff_for_failure(task, exc):
@@ -1164,8 +1358,16 @@ class Worker:
                 result_kind = "blocked"
             self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|{result_kind}"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|{result_kind}", 0) + 1
         finally:
+            active["stop_monitor"].set()
+            active["accept_cancel"] = False
+            with self.active_lock:
+                if self.active_run is active:
+                    self.active_run = None
             if checkout != self.workspace and checkout.exists():
                 shutil.rmtree(checkout, ignore_errors=True)
+            active_checkout = active.get("checkout")
+            if active_checkout and Path(active_checkout) != self.workspace and Path(active_checkout).exists():
+                shutil.rmtree(active_checkout, ignore_errors=True)
             self.metrics["active"] = 0
         return True
 

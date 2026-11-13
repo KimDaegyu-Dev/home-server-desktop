@@ -144,12 +144,32 @@ spec:
             capabilities:
               drop: [ALL]
         - name: bootstrap-omh
-          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
           imagePullPolicy: Never
           command: [/bin/sh, -ec]
           args:
             - |
               export HERMES_HOME=/opt/data/home HOME=/opt/data/home
+              python - <<'PY'
+              import json
+              import shutil
+              from pathlib import Path
+
+              image_store = Path('/opt/hermes/tools')
+              home_store = Path('/opt/data/home/tools')
+              image_facts = json.loads((image_store / 'facts.json').read_text(encoding='utf-8'))
+              pnpm = image_facts.get('packages', {}).get('pnpm')
+              if not pnpm:
+                  raise SystemExit('image is missing the pinned pnpm package metadata')
+              home_store.mkdir(parents=True, exist_ok=True)
+              entry = pnpm['entry']
+              shutil.copytree(image_store / entry, home_store / entry, dirs_exist_ok=True)
+              facts_path = home_store / 'facts.json'
+              home_facts = json.loads(facts_path.read_text(encoding='utf-8')) if facts_path.exists() else {'packages': {}, 'schema': image_facts.get('schema')}
+              home_facts.setdefault('packages', {})['pnpm'] = pnpm
+              facts_path.write_text(json.dumps(home_facts, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+              PY
+              /opt/hermes/.venv/bin/python -c 'from pm.install import installed_package; assert installed_package("pnpm") is not None'
               hermes kanban init
               hermes config set kanban.dispatch_in_gateway true
               hermes config set kanban.dispatch_interval_seconds 60
@@ -241,7 +261,7 @@ spec:
               drop: [ALL]
       containers:
         - name: worker
-          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
           imagePullPolicy: Never
           ports:
             - name: metrics
@@ -342,7 +362,7 @@ spec:
               drop: [ALL]
             readOnlyRootFilesystem: true
         - name: kanzo-event-adapter
-          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
           imagePullPolicy: Never
           command: [python, /opt/kanzo-agent/event_adapter.py]
           env:
@@ -368,7 +388,7 @@ spec:
               drop: [ALL]
             readOnlyRootFilesystem: true
         - name: hermes-gateway
-          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
           imagePullPolicy: Never
           command: [hermes, gateway, run]
           env:
@@ -422,7 +442,7 @@ spec:
               drop: [ALL]
             readOnlyRootFilesystem: true
         - name: hermes-dashboard
-          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
           imagePullPolicy: Never
           command: [hermes, serve, --host, 0.0.0.0, --port, "9119"]
           ports:
@@ -485,7 +505,7 @@ spec:
               drop: [ALL]
             readOnlyRootFilesystem: true
         - name: readonly-executor
-          image: localhost/home-server/kanzo-agent-worker:0.2.0-hermes-v0.23.1-omh-4.0.7
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
           imagePullPolicy: Never
           command: [python, /opt/kanzo-agent/readonly_executor.py]
           env:

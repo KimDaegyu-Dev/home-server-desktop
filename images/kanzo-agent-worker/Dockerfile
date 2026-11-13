@@ -15,6 +15,14 @@ RUN test -n "${OMH_SOURCE_COMMIT}" \
        "https://github.com/rlaope/oh-my-hermes/archive/${OMH_SOURCE_COMMIT}.tar.gz" \
     && /opt/hermes/.venv/bin/omh --version
 
+# Hermes v0.23.1 declares pnpm required in its PM lockfile even in the
+# docker-managed runtime image. Bake the pinned PM artifact into this derived
+# image so every Hermes command passes its runtime drift check.
+RUN HERMES_HOME=/opt/hermes HOME=/opt/hermes \
+    /opt/hermes/.venv/bin/python -c 'from pm.install import ensure, installed_package; ensure("pnpm", explicit=True); assert installed_package("pnpm") is not None' \
+    && chmod 0644 /opt/hermes/tools/facts.json \
+    && chmod -R a+rX /opt/hermes/tools/pnpm-*
+
 COPY --chown=10000:10000 entrypoint.sh /opt/kanzo-agent/entrypoint.sh
 RUN chmod 0555 /opt/kanzo-agent/entrypoint.sh
 

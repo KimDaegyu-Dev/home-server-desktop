@@ -27,4 +27,9 @@ buildah bud --format oci --platform linux/amd64 \
 buildah push "${image}" "oci-archive:${archive}:${image}"
 k3s ctr -n k8s.io images import "${archive}"
 k3s ctr -n k8s.io images list -q | grep -Fxq "${image}"
+k3s ctr -n k8s.io run --rm --user 10000:10000 \
+  --env HERMES_HOME=/opt/hermes --env HOME=/opt/hermes \
+  "${image}" kanzo-agent-worker-pmcheck \
+  /opt/hermes/.venv/bin/python -c \
+  'from pm.install import activate; problems = activate(allow_incomplete=True); print(problems); assert not problems, problems'
 echo "Built and imported ${image} from ${base_image}."

@@ -88,7 +88,7 @@ data:
         },
         {
           "name": "kanzo",
-          "url": "http://kanzo:4242/mcp",
+          "url": "http://kanzo-web.kanzo.svc.cluster.local:8080/mcp",
           "protocol": "http",
           "enabled": true
         },

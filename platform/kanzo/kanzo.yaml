@@ -84,7 +84,7 @@ spec:
               drop: [ALL]
       containers:
         - name: kanzo
-          image: localhost/home-server/kanzo:0.4.2-agent.1
+          image: localhost/home-server/kanzo:0.4.2-agent.2
           imagePullPolicy: Never
           command: [/kanzo, --home, /data, --port, "4242", --no-open]
           env:

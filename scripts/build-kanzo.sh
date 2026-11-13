@@ -30,6 +30,7 @@ actual_commit="$(git -C "${source_dir}" rev-parse HEAD)"
   exit 1
 }
 git -C "${source_dir}" apply "${repo_root}/platform/kanzo/kanzo-agent-routing.patch"
+git -C "${source_dir}" apply "${repo_root}/platform/kanzo/kanzo-mcp-annotations.patch"
 
 buildah bud --format oci --platform linux/amd64 \
   --build-arg "RUST_BUILDER=${rust_builder}" \

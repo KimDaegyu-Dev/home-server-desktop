@@ -1,0 +1,94 @@
+diff --git a/src/mcp.rs b/src/mcp.rs
+index d99d97f..5dae177 100644
+--- a/src/mcp.rs
++++ b/src/mcp.rs
+@@ -350,7 +350,7 @@ impl Kanzo {
+         reply(outcome)
+     }
+ 
+-    #[tool(description = "List projects with their repos and open task counts.")]
++    #[tool(description = "List projects with their repos and open task counts.", annotations(read_only_hint = true))]
+     async fn list_projects(&self, ext: Extensions) -> Result<CallToolResult, ErrorData> {
+         Ok(self
+             .run_for(&ext, |ctx, store| {
+@@ -380,7 +380,7 @@ impl Kanzo {
+             .await)
+     }
+ 
+-    #[tool(description = "Create a project.")]
++    #[tool(description = "Create a project.", annotations(read_only_hint = false, destructive_hint = false))]
+     async fn create_project(
+         &self,
+         Parameters(args): Parameters<CreateProjectArgs>,
+@@ -394,7 +394,7 @@ impl Kanzo {
+             .await)
+     }
+ 
+-    #[tool(description = "Link another GitHub repo to a project.")]
++    #[tool(description = "Link another GitHub repo to a project.", annotations(read_only_hint = false, destructive_hint = false))]
+     async fn link_repo(&self, Parameters(args): Parameters<LinkRepoArgs>) -> Result<CallToolResult, ErrorData> {
+         Ok(self
+             .run(move |_, store| {
+@@ -404,7 +404,7 @@ impl Kanzo {
+             .await)
+     }
+ 
+-    #[tool(description = "List tasks in board order.")]
++    #[tool(description = "List tasks in board order.", annotations(read_only_hint = true))]
+     async fn list_tasks(
+         &self,
+         Parameters(args): Parameters<ListTasksArgs>,
+@@ -466,7 +466,7 @@ impl Kanzo {
+             .await)
+     }
+ 
+-    #[tool(description = "Show a task with its comments and image paths.")]
++    #[tool(description = "Show a task with its comments and image paths.", annotations(read_only_hint = true))]
+     async fn get_task(
+         &self,
+         Parameters(args): Parameters<TaskArgs>,
+@@ -480,7 +480,7 @@ impl Kanzo {
+             .await)
+     }
+ 
+-    #[tool(description = "Add a task, to todo unless you pass status.")]
++    #[tool(description = "Add a task, to todo unless you pass status.", annotations(read_only_hint = false, destructive_hint = false))]
+     async fn create_task(
+         &self,
+         Parameters(args): Parameters<CreateTaskArgs>,
+@@ -498,7 +498,7 @@ impl Kanzo {
+             .await)
+     }
+ 
+-    #[tool(description = "Change the fields you pass.")]
++    #[tool(description = "Change the fields you pass.", annotations(read_only_hint = false, destructive_hint = false))]
+     async fn update_task(&self, Parameters(args): Parameters<UpdateTaskArgs>) -> Result<CallToolResult, ErrorData> {
+         Ok(self
+             .run(move |_, store| {
+@@ -528,7 +528,7 @@ impl Kanzo {
+             .await)
+     }
+ 
+-    #[tool(description = "Comment on a task, like to report progress.")]
++    #[tool(description = "Comment on a task, like to report progress.", annotations(read_only_hint = false, destructive_hint = false))]
+     async fn add_comment(
+         &self,
+         Parameters(args): Parameters<AddCommentArgs>,
+@@ -545,7 +545,7 @@ impl Kanzo {
+             .await)
+     }
+ 
+-    #[tool(description = "Take the top todo task, move it to doing and show it.")]
++    #[tool(description = "Take the top todo task, move it to doing and show it.", annotations(read_only_hint = false, destructive_hint = false))]
+     async fn next_task(
+         &self,
+         Parameters(args): Parameters<NextTaskArgs>,
+@@ -572,7 +572,7 @@ impl Kanzo {
+             .await)
+     }
+ 
+-    #[tool(description = "Delete a task with its comments and images. Can't be undone.")]
++    #[tool(description = "Delete a task with its comments and images. Can't be undone.", annotations(read_only_hint = false, destructive_hint = true))]
+     async fn delete_task(&self, Parameters(args): Parameters<TaskArgs>) -> Result<CallToolResult, ErrorData> {
+         Ok(self
+             .run(move |ctx, store| {

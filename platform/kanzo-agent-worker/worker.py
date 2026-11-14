@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import threading
 import time
+import textwrap
 import urllib.error
 import urllib.request
 import uuid
@@ -453,6 +454,47 @@ def format_worker_comment(result: str) -> str:
     return text.strip()
 
 
+def split_long_comment(body: str, limit: int = 4200) -> list[str]:
+    """Split long Markdown comments on line boundaries without leaving code fences open."""
+    if len(body) <= limit:
+        return [body]
+
+    chunks: list[str] = []
+    current = ""
+    fence: str | None = None
+    for raw_line in body.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        newline = "\n" if raw_line.endswith(("\n", "\r")) else ""
+        pieces = textwrap.wrap(
+            line,
+            width=limit - 16,
+            break_long_words=True,
+            break_on_hyphens=False,
+            replace_whitespace=False,
+            drop_whitespace=False,
+        ) or [""]
+        for index, piece in enumerate(pieces):
+            part = piece + (newline if index == len(pieces) - 1 else "\n")
+            fence_close = "\n```\n" if fence else ""
+            if current and len(current) + len(part) + len(fence_close) > limit:
+                if fence:
+                    current += fence_close
+                chunks.append(current.rstrip())
+                current = f"{fence}\n" if fence else ""
+            current += part
+            marker = piece.lstrip()
+            if marker.startswith("```") and index == 0:
+                if fence is None:
+                    fence = marker.strip()
+                else:
+                    fence = None
+    if current:
+        if fence:
+            current += "\n```"
+        chunks.append(current.rstrip())
+    return chunks
+
+
 class Worker:
     def __init__(self, env: dict[str, str] | None = None):
         self.env = env or os.environ
@@ -674,6 +716,12 @@ class Worker:
 
     def _comment(self, task_id: str, body: str) -> None:
         self._call("add_comment", {"id": task_id, "body": body, "author": "Hermes Kanzo Worker"})
+
+    def _comment_result(self, task_id: str, body: str) -> None:
+        chunks = split_long_comment(body)
+        for index, chunk in enumerate(chunks, start=1):
+            label = f"Task result ({index}/{len(chunks)})"
+            self._comment(task_id, f"{label}:\n\n{chunk}")
 
     def _status(self, task_id: str, status: str) -> None:
         self._call("update_task", {"id": task_id, "status": status})
@@ -1368,14 +1416,14 @@ class Worker:
                 self._refresh_cancel_state(active)
                 pr_url = self._publish_draft_pr(task, checkout, summary, active)
                 notes = "\n\n" + "\n".join(backlog_notes) if backlog_notes else ""
-                self._comment(task_id, f"Task result:\n\n{summary[:5000]}{outcome_note}{notes}\n\nDraft PR: {pr_url}")
+                self._comment_result(task_id, f"{summary}{outcome_note}{notes}\n\nDraft PR: {pr_url}")
                 self._refresh_cancel_state(active)
                 active["accept_cancel"] = False
                 self._call("update_task", {"id": task_id, "status": "review", "url": pr_url})
                 outcome = "review"
             else:
                 notes = "\n\n" + "\n".join(backlog_notes) if backlog_notes else ""
-                self._comment(task_id, f"Task result:\n\n{summary[:5000] or 'Task completed. See the Hermes run for details.'}{outcome_note}{notes}")
+                self._comment_result(task_id, f"{summary or 'Task completed. See the Hermes run for details.'}{outcome_note}{notes}")
                 self._refresh_cancel_state(active)
                 active["accept_cancel"] = False
                 if (task.route and task.route.read_only) or outcome == "review":

@@ -1,7 +1,6 @@
 # Kanzo · Hermes 실행 구조 개선 로드맵
 
-작성일: 2026-11-14  
-상태: 설계 제안. 아래 완료로 표시한 기존 수정 외에는 구현·배포되지 않았다.
+Design SSOT: this document defines architecture and acceptance criteria. Execution progress is tracked separately.
 
 ## 목표와 판단 원칙
 
@@ -20,47 +19,6 @@ Hermes의 학습 루프 보존을 실행 구조 선택의 선행 조건으로 �
 - 에이전트의 후속 제안은 `backlog`에 둔다. 사용자가 `todo`로 승격한다. backlog 수와 stale 카드 보관 기간을 제한하지 않으며 자동 삭제·보관하지 않는다.
 - 거절된 제안은 `declined`와 짧은 이유를 남겨 추적한다. 중복 검사는 해당 프로젝트의 관련 후보를 좁혀 수행한다.
 - 비밀값은 Vault/VSO로 전달한다. Git, 카드 본문, 로그, 메모리에 비밀값을 기록하지 않는다.
-
-## 현재 확인한 동작
-
-기준 코드는 `b3a553e`와 그 선행 커밋이며, 아래 내용은 해당 코드와 실행 환경을 조사한 결과다. 리소스 수치는 측정 시점의 스냅샷이며 용량 산정 결과가 아니다.
-
-| 영역 | 현재 동작 | 개선 이유 |
-|---|---|---|
-| 배포 단위 | worker·이벤트 어댑터·Gateway·Desktop serve·ReadOnly executor가 한 Pod에 있음 | 작은 코드 변경도 대화용 서비스와 실행 환경 전체를 교체함 |
-| 리소스 | idle 사용량 약 795Mi, 컨테이너 memory requests 합계 약 3.53Gi | idle 사용량만으로 requests를 줄일 수 없음. 실행 중 peak 측정 필요 |
-| 작업 디렉터리 | `/workspace`는 4Gi 제한의 Pod `emptyDir` | Pod 교체 시 사라지며 로컬 Windows 저장소와 연결되지 않음 |
-| 저장소 준비 | `is_code`로 분류된 태스크만 GitHub에서 새 clone | repo가 연결된 분석·리뷰도 소스가 준비되지 않을 수 있음 |
-| checkout 수명 | `/workspace/<project>-<task-number>` 사용 후 성공·실패 모두 삭제 | 미보존 결과와 변경 사항이 사라짐. 실행별 경로도 필요 |
-| ReadOnly | 별도 executor가 `/workspace`를 읽기 전용으로 마운트 | 소스 쓰기 제약은 있으나 `/opt/data`는 쓰기 가능하므로 전체 환경이 ReadOnly인 것은 아님 |
-| 프로필 동기화 | 원본 역할 프로필을 별도 HOME으로 선택적으로 복사 | 설정·의존성·인증 전달이 갈라지고 복사 비용 및 상태 불일치가 발생함 |
-| 프롬프트 | 태스크 상세와 기존 댓글 전체를 입력에 포함 | 실패 이력과 이전 결과가 쌓일수록 입력이 커짐 |
-| 결과 게시 | 최종 댓글 본문을 5000자로 절단 | 긴 결과가 중간에서 잘릴 수 있음 |
-| 초기화 | Pod 시작마다 프로필별 CLI 설정, OMH setup·doctor 등을 실행 | 상주 executor의 재시작·배포 시간도 늘어나므로 런타임 준비와 실행을 분리해야 함 |
-| 실행 제어 | 프로세스와 Gateway의 수명이 분리될 수 있음 | 타임아웃 후 고아 Gateway와 회수되지 않은 자식 프로세스가 관측됨 |
-
-### 실제 공유 범위
-
-| 데이터 | 일반 프로필과 ReadOnly 실행 사이의 관계 |
-|---|---|
-| `state.db`, 대화·세션 | 서로 다른 HOME의 별도 상태 |
-| Hermes Kanban | 일반 `/opt/data/home/kanban.db`, ReadOnly `/opt/data/readonly-hermes/kanban.db`로 기본 경로가 다름 |
-| 프로필 로컬 스킬·플러그인·스크립트 | 원본에서 ReadOnly HOME으로 단방향 복사. 양방향 동기화 아님 |
-| 외부 OMH 스킬 | 양쪽 모두 `/opt/data/home/.omh/skills` 참조 |
-| OMH 메모리 | 양쪽 모두 `plugins.entries.omh.settings.omh_home: /opt/data/home/.omh` 설정 |
-| ai-memory·Graphify 등 MCP | 같은 외부 서비스에 연결. 허용 범위와 데이터 scope는 별도 확인 필요 |
-
-같은 메모리 저장소를 사용한다는 사실만으로 프로젝트·사용자별 검색 범위가 올바르다고 판단하지 않는다. 또한 별도 HOME이 있어도 원본 PVC 전체를 쓰기 가능하게 마운트한 상태에서는 강한 파일 접근 격리로 간주하지 않는다.
-
-### 이미 반영한 수정과 남은 한계
-
-- [x] `3b14149`: `status: review, human: ...`의 쉼표 때문에 취소를 놓치던 상태 파서 수정.
-- [x] `b3a553e`: ReadOnly 프로필 secret scope에 Vault에서 주입된 Langfuse 키와 URL 전달. 파생 `.env` 권한은 0600.
-- [ ] 실행 준비 검사, 자식 프로세스 전체 종료, 최종 trace 연결까지 포함한 종료 처리는 미완료.
-
-#18의 마지막 조사 실행 `36f71317683e`는 45분 제한에 도달해 code 124로 끝났다. Langfuse trace `ba764768cca8a5f9ba39c56025016da6`에서 generation 36건과 tool observation 71건을 확인했으나 root의 Kanzo task/run metadata는 확인하지 못했다. `sessionId`는 있었고 `userId`는 로컬 계정 `uid:10000`이었다. 이를 작업 완료나 실제 사용자 식별 성공으로 기록하지 않는다.
-
-위임 예산 오류와 unattended heredoc 차단도 발생했다. 전체 지연이 모델 대기·추론·입력 처리·도구 실행·컨텍스트 압축 중 어디에서 얼마나 발생했는지는 추가 계측이 필요하다.
 
 ## 목표 구조와 책임
 
@@ -124,7 +82,7 @@ ai-memory는 검증된 장기 공유 지식의 역할을 유지한다. Hermes/OM
 
 ## 단계별 적용
 
-모든 단계는 미착수다. 앞 단계의 완료 기준이 충족되면 다음 단계로 진행한다. 문서 작성은 클러스터 변경이나 태스크 재실행을 의미하지 않는다.
+단계는 순차적인 구현·검증 흐름과 각 단계의 완료 기준을 정의한다. 실제 진행 현황은 별도 상태 문서에서 관리한다.
 
 ### 0. 기준선과 실행 계약 확정
 
@@ -320,11 +278,3 @@ ai-memory는 검증된 장기 공유 지식의 역할을 유지한다. Hermes/OM
 - [Hermes 학습 루프 개요](https://hermes-agent.nousresearch.com/docs)
 - [Hermes 스킬·자기 개선](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills/)
 - [OMH 메모리 수용·정리 정책](https://github.com/rlaope/oh-my-hermes/blob/main/docs/MEMORY_CONTEXT.md)
-
-## Execution checkpoint
-
-- Rollback snapshot `v1` points to commit `f11abf6` and is pushed to `origin`; it contains the pre-runtime-change worker and the reviewed roadmap.
-- Phase 0 baseline was checked on 2026-11-14: Argo CD was Synced/Healthy at `b3a553e`, the worker was idle (`kanzo_worker_task_active 0`), and its single Pod had five ready containers.
-- The observed idle sample was about 1,006 MiB and 250 millicores across the Pod: dashboard 322 MiB/8m, Gateway 592 MiB/239m, event adapter 13 MiB/1m, read-only executor 59 MiB/1m, worker 20 MiB/1m. This is one sample, not a peak or sizing target.
-- Phase 1 implementation in progress: repository-backed read-only tasks now prepare a checkout and include its exact Git HEAD in the prompt. The worker still deletes that checkout after the run; durable artifacts and shared object caching remain future work.
-- The installed Hermes 0.23.1 `chat --oneshot` launch attaches through the canonical Gateway session flow. The read-only executor currently uses a separate HOME, so its Gateway and session state are separate; persistence changes must account for that boundary.

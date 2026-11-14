@@ -363,6 +363,16 @@ def status_from_details(details: str) -> str | None:
     return match.group(1).lower() if match else None
 
 
+def human_from_details(details: str) -> bool:
+    """Accept both the boolean and the human-readable Kanzo task detail formats."""
+    return bool(re.search(
+        r"^(?:human:\s*(?:true\b|for the user, not for agents\b)|"
+        r"status:[^\r\n]*?,\s*human:\s*(?:true\b|for the user, not for agents\b))",
+        details,
+        re.IGNORECASE | re.MULTILINE,
+    ))
+
+
 def parse_projects(text: str) -> dict[str, str]:
     """Read optional GitHub repo links from Kanzo's human-readable project listing."""
     result: dict[str, str] = {}
@@ -541,7 +551,7 @@ class Worker:
             return False
         return (
             status_from_details(details) == "review"
-            and bool(re.search(r"^human:\s*true\b", details, re.IGNORECASE | re.MULTILINE))
+            and human_from_details(details)
         )
 
     def _cancel_active_executor(self, active: dict[str, Any]) -> None:
@@ -644,7 +654,7 @@ class Worker:
         try:
             details = self._call("get_task", {"id": task_id})
             state = status_from_details(details)
-            human = bool(re.search(r"^human:\s*true\b", details, re.IGNORECASE | re.MULTILINE))
+            human = human_from_details(details)
             suffix = "The task remains in review with human=true." if state == "review" and human else (
                 f"The task changed to {state or 'an unknown state'} during cancellation; its latest Kanzo state was preserved."
             )
@@ -1271,7 +1281,7 @@ class Worker:
             self.metrics["active"] = 0
             self.metrics["tasks"]["unknown|blocked"] = self.metrics["tasks"].get("unknown|blocked", 0) + 1
             return True
-        if re.search(r"^human:\s*true\b", details, re.IGNORECASE | re.MULTILINE):
+        if human_from_details(details):
             self._blocked(task_id, "사람 전용 태스크로 표시되어 있습니다.")
             self.metrics["active"] = 0
             self.metrics["tasks"]["unknown|blocked"] = self.metrics["tasks"].get("unknown|blocked", 0) + 1

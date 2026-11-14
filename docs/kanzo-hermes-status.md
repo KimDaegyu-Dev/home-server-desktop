@@ -4,7 +4,8 @@
 
 ## 현재 상태
 
-- 현재 기준: 2026-11-14, 로드맵 Phase 1 진행 중, Phase 2 조사 완료, Phase 3 일부 구현.
+- 현재 기준: 2026-11-14. Phase 1은 핵심 구현 후 잔여 항목 확인 중, Phase 2는 데이터 경계 조사 완료·전환 미구현, Phase 3은 내구성 장부·이벤트 복구 일부 구현, Phase 4는 Hermes 확장점과 격리 계약 조사 완료·구현 전이다. Phase 5–6은 시작 전이다.
+- 다음 작업: 상주 Gateway 호출에서 `HERMES_SESSION_KEY`와 Kanzo `run_id`/lease의 상관관계를 확정한 뒤, Kanzo 전용 provider와 broker의 최소 수직 경로를 구현한다. 이 계약이 확인되기 전에는 broker API를 고정하지 않는다.
 - 기준 스냅샷 `v1`: 커밋 `f11abf6` (`origin`에 push 완료). 런타임 변경 전 worker 코드와 설계 로드맵이 포함되어 있다.
 - 워커 런타임 소스: `e59a758` (`feat(kanzo): persist and recover run artifacts`).
 - 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `e59a7586ec2ed77c50ffa0af1fffa7866f6ca822`에서 Synced/Healthy였고 Pod `kanzo-agent-worker-f965d8879-ttf9m`는 5/5 Ready, restart 0, 태스크 active gauge 0이었다. 배포된 `worker.py`, `run_ledger.py`, `artifact_store.py` SHA-256은 저장소 파일과 각각 일치했다.
@@ -18,7 +19,7 @@
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 조사 완료, 구현 전 | ReadOnly executor는 별도 HOME과 `state.db`를 써 일반 Gateway/Desktop의 세션 검색·재개와 분리된다. 프로필 로컬 skills/plugins/scripts/`.omh`를 매 run 복사하며 대상 디렉터리를 지워 학습 변경이 사라질 수 있다. OMH 메모리 절대 경로는 공유되지만 반성 hook의 실행·다음 세션 검색은 검증되지 않았다. 지속 Gateway 세션과 run별 도구 backend로 전환해야 한다. |
 | 3. durable run ledger와 이벤트 | 일부 구현 | Hermes HOME PVC의 SQLite 장부에 run 상태·설정·소스 SHA·결과와 게시 체크포인트를 기록한다. 재시작 시 미종료 run을 자동 실행하지 않고, 저장 응답과 댓글의 run별 marker를 이용해 누락된 결과 댓글만 복구한 뒤 사람 검토로 보낸다. 이벤트 중복·재연결 구간, 다중 dispatcher lease/CAS, PR 및 다른 외부 게시의 멱등 재개, 실태스크 검증은 남아 있다. 자동 재시도는 추가하지 않는다. |
-| 4. 상주 executor와 작업 도구 격리 | 조사 일부 완료 | 클러스터 Hermes 0.23.1의 canonical `session.create`/`prompt.submit`/`session.interrupt`와 terminal provider 확장점을 확인했다. `session.create` policy의 terminal scope는 해당 profile 설정에서 만들어져 저장되며 request에 terminal backend override가 없다. Kanzo 전용 프로필의 backend 등록과 session↔run 매핑, remote cancel/cleanup, broker 경계가 필요하다. 상주 Gateway에 run별 backend를 연결하는 최소 검증과 분리 배포는 남아 있다. |
+| 4. 상주 executor와 작업 도구 격리 | 구현 전, 연동 계약 조사 완료 | Hermes 0.23.1의 사용자 plugin 등록 경로와 `TerminalEnvironmentProvider`를 확인했다. 사용자 플러그인은 Gateway의 Hermes HOME 아래 `plugins/<name>/`에서 읽히며 `plugin.yaml`과 `register(ctx)`를 쓴다. terminal, `execute_code`, file 도구가 같은 environment factory를 경유한다. provider의 `task_id`는 환경 캐시 키이므로 Kanzo run ID나 Gateway `session_id`로 간주할 수 없다. 실제 세션 문맥에서 `HERMES_SESSION_KEY`를 읽고 Kanzo run/lease와 결합하는 계약이 선행되어야 한다. provider를 `plugins.isolation: host`로 두면 Gateway 프로세스 내부 환경으로 사용할 수 없어 Kanzo 전용 프로필의 `in_process` 설정이 필요하다. gateway에 plugin ConfigMap 마운트, 별도 broker namespace/고정 sandbox template, 명령·파일 작업의 원격 취소와 cleanup은 미구현이다. |
 | 5. 결과·추적·위임 | 시작 전 | 구조화된 완료 근거, run/session tracing, 자식 작업 예산과 결과 게시의 일관성을 구현·확인해야 한다. |
 | 6. 성능·학습 보존 검증 | 시작 전 | 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
 

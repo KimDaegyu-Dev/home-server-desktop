@@ -21,6 +21,7 @@ configMapGenerator:
     options:
       annotations:
         argocd.argoproj.io/sync-wave: "-2"
+        argocd.argoproj.io/sync-options: ServerSideApply=true
     files:
       - worker.py=worker.py
       - run_ledger.py=run_ledger.py

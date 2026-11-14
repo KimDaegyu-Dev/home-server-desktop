@@ -1,5 +1,7 @@
 # Kanzo Hermes worker
 
+See [Kanzo · Hermes execution roadmap](kanzo-hermes-roadmap.md) for the reviewed limitations, sharing boundaries, staged changes, and acceptance criteria. The roadmap is a proposal; the behavior below describes the current deployment.
+
 The deployment has Kanzo, a small SSE event adapter, a Hermes dispatcher, a Hermes gateway, a Hermes `serve` endpoint for Desktop, and a read-only Hermes executor in the `mcp` namespace. Kanzo publishes task-free change events from its in-process write notifications. The adapter keeps one stream open and wakes the dispatcher through loopback; it reconnects with backoff and requests a queue reconciliation after every connection. The dispatcher claims work through Kanzo MCP after an event or startup wake, drains all currently eligible tasks, then sleeps without querying Kanzo. Kanzo remains the durable source of truth, so events are hints rather than task payloads. Only project catalog cards in `doing` are active; catalog `todo` is inactive. In an active project, task `backlog` is unapproved, `todo` is eligible for an agent or human action, `doing` is claimed, `review` pauses claims, and `done` archives the task. The optional `backlog` setting is already enabled in the current Kanzo board; it persists in Kanzo's database. `Recreate` prevents overlapping dispatcher/gateway pods.
 
 ## Task behavior

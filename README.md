@@ -55,3 +55,5 @@ versions.yml   도구 버전 고정
 ```
 
 현재 설치 상태와 이전 기록은 [`docs/migration-status.md`](docs/migration-status.md)를 참고하세요. Docker Engine은 별도 복구 지시 전까지 시작하지 않습니다.
+
+Kanzo · Hermes의 작업 디렉터리, 프로필 공유, 실행 격리와 성능 개선 계획은 [`docs/kanzo-hermes-roadmap.md`](docs/kanzo-hermes-roadmap.md)에 정리되어 있습니다.

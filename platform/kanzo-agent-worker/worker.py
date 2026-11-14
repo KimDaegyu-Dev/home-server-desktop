@@ -402,7 +402,8 @@ def select_task_prompt_context(details: str, *, max_comments: int = 8, max_comme
     if not header:
         return details
     matches = list(TASK_COMMENT_RE.finditer(details, header.end()))
-    if not matches and details[header.end():].strip():
+    expected_comments = int(re.search(r"\((\d+)\)", header.group(0)).group(1))
+    if len(matches) != expected_comments:
         # Preserve unknown formats rather than silently dropping task context.
         return details
 
@@ -496,7 +497,7 @@ def split_long_comment(body: str, limit: int = 4200) -> list[str]:
 
     chunks: list[str] = []
     current = ""
-    fence: str | None = None
+    fence: tuple[str, str] | None = None
     for raw_line in body.splitlines(keepends=True):
         line = raw_line.rstrip("\r\n")
         newline = "\n" if raw_line.endswith(("\n", "\r")) else ""
@@ -510,22 +511,25 @@ def split_long_comment(body: str, limit: int = 4200) -> list[str]:
         ) or [""]
         for index, piece in enumerate(pieces):
             part = piece + (newline if index == len(pieces) - 1 else "\n")
-            fence_close = "\n```\n" if fence else ""
+            fence_close = f"\n{fence[0]}\n" if fence else ""
             if current and len(current) + len(part) + len(fence_close) > limit:
                 if fence:
                     current += fence_close
                 chunks.append(current.rstrip())
-                current = f"{fence}\n" if fence else ""
+                current = f"{fence[1]}\n" if fence else ""
             current += part
             marker = piece.lstrip()
-            if marker.startswith("```") and index == 0:
-                if fence is None:
-                    fence = marker.strip()
-                else:
-                    fence = None
+            if index == 0:
+                delimiter = re.match(r"^(`{3,}|~{3,})(.*)$", marker)
+                if fence is None and delimiter:
+                    fence = (delimiter.group(1), marker.rstrip())
+                elif fence is not None:
+                    close = re.match(r"^(`+|~+)[ \t]*$", marker)
+                    if close and close.group(1)[0] == fence[0][0] and len(close.group(1)) >= len(fence[0]):
+                        fence = None
     if current:
         if fence:
-            current += "\n```"
+            current += f"\n{fence[0]}"
         chunks.append(current.rstrip())
     return chunks
 

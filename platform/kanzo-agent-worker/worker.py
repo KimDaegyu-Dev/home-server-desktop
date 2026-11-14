@@ -928,7 +928,9 @@ class Worker:
         self.workspace.mkdir(parents=True, exist_ok=True)
         if not re.fullmatch(r"[A-Za-z0-9._-]+", task.project) or not re.fullmatch(r"[A-Za-z0-9._-]+#\d+", task.task_id):
             raise WorkerError("Kanzo project or task ID contains unsupported path characters.")
-        checkout = (self.workspace / f"{task.project}-{task.task_id.split('#')[-1]}").resolve()
+        run_id = active.get("run_id") if active else None
+        run_suffix = f"-{run_id}" if isinstance(run_id, str) and re.fullmatch(r"[a-f0-9]{12}", run_id) else ""
+        checkout = (self.workspace / f"{task.project}-{task.task_id.split('#')[-1]}{run_suffix}").resolve()
         if self.workspace.resolve() not in checkout.parents:
             raise WorkerError("Resolved checkout path escapes the workspace.")
         if active is not None:
@@ -946,7 +948,8 @@ class Worker:
         if active is not None:
             active["source_sha"] = revision.stdout.strip()
         if create_branch:
-            branch = "kanzo/" + re.sub(r"[^a-zA-Z0-9._/-]+", "-", task.task_id.lower())
+            branch_key = re.sub(r"[^a-zA-Z0-9._/-]+", "-", task.task_id.lower())
+            branch = f"kanzo/{branch_key}/{run_id}" if run_suffix else f"kanzo/{branch_key}"
             checked_out = self._run_active_command(["git", "-C", str(checkout), "checkout", "-b", branch], active, timeout=120)
             if checked_out.returncode:
                 raise WorkerError(f"git checkout failed: {checked_out.stderr[-1000:]}")
@@ -1331,13 +1334,15 @@ class Worker:
         checkout = self.workspace
         try:
             self._refresh_cancel_state(active)
-            if task.is_code:
+            if task.route and task.route.repo:
+                # A catalog repo always supplies the source; its read_only
+                # field independently controls whether this run can write.
+                checkout = self._checkout_repo(
+                    task, active,
+                    create_branch=task.is_code and not task.route.read_only,
+                )
+            elif task.is_code:
                 checkout = self._checkout_repo(task, active)
-            elif task.route and task.route.read_only and task.route.repo:
-                # Read-only repository investigations still need the actual
-                # source tree. Prepare it in the worker's writable workspace;
-                # the executor receives that workspace through its RO mount.
-                checkout = self._checkout_repo(task, active, create_branch=False)
             self._refresh_cancel_state(active)
             result = self._run_hermes(task, task.is_code, checkout, active)
             # Keep watching through result processing and publication. Turn it

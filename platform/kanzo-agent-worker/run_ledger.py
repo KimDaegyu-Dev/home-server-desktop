@@ -70,7 +70,7 @@ TRANSITIONS = {
     "cancelled": frozenset(),
     "failed": frozenset(),
     # An operator must explicitly adjudicate a run whose outcome is unknown.
-    "orphaned": frozenset({"review", "cancelled", "failed"}),
+    "orphaned": frozenset({"succeeded", "review", "cancelled", "failed"}),
 }
 
 _SECRET_KEY = re.compile(

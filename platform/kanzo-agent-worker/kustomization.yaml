@@ -13,6 +13,7 @@ configMapGenerator:
     files:
       - worker.py=worker.py
       - run_ledger.py=run_ledger.py
+      - artifact_store.py=artifact_store.py
       - event_adapter.py=event_adapter.py
       - readonly_executor.py=readonly_executor.py
   - name: kanzo-agent-omh-routing

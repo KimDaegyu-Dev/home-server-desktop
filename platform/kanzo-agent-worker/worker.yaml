@@ -372,6 +372,10 @@ spec:
               mountPath: /opt/kanzo-agent/run_ledger.py
               subPath: run_ledger.py
               readOnly: true
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/artifact_store.py
+              subPath: artifact_store.py
+              readOnly: true
             - name: workspace
               mountPath: /workspace
             - name: tmp

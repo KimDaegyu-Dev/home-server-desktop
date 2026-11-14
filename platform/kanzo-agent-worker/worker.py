@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from artifact_store import ArtifactStore
 from run_ledger import RunLedger
 
 
@@ -39,6 +40,10 @@ KANZO_AUTOMATION_AUTHOR = "hermes kanzo worker"
 TASK_COMMENTS_HEADER_RE = re.compile(r"(?m)^Comments \(\d+\):[ \t]*$")
 TASK_COMMENT_RE = re.compile(
     r"(?m)^- (?P<author>[^,\n]+), \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC:[ \t]*"
+)
+SENSITIVE_OUTPUT_RE = re.compile(
+    r"(?i)\b(?:Bearer\s+\S+|sk-[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_]{12,}|"
+    r"mcp_agt_[A-Za-z0-9]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})\b"
 )
 
 
@@ -555,6 +560,7 @@ class Worker:
         self.active_lock = threading.Lock()
         self.active_run: dict[str, Any] | None = None
         self.ledger = RunLedger(self.home / "kanzo-worker" / "run-ledger.sqlite3")
+        self.artifacts = ArtifactStore(self.home / "kanzo-worker" / "artifacts")
         self._ledger_reconciled = False
 
     def _reconcile_ledger(self) -> None:
@@ -573,15 +579,81 @@ class Worker:
             notice = f"Run `{run_id}` was interrupted by a worker restart. The agent was not rerun; inspect its saved result and artifacts before deciding what to do next."
             if run_id not in details:
                 self._comment(task_id, notice)
+            result = run.get("result") or {}
+            try:
+                artifact = self.artifacts.read_result(task_id, run_id)
+            except (OSError, ValueError) as exc:
+                LOG.error("Saved artifact for %s/%s is unreadable: %s", task_id, run_id, exc)
+                artifact = None
+            raw_result = artifact.get("content") if artifact else None
+            result_metadata = result.get("metadata", {}) if isinstance(result, dict) else {}
+            if (
+                raw_result is None
+                and isinstance(result, dict)
+                and isinstance(result.get("summary"), str)
+                and not (isinstance(result_metadata, dict) and result_metadata.get("raw_result_in_artifact"))
+            ):
+                # Backward compatibility for runs persisted before artifact storage.
+                raw_result = result["summary"]
+            published_body = result_metadata.get("published_body") if isinstance(result_metadata, dict) else None
+            if isinstance(published_body, str) and published_body.strip():
+                recovery_body = published_body
+            elif isinstance(raw_result, str) and raw_result.strip():
+                _, rendered_result = parse_worker_outcome(raw_result)
+                recovery_body = (
+                    f"Recovered result from run `{run_id}` after worker restart. "
+                    "No model execution was repeated.\n\n" + rendered_result
+                )
+                draft_pr = result_metadata.get("draft_pr") if isinstance(result_metadata, dict) else None
+                if isinstance(draft_pr, str) and draft_pr.strip():
+                    recovery_body += f"\n\nDraft PR: {draft_pr}"
+                else:
+                    branch = run.get("fields", {}).get("branch")
+                    if isinstance(branch, str) and branch.strip():
+                        recovery_body += f"\n\nRepository branch: `{branch}`"
+            else:
+                recovery_body = ""
+            if recovery_body.strip():
+                self._comment_result(task_id, recovery_body, run_id=run_id, existing_comments=details)
+                self.ledger.mark_publication(run_id, "result_comment")
             if state not in ("done", "review"):
                 self._call("update_task", {"id": task_id, "status": "review", "human": True})
             self.ledger.mark_publication(run_id, "orphan_review_notice")
-            self.ledger.transition(run_id, "review", {
+            result_outcome = result.get("outcome") if isinstance(result, dict) else None
+            reconciled_state = "succeeded" if state == "done" and result_outcome == "done" else "review"
+            self.ledger.transition(run_id, reconciled_state, {
                 "reconciled_at_restart": True,
                 "kanzo_status_at_reconciliation": state or "unknown",
             })
             LOG.warning("Interrupted run %s for %s routed to human review", run_id, task_id)
         self._ledger_reconciled = True
+
+    def _persist_run_diagnostic(self, task_id: str, run_id: str, outcome: str, message: str) -> None:
+        """Persist a safe terminal note when Hermes produced no durable result."""
+        current = self.ledger.get(run_id)
+        if current is None or current.get("result") is not None:
+            return
+        safe_message = message.replace("\x00", "")[:1200]
+        try:
+            artifact = self.artifacts.write_result(task_id, run_id, safe_message, {
+                "outcome": outcome,
+                "source_sha": current.get("fields", {}).get("source_sha"),
+                "diagnostic": True,
+            })
+            self.ledger.save_result(run_id, outcome, safe_message, {
+                "artifact_path": artifact["path"],
+                "artifact_sha256": artifact["sha256"],
+                "raw_result_in_artifact": True,
+            })
+        except Exception:
+            LOG.exception("Could not persist terminal diagnostic for %s/%s", task_id, run_id)
+
+    def _redact_sensitive_output(self, text: str) -> str:
+        redacted = SENSITIVE_OUTPUT_RE.sub("[REDACTED]", text)
+        for name, value in self.env.items():
+            if value and any(marker in name.upper() for marker in ("KEY", "TOKEN", "SECRET", "PASSWORD", "PAT")):
+                redacted = redacted.replace(value, "[REDACTED]")
+        return redacted
 
     def start_metrics_server(self) -> None:
         worker = self
@@ -786,11 +858,21 @@ class Worker:
     def _comment(self, task_id: str, body: str) -> None:
         self._call("add_comment", {"id": task_id, "body": body, "author": "Hermes Kanzo Worker"})
 
-    def _comment_result(self, task_id: str, body: str) -> None:
+    def _comment_result(
+        self,
+        task_id: str,
+        body: str,
+        *,
+        run_id: str | None = None,
+        existing_comments: str = "",
+    ) -> None:
         chunks = split_long_comment(body)
         for index, chunk in enumerate(chunks, start=1):
             label = f"Task result ({index}/{len(chunks)})"
-            self._comment(task_id, f"{label}:\n\n{chunk}")
+            marker = f"<!-- kanzo-run-result:{run_id}:{index}/{len(chunks)} -->\n" if run_id else ""
+            if marker and marker.strip() in existing_comments:
+                continue
+            self._comment(task_id, f"{marker}{label}:\n\n{chunk}")
 
     def _status(self, task_id: str, status: str) -> None:
         self._call("update_task", {"id": task_id, "status": status})
@@ -1070,6 +1152,8 @@ class Worker:
             checked_out = self._run_active_command(["git", "-C", str(checkout), "checkout", "-b", branch], active, timeout=120)
             if checked_out.returncode:
                 raise WorkerError(f"git checkout failed: {checked_out.stderr[-1000:]}")
+            if active is not None:
+                active["branch"] = branch
         return checkout
 
     def _run_hermes(self, task: Task, code: bool, cwd: Path, active: dict[str, Any] | None = None) -> str:
@@ -1521,18 +1605,44 @@ class Worker:
             self.ledger.transition(run_id, "running", {
                 "source_sha": source_sha or None,
                 "checkout": str(checkout),
+                "branch": active.get("branch"),
                 "read_only": bool(task.route and task.route.read_only),
             })
             result = self._run_hermes(task, task.is_code, checkout, active)
+            result = self._redact_sensitive_output(result)
             # Keep watching through result processing and publication. Turn it
             # off immediately before the worker itself performs a final state
             # transition, so its own review/human update cannot look like cancel.
             self._refresh_cancel_state(active)
             outcome, summary = parse_worker_outcome(result)
             self.ledger.transition(run_id, "finalizing")
-            self.ledger.save_result(run_id, outcome, result, {
+            route = task.route
+            provider = route.provider if route else self.env.get(
+                "KANZO_CODE_PROVIDER" if task.is_code else "KANZO_ANALYSIS_PROVIDER",
+                "openai-api",
+            )
+            model = route.model if route else self.env.get(
+                "KANZO_CODE_MODEL" if task.is_code else "KANZO_ANALYSIS_MODEL",
+                "coder" if task.is_code else "iq_3s",
+            )
+            profile = route.profile if route else "researcher"
+            reasoning = route.reason if route else ("high" if task.is_code else "xhigh")
+            artifact = self.artifacts.write_result(task_id, run_id, result, {
+                "source_sha": source_sha or None,
+                "provider": provider,
+                "model": model,
+                "profile": profile,
+                "reasoning": reasoning,
+                "branch": active.get("branch"),
+                "read_only": bool(route and route.read_only),
+                "outcome": outcome,
+            })
+            self.ledger.save_result(run_id, outcome, summary, {
                 "summary": summary,
                 "outcome_marker_present": bool(WORKER_OUTCOME_RE.search(result)),
+                "artifact_path": artifact["path"],
+                "artifact_sha256": artifact["sha256"],
+                "raw_result_in_artifact": True,
             })
             human_actions = parse_marked_tasks(result, HUMAN_ACTION_RE, default_human=True)
             backlog_proposals = parse_marked_tasks(result, BACKLOG_PROPOSAL_RE)
@@ -1551,15 +1661,28 @@ class Worker:
                 self._create_human_handoff(task, human_actions, handoff_summary)
                 self.ledger.mark_publication(run_id, "human_handoff")
                 outcome = "waiting"
-                self.ledger.save_result(run_id, outcome, result, {"summary": handoff_summary})
+                self.ledger.save_result(run_id, outcome, summary, {
+                    "summary": handoff_summary,
+                    "artifact_path": artifact["path"],
+                    "artifact_sha256": artifact["sha256"],
+                    "raw_result_in_artifact": True,
+                })
                 self.ledger.transition(run_id, "waiting")
             elif task.is_code and not (task.route and task.route.read_only):
                 self._refresh_cancel_state(active)
                 pr_url = self._publish_draft_pr(task, checkout, summary, active)
-                self.ledger.save_result(run_id, "review", result, {"summary": summary, "draft_pr": pr_url})
-                self.ledger.mark_publication(run_id, "draft_pr")
                 notes = "\n\n" + "\n".join(backlog_notes) if backlog_notes else ""
-                self._comment_result(task_id, f"{summary}{outcome_note}{notes}\n\nDraft PR: {pr_url}")
+                published_body = f"{summary}{outcome_note}{notes}\n\nDraft PR: {pr_url}"
+                self.ledger.save_result(run_id, "review", summary, {
+                    "summary": summary,
+                    "draft_pr": pr_url,
+                    "published_body": published_body,
+                    "artifact_path": artifact["path"],
+                    "artifact_sha256": artifact["sha256"],
+                    "raw_result_in_artifact": True,
+                })
+                self.ledger.mark_publication(run_id, "draft_pr")
+                self._comment_result(task_id, published_body, run_id=run_id)
                 self.ledger.mark_publication(run_id, "result_comment")
                 self._refresh_cancel_state(active)
                 active["accept_cancel"] = False
@@ -1569,7 +1692,15 @@ class Worker:
                 self.ledger.transition(run_id, "review")
             else:
                 notes = "\n\n" + "\n".join(backlog_notes) if backlog_notes else ""
-                self._comment_result(task_id, f"{summary or 'Task completed. See the Hermes run for details.'}{outcome_note}{notes}")
+                published_body = f"{summary or 'Task completed. See the Hermes run for details.'}{outcome_note}{notes}"
+                self.ledger.save_result(run_id, outcome, summary, {
+                    "summary": summary,
+                    "published_body": published_body,
+                    "artifact_path": artifact["path"],
+                    "artifact_sha256": artifact["sha256"],
+                    "raw_result_in_artifact": True,
+                })
+                self._comment_result(task_id, published_body, run_id=run_id)
                 self.ledger.mark_publication(run_id, "result_comment")
                 self._refresh_cancel_state(active)
                 active["accept_cancel"] = False
@@ -1587,6 +1718,10 @@ class Worker:
         except Exception as exc:
             if isinstance(exc, TaskCancelled) or active["cancelled"].is_set():
                 LOG.info("Task %s run %s cancelled by user", task_id, run_id)
+                self._persist_run_diagnostic(
+                    task_id, run_id, "cancelled",
+                    "Run cancelled after the user moved the Kanzo task to review with human=true. No automatic retry was started.",
+                )
                 self._record_cancelled_run(task_id, run_id)
                 self.ledger.transition(run_id, "cancelled", {"reason": "Kanzo review + human=true cancellation signal"})
                 self.ledger.mark_publication(run_id, "cancel_notice")
@@ -1594,6 +1729,10 @@ class Worker:
                 return True
             active["accept_cancel"] = False
             LOG.exception("Task execution failed for %s", task_id)
+            self._persist_run_diagnostic(
+                task_id, run_id, "failed",
+                f"Worker failed before recording a completed Hermes result. Error type: {type(exc).__name__}. Review the worker logs and decide whether to resume manually.",
+            )
             try:
                 if self._handoff_for_failure(task, exc):
                     result_kind = "waiting"

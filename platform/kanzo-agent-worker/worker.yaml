@@ -376,6 +376,10 @@ spec:
               mountPath: /opt/kanzo-agent/artifact_store.py
               subPath: artifact_store.py
               readOnly: true
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/gateway_control.py
+              subPath: gateway_control.py
+              readOnly: true
             - name: workspace
               mountPath: /workspace
             - name: tmp
@@ -612,6 +616,10 @@ spec:
             - name: worker-code
               mountPath: /opt/kanzo-agent/readonly_executor.py
               subPath: readonly_executor.py
+              readOnly: true
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/gateway_control.py
+              subPath: gateway_control.py
               readOnly: true
             - name: workspace
               mountPath: /workspace

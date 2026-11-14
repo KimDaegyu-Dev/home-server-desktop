@@ -30,6 +30,7 @@ LOG = logging.getLogger("kanzo-agent-worker")
 TASK_ID_RE = re.compile(r"\b([a-zA-Z0-9._-]+#\d+)\b")
 TASK_LINE_RE = re.compile(r"^\s*([^\s]+#\d+)\s+\[([^]]+)\]\s+(.*)$", re.MULTILINE)
 TASK_HEADER_RE = re.compile(r"^\s*([a-zA-Z0-9._-]+#\d+)\s+(.+)$", re.MULTILINE)
+HERMES_SESSION_LINE_RE = re.compile(r"^\s*(?:Session|session_id):\s*([A-Za-z0-9._:-]{8,128})\s*$", re.IGNORECASE)
 WORKER_OUTCOME_RE = re.compile(r"(?i)KANZO_WORKER_OUTCOME:\s*(done|review)(?=KANZO_WORKER_SUMMARY:|\s|$)")
 WORKER_SUMMARY_RE = re.compile(r"(?im)KANZO_WORKER_SUMMARY:\s*.*$")
 HUMAN_ACTION_RE = re.compile(r"(?im)^KANZO_HUMAN_ACTION:\s*(\{[^\r\n]*\})\s*$")
@@ -747,7 +748,80 @@ class Worker:
             and human_from_details(details)
         )
 
-    def _cancel_active_executor(self, active: dict[str, Any]) -> None:
+    def _record_hermes_session(self, active: dict[str, Any], session_id: str) -> None:
+        """Keep the resident Gateway session identity beside its Kanzo run."""
+        if active.get("gateway_session_id") == session_id:
+            return
+        active["gateway_session_id"] = session_id
+        try:
+            self.ledger.record_fields(active["run_id"], {"gateway_session_id": session_id})
+        except Exception:
+            LOG.exception("Could not persist Hermes session identity for run %s", active["run_id"])
+
+    def _interrupt_gateway_session(self, active: dict[str, Any]) -> bool:
+        """Interrupt the exact Hermes Gateway session before detaching its CLI viewer."""
+        session_id = active.get("gateway_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return False
+        profile = str(active.get("profile") or "researcher")
+        profile_home = self.home if profile == "default" else self.home / "profiles" / profile
+        python = self.env.get("HERMES_PYTHON", "/opt/hermes/.venv/bin/python")
+        command = [
+            python,
+            "/opt/kanzo-agent/gateway_control.py",
+            "interrupt",
+            "--profile-home", str(profile_home),
+            "--session-id", session_id,
+        ]
+        if isinstance(active.get("execution_generation"), int):
+            command.extend(["--generation", str(active["execution_generation"])])
+        control_env = self._hermes_env()
+        for name in (
+            "MCPPROXY_KANZO_AGENT_TOKEN", "MCPPROXY_AGENT_READ_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
+            "LITELLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+        ):
+            control_env.pop(name, None)
+        control_env["HERMES_HOME"] = str(self.home)
+        control_env["HOME"] = str(self.home)
+        control_env["PYTHONPATH"] = os.pathsep.join(
+            part for part in ("/opt/hermes", "/opt/kanzo-agent", control_env.get("PYTHONPATH", "")) if part
+        )
+        try:
+            completed = subprocess.run(
+                command, cwd="/opt/hermes", env=control_env, capture_output=True,
+                text=True, timeout=30, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            LOG.warning("Hermes Gateway interrupt failed for run %s (%s)", active["run_id"], type(exc).__name__)
+            return False
+        response = None
+        for output_line in reversed(completed.stdout.splitlines()):
+            try:
+                candidate = json.loads(output_line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                response = candidate
+                break
+        if completed.returncode or not response or response.get("accepted") is not True:
+            LOG.warning("Hermes Gateway did not confirm interrupt for run %s", active["run_id"])
+            return False
+        if response.get("session_id") != session_id:
+            LOG.error("Hermes Gateway interrupt returned a mismatched session for run %s", active["run_id"])
+            return False
+        active["gateway_interrupt_accepted"] = True
+        generation = response.get("execution_generation")
+        fields: dict[str, Any] = {"gateway_interrupt_accepted": True}
+        if isinstance(generation, int) and not isinstance(generation, bool):
+            active["execution_generation"] = generation
+            fields["execution_generation"] = generation
+        try:
+            self.ledger.record_fields(active["run_id"], fields)
+        except Exception:
+            LOG.exception("Could not persist Hermes interrupt receipt for run %s", active["run_id"])
+        return True
+
+    def _cancel_active_executor(self, active: dict[str, Any]) -> bool:
         """Stop only the executor owned by this exact task/run pair."""
         if active.get("read_only"):
             payload = json.dumps({"task_id": active["task_id"], "run_id": active["run_id"]}).encode()
@@ -756,19 +830,63 @@ class Worker:
                 {"Content-Type": "application/json"}, method="POST",
             )
             try:
-                with urllib.request.urlopen(request, timeout=15) as response:
-                    if response.status not in (200, 202, 404):
-                        LOG.warning("Read-only executor rejected cancel for %s/%s", active["task_id"], active["run_id"])
+                with urllib.request.urlopen(request, timeout=25) as response:
+                    if response.status not in (200, 202):
+                        LOG.warning("Read-only executor did not confirm cancel for %s/%s", active["task_id"], active["run_id"])
+                        return False
+                    try:
+                        receipt = json.loads(response.read().decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        LOG.warning("Read-only executor returned an invalid cancel receipt for %s/%s", active["task_id"], active["run_id"])
+                        return False
+                    if not isinstance(receipt, dict) or receipt.get("accepted") is not True:
+                        return False
+                    receipt_session_id = receipt.get("session_id")
+                    if isinstance(receipt_session_id, str) and receipt_session_id:
+                        if active.get("gateway_session_id") is None:
+                            self._record_hermes_session(active, receipt_session_id)
+                        elif receipt_session_id != active.get("gateway_session_id"):
+                            LOG.error("Read-only executor cancel receipt has a mismatched session for %s/%s", active["task_id"], active["run_id"])
+                            return False
+                    generation = receipt.get("execution_generation")
+                    fields: dict[str, Any] = {"gateway_interrupt_accepted": True}
+                    if isinstance(generation, int) and not isinstance(generation, bool):
+                        active["execution_generation"] = generation
+                        fields["execution_generation"] = generation
+                    try:
+                        self.ledger.record_fields(active["run_id"], fields)
+                    except Exception:
+                        LOG.exception("Could not persist ReadOnly Gateway interrupt for run %s", active["run_id"])
+                    return True
             except Exception:
                 LOG.exception("Could not deliver read-only cancel for %s/%s", active["task_id"], active["run_id"])
-            return
+                return False
         with self.active_lock:
             process = active.get("process")
+        if process is None or process.poll() is not None:
+            return True
+        if active.get("executor_kind") == "hermes_gateway_cli":
+            if not self._interrupt_gateway_session(active):
+                return False
+            # Only the local viewer is terminated here. The confirmed Gateway
+            # interrupt stops the session turn and its remote tool execution.
+            self._stop_hermes_process(process)
+            return True
         if process is not None and process.poll() is None:
             self._stop_hermes_process(process)
+        return True
 
     def _watch_active_task(self, active: dict[str, Any]) -> None:
         while not active["stop_monitor"].is_set():
+            if active.get("cancel_pending"):
+                if not self._active_task_cancel_requested(active):
+                    active["cancel_pending"] = False
+                    continue
+                if self._cancel_active_executor(active):
+                    active["cancelled"].set()
+                    return
+                active["stop_monitor"].wait(timeout=5)
+                continue
             if not self.active_change.wait(timeout=1):
                 continue
             self.active_change.clear()
@@ -781,9 +899,10 @@ class Worker:
                 if not active["accept_cancel"]:
                     continue
             if self._active_task_cancel_requested(active):
-                active["cancelled"].set()
-                self._cancel_active_executor(active)
-                return
+                active["cancel_pending"] = True
+                if self._cancel_active_executor(active):
+                    active["cancelled"].set()
+                    return
 
     @staticmethod
     def _raise_if_cancelled(active: dict[str, Any] | None) -> None:
@@ -1207,6 +1326,7 @@ class Worker:
             "--toolsets",
             "search,memory,skills,todo,terminal,file,delegation,code_execution,clarify,kanban,mcp-home_server",
         ]
+        self._raise_if_cancelled(active)
         if route and route.read_only:
             if active is None:
                 raise WorkerError("Read-only run is missing its task/run cancellation identity.")
@@ -1224,9 +1344,17 @@ class Worker:
                         try:
                             event = json.loads(raw_line.decode("utf-8", errors="replace"))
                         except json.JSONDecodeError:
-                            diagnostics.append(raw_line.decode("utf-8", errors="replace").strip())
+                            raw_text = raw_line.decode("utf-8", errors="replace").strip()
+                            session_match = HERMES_SESSION_LINE_RE.match(raw_text)
+                            if session_match and active is not None:
+                                self._record_hermes_session(active, session_match.group(1))
+                            if raw_text:
+                                diagnostics.append(raw_text)
                             continue
                         self.heartbeat_path.touch()
+                        event_session = event.get("session_id")
+                        if isinstance(event_session, str) and event_session and active is not None:
+                            self._record_hermes_session(active, event_session)
                         if event.get("type") == "text" and isinstance(event.get("text"), str):
                             parts.append(event["text"])
                         elif event.get("type") == "executor_exit":
@@ -1263,6 +1391,7 @@ class Worker:
         if active is not None:
             with self.active_lock:
                 active["process"] = process
+                active["executor_kind"] = "hermes_gateway_cli"
         text_parts: list[str] = []
         diagnostics: list[str] = []
         started_at = time.monotonic()
@@ -1325,12 +1454,18 @@ class Worker:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     if line.strip():
+                        session_match = HERMES_SESSION_LINE_RE.match(line.strip())
+                        if session_match and active is not None:
+                            self._record_hermes_session(active, session_match.group(1))
                         diagnostics.append(line.strip())
                         last_event = "non_json_output"
                     continue
                 last_event = str(event.get("type", "unknown_event"))
                 if event.get("tool_name"):
                     last_event += f"/{str(event['tool_name'])[:100]}"
+                event_session = event.get("session_id")
+                if isinstance(event_session, str) and event_session and active is not None:
+                    self._record_hermes_session(active, event_session)
                 if event.get("type") == "text" and isinstance(event.get("text"), str):
                     text_parts.append(event["text"])
                 elif event.get("type") in ("error", "error_detail", "tool_error"):
@@ -1359,10 +1494,25 @@ class Worker:
         finally:
             prompt_path.unlink(missing_ok=True)
             if process.poll() is None:
+                if active is not None and active.get("executor_kind") == "hermes_gateway_cli":
+                    if not active.get("gateway_interrupt_accepted"):
+                        interrupted = self._interrupt_gateway_session(active)
+                        if not interrupted:
+                            LOG.error(
+                                "Hermes CLI is ending while Gateway interrupt is unconfirmed for run %s; "
+                                "remote execution outcome requires review",
+                                active["run_id"],
+                            )
                 self._stop_hermes_process(process)
             if process.stdout:
                 process.stdout.close()
             reader.join(timeout=5)
+            if active is not None:
+                with self.active_lock:
+                    if active.get("process") is process:
+                        active["process"] = None
+                    if active.get("executor_kind") == "hermes_gateway_cli":
+                        active.pop("executor_kind", None)
         self._raise_if_cancelled(active)
         if exit_code:
             detail = "\n".join(diagnostics)[-1200:]
@@ -1575,6 +1725,9 @@ class Worker:
             "task_id": task_id,
             "run_id": run_id,
             "read_only": bool(task.route and task.route.read_only),
+            "profile": task.route.profile if task.route else "researcher",
+            "gateway_session_id": None,
+            "cancel_pending": False,
             "process": None,
             "cancelled": threading.Event(),
             "stop_monitor": threading.Event(),
@@ -1634,6 +1787,8 @@ class Worker:
                 "profile": profile,
                 "reasoning": reasoning,
                 "branch": active.get("branch"),
+                "gateway_session_id": active.get("gateway_session_id"),
+                "execution_generation": active.get("execution_generation"),
                 "read_only": bool(route and route.read_only),
                 "outcome": outcome,
             })

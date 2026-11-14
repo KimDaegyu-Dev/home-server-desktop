@@ -304,6 +304,21 @@ class RunLedger:
             )
             return self._record(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
 
+    def record_fields(self, run_id: str, fields: Mapping[str, Any]) -> dict[str, Any]:
+        """Durably merge runtime identifiers without changing the run state."""
+        field_updates = _require_mapping(fields, "fields")
+        with self._transaction() as connection:
+            row = connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+            if row is None:
+                raise RunNotFoundError("run_id does not exist")
+            stored_fields = _json_load(row["fields_json"])
+            stored_fields.update(field_updates)
+            connection.execute(
+                "UPDATE runs SET updated_at = ?, fields_json = ? WHERE run_id = ?",
+                (_now(), _json_dump(stored_fields), run_id),
+            )
+            return self._record(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
+
     def save_result(
         self,
         run_id: str,

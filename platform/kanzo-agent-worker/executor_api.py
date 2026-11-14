@@ -437,6 +437,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise RuntimeError("server is stopping")
                 with self.store.connect() as db:
                     db.execute("SELECT 1").fetchone()
+                for profile in PROFILES:
+                    _profile_home(profile)
                 if not _gateway_ready(_profile_home("default")):
                     raise RuntimeError("Gateway is not ready")
                 self._send_json(200, {"status": "ready"})

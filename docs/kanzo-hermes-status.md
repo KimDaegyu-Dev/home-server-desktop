@@ -6,19 +6,19 @@
 
 - 현재 기준: 2026-11-14, 로드맵의 Phase 1 진행 중.
 - 기준 스냅샷 `v1`: 커밋 `f11abf6` (`origin`에 push 완료). 런타임 변경 전 worker 코드와 설계 로드맵이 포함되어 있다.
-- 워커 런타임 소스: `1bc102d` (`fix(kanzo): prepare source for readonly repository tasks`). 이후 문서 전용 커밋은 워커 코드를 변경하지 않는다.
-- 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `1bc102d`에서 Synced/Healthy였고 Pod `kanzo-agent-worker-5d5fd46c57-r42ms`는 5/5 Ready, restart 0, 태스크 active gauge 0이었다.
-- 이 변경에서는 Hermes 실제 태스크를 실행하지 않았다. 문법 검사, Kustomize 렌더링, 배포된 ConfigMap 코드 SHA-256 일치만 확인했다.
+- 워커 런타임 소스: `80e121b` (`fix(kanzo): isolate repository checkouts per run`).
+- 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `80e121b18a5f04bd72c793631aae108c5b0693fd`에서 Synced/Healthy였고 Pod `kanzo-agent-worker-768f8c64f7-79w4h`는 5/5 Ready, restart 0, 태스크 active gauge 0이었다. 배포된 `worker.py` SHA-256은 저장소 파일과 일치했다.
+- 이번 변경은 Hermes 실제 태스크로 검증하지 않았다. Python 문법 검사, Kustomize 렌더링, 배포된 ConfigMap 코드 SHA-256 일치만 확인했다.
 
 ## 단계별 진행
 
 | 로드맵 단계 | 상태 | 진행 및 남은 작업 |
 |---|---|---|
-| 0. 기준선과 지원 경로 확인 | 일부 완료 | 설치된 Hermes 0.23.1 CLI/Gateway 흐름, Argo revision, idle 자원 샘플, active gauge를 기록했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
-| 1. 소스 준비·입력·산출물 | 진행 중 | 카탈로그에 repo가 있는 ReadOnly 작업이 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시하도록 반영했다. Graphify 인덱스와의 revision 일치 검증, writable 작업의 공통 소스 준비, durable artifact, Git object cache는 남아 있다. checkout은 현재 run 종료 시 삭제된다. |
+| 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
+| 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. Graphify revision 확인, durable artifact, Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 시작 전 | Hermes/OMH의 durable memory, reflection, learned skills, session history 보존과 ReadOnly 학습 쓰기 경계를 검증·구현해야 한다. |
 | 3. durable run ledger와 이벤트 | 시작 전 | lease/run ID, dispatcher 재시작 조정, idempotent publication과 stale 결과 차단을 구현해야 한다. 자동 재시도는 추가하지 않는다. |
-| 4. 상주 executor와 작업 도구 격리 | 시작 전 | 상주 Hermes executor, 작업별 도구 경계, 정확한 run 취소와 자식 프로세스 정리를 구현해야 한다. 현재 ReadOnly executor는 별도 HOME을 사용하고, Gateway session interrupt 경계가 아직 통합되지 않았다. |
+| 4. 상주 executor와 작업 도구 격리 | 조사 일부 완료 | 클러스터 버전은 session API와 terminal provider 확장점을 제공한다. 작업별 도구 backend는 별도 HOME 복제 없이 붙일 수 있지만, provider가 원격 취소를 구현해야 하고 세션 종료 시 환경 정리 키도 맞춰야 한다. 상주 Gateway에 run별 backend를 연결하는 최소 검증과 분리 배포는 남아 있다. |
 | 5. 결과·추적·위임 | 시작 전 | 구조화된 완료 근거, run/session tracing, 자식 작업 예산과 결과 게시의 일관성을 구현·확인해야 한다. |
 | 6. 성능·학습 보존 검증 | 시작 전 | 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
 
@@ -38,9 +38,16 @@
 - 배포 검증: Argo Synced/Healthy, Pod 5/5 Ready, restart 0, 배포된 `worker.py` 해시가 저장소 파일과 일치, active gauge 0.
 - 실제 Kanzo 태스크를 실행하지 않아 기능 동작은 아직 태스크 단위로 검증되지 않았다.
 
+### 2026-11-14 — run별 checkout 및 Hermes API 확인
+
+- 커밋 `80e121b`를 GitOps `main`에 push했다. Argo CD가 해당 전체 SHA에서 Synced/Healthy이고 worker Pod 5/5 Ready, restart 0임을 확인했다. 배포된 worker 코드 SHA-256이 저장소 파일과 일치하고 active gauge는 0이었다.
+- 저장소가 연결된 카탈로그 작업은 읽기·수정 분류와 독립적으로 checkout한다. checkout 디렉터리와 쓰기 가능한 branch 이름에 run ID를 포함해 같은 Kanzo 태스크의 후속 실행이 기존 run 경로·branch와 충돌하지 않게 했다. run 종료 시 checkout 삭제 정책은 유지된다.
+- 실제 클러스터 이미지 `Hermes Agent v0.23.1 (upstream 3b421578)`에서 `session.create`, `prompt.submit`, `session.interrupt` 및 `TerminalEnvironmentProvider` 등록/사용 경로를 확인했다. `terminal`, remote `file`, `execute_code`, delegate가 provider 환경을 공유할 수 있다.
+- provider에는 독립적인 취소 API가 없고 원격 실행 취소를 backend가 직접 처리해야 한다. 세션 종료 시 cleanup 키와 resolved environment key가 일치하지 않을 수 있어, persistent sandbox에는 명시적인 run/session mapping과 회수 경로가 필요하다. 현재까지 Kanzo task로 새 실행 검증은 하지 않았다.
+
 ## 롤백
 
-`v1`은 Git 기준선이다. 현재 `main`에서 이 첫 런타임 변경만 되돌릴 때는 `git revert 1bc102d`를 만들고 push하면 Argo CD가 해당 코드를 되돌린다. 이후 변경도 되돌릴 때는 v1 이후 런타임 커밋을 역순으로 revert한다. `v1` tag 자체로 Argo CD의 추적 브랜치를 바꾸지는 않는다.
+`v1`은 Git 기준선이다. `80e121b` 변경만 되돌릴 때는 `git revert 80e121b`를 만들고 push한다. 모든 런타임 변경을 기준선으로 되돌릴 때는 v1 이후 런타임 커밋을 역순으로 revert한다. `v1` tag 자체로 Argo CD의 추적 브랜치를 바꾸지는 않는다.
 
 ## 이전 런타임 변경 및 조사 이력
 

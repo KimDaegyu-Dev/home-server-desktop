@@ -960,6 +960,11 @@ class Worker:
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
         prompt_path.write_text(prompt, encoding="utf-8")
         agent_env = self._hermes_env()
+        if active is not None:
+            # The Hermes Langfuse plugin consumes these fields to join a trace
+            # back to its Kanzo card and this specific worker execution.
+            agent_env["HERMES_KANBAN_TASK"] = active["task_id"]
+            agent_env["HERMES_KANBAN_RUN_ID"] = active["run_id"]
         # The agent gets a separate read-only MCP token; the controller's Kanzo
         # mutation token and GitHub write credential stay out of its environment.
         agent_env.pop("MCPPROXY_KANZO_AGENT_TOKEN", None)

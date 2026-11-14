@@ -81,6 +81,35 @@ spec:
           text: '{{- get .Secrets "HERMES_DASHBOARD_BASIC_AUTH_SECRET" -}}'
       excludeRaw: true
 ---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: hermes-langfuse-credentials
+  namespace: mcp
+spec:
+  vaultAuthRef: kanzo-agent
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: kanzo-agent-worker
+  mount: kv
+  path: mcp/kanzo-agent
+  type: kv-v2
+  refreshAfter: 1h
+  hmacSecretData: true
+  destination:
+    create: true
+    name: hermes-langfuse-credentials
+    overwrite: true
+    transformation:
+      excludes:
+        - .*
+      templates:
+        HERMES_LANGFUSE_PUBLIC_KEY:
+          text: '{{- get .Secrets "LANGFUSE_PUBLIC_KEY" -}}'
+        HERMES_LANGFUSE_SECRET_KEY:
+          text: '{{- get .Secrets "LANGFUSE_SECRET_KEY" -}}'
+      excludeRaw: true
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -320,6 +349,18 @@ spec:
                   name: kanzo-agent-credentials
                   key: GITHUB_TOKEN
                   optional: true
+            - name: HERMES_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_PUBLIC_KEY
+            - name: HERMES_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_SECRET_KEY
+            - name: HERMES_LANGFUSE_BASE_URL
+              value: http://langfuse-web.langfuse.svc.cluster.local:3000
           volumeMounts:
             - name: hermes-home
               mountPath: /opt/data
@@ -422,6 +463,18 @@ spec:
                   optional: true
             - name: OPENAI_BASE_URL
               value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: HERMES_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_PUBLIC_KEY
+            - name: HERMES_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_SECRET_KEY
+            - name: HERMES_LANGFUSE_BASE_URL
+              value: http://langfuse-web.langfuse.svc.cluster.local:3000
           volumeMounts:
             - name: hermes-home
               mountPath: /opt/data
@@ -533,6 +586,18 @@ spec:
                   name: kanzo-agent-credentials
                   key: LITELLM_API_KEY
                   optional: true
+            - name: HERMES_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_PUBLIC_KEY
+            - name: HERMES_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_SECRET_KEY
+            - name: HERMES_LANGFUSE_BASE_URL
+              value: http://langfuse-web.langfuse.svc.cluster.local:3000
           volumeMounts:
             - name: hermes-home
               mountPath: /opt/data

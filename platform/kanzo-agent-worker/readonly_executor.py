@@ -142,6 +142,10 @@ class Handler(BaseHTTPRequestHandler):
         env = dict(os.environ)
         env["HOME"] = str(hermes_home)
         env["HERMES_HOME"] = str(hermes_home)
+        # Keep Langfuse traces from the read-only executor linked to the same
+        # Kanzo card and run identity as writable worker executions.
+        env["HERMES_KANBAN_TASK"] = identity[0]
+        env["HERMES_KANBAN_RUN_ID"] = identity[1]
         if env.get("LITELLM_API_KEY"):
             env["OPENAI_API_KEY"] = env["LITELLM_API_KEY"]
         if env.get("LITELLM_BASE_URL"):

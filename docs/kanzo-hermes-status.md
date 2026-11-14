@@ -4,10 +4,10 @@
 
 ## 현재 상태
 
-- 현재 기준: 2026-11-14, 로드맵 Phase 1 진행 중, Phase 3 일부 구현.
+- 현재 기준: 2026-11-14, 로드맵 Phase 1 진행 중, Phase 2 조사 완료, Phase 3 일부 구현.
 - 기준 스냅샷 `v1`: 커밋 `f11abf6` (`origin`에 push 완료). 런타임 변경 전 worker 코드와 설계 로드맵이 포함되어 있다.
-- 워커 런타임 소스: `8ec721a` (`feat(kanzo): persist worker execution ledger`).
-- 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `8ec721a36ff11bc7dfdb43025b298b58e5a79755`에서 Synced/Healthy였고 Pod `kanzo-agent-worker-b5958767-jwnmx`는 5/5 Ready, restart 0, 태스크 active gauge 0이었다. 배포된 `worker.py` SHA-256은 `8cee5a2bdd856ebd17b8a9bb27bd4f55c5701b014bced55aa83e73e090f69ece`, `run_ledger.py`는 `e632d313661e739721a3c785605cb351c6feecac6271847c5f7fb6f2370bc973`으로 저장소 파일과 일치했다.
+- 워커 런타임 소스: `e59a758` (`feat(kanzo): persist and recover run artifacts`).
+- 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `e59a7586ec2ed77c50ffa0af1fffa7866f6ca822`에서 Synced/Healthy였고 Pod `kanzo-agent-worker-f965d8879-ttf9m`는 5/5 Ready, restart 0, 태스크 active gauge 0이었다. 배포된 `worker.py`, `run_ledger.py`, `artifact_store.py` SHA-256은 저장소 파일과 각각 일치했다.
 - 실제 Kanzo 태스크로는 검증하지 않았다. Python 문법 검사, Kustomize 렌더링, 배포 상태·코드 해시·유휴 active gauge만 확인했다.
 
 ## 단계별 진행
@@ -15,14 +15,22 @@
 | 로드맵 단계 | 상태 | 진행 및 남은 작업 |
 |---|---|---|
 | 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
-| 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. Graphify revision 확인, 별도 durable artifact, Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
-| 2. 프로필·상태·공유 데이터 경계 | 시작 전 | Hermes/OMH의 durable memory, reflection, learned skills, session history 보존과 ReadOnly 학습 쓰기 경계를 검증·구현해야 한다. |
-| 3. durable run ledger와 이벤트 | 일부 구현 | Hermes HOME PVC의 SQLite 장부에 run 상태·설정·소스 SHA·전체 결과·publication 체크포인트를 기록한다. 재시작 시 미종료 run을 Kanzo 사람 검토로 보낸다. 이벤트 중복·재연결·다중 dispatcher lease, 외부 게시의 멱등 재개, 실태스크 검증은 남아 있다. 자동 재시도는 추가하지 않는다. |
+| 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
+| 2. 프로필·상태·공유 데이터 경계 | 조사 완료, 구현 전 | ReadOnly executor는 별도 HOME과 `state.db`를 써 일반 Gateway/Desktop의 세션 검색·재개와 분리된다. 프로필 로컬 skills/plugins/scripts/`.omh`를 매 run 복사하며 대상 디렉터리를 지워 학습 변경이 사라질 수 있다. OMH 메모리 절대 경로는 공유되지만 반성 hook의 실행·다음 세션 검색은 검증되지 않았다. 지속 Gateway 세션과 run별 도구 backend로 전환해야 한다. |
+| 3. durable run ledger와 이벤트 | 일부 구현 | Hermes HOME PVC의 SQLite 장부에 run 상태·설정·소스 SHA·결과와 게시 체크포인트를 기록한다. 재시작 시 미종료 run을 자동 실행하지 않고, 저장 응답과 댓글의 run별 marker를 이용해 누락된 결과 댓글만 복구한 뒤 사람 검토로 보낸다. 이벤트 중복·재연결 구간, 다중 dispatcher lease/CAS, PR 및 다른 외부 게시의 멱등 재개, 실태스크 검증은 남아 있다. 자동 재시도는 추가하지 않는다. |
 | 4. 상주 executor와 작업 도구 격리 | 조사 일부 완료 | 클러스터 버전은 session API와 terminal provider 확장점을 제공한다. 작업별 도구 backend는 별도 HOME 복제 없이 붙일 수 있지만, provider가 원격 취소를 구현해야 하고 세션 종료 시 환경 정리 키도 맞춰야 한다. 상주 Gateway에 run별 backend를 연결하는 최소 검증과 분리 배포는 남아 있다. |
 | 5. 결과·추적·위임 | 시작 전 | 구조화된 완료 근거, run/session tracing, 자식 작업 예산과 결과 게시의 일관성을 구현·확인해야 한다. |
 | 6. 성능·학습 보존 검증 | 시작 전 | 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
 
 ## 변경 이력
+
+### 2026-11-14 — 장기 산출물과 결과 댓글 복구
+
+- 커밋 `e59a758`를 GitOps `main`에 push하고 배포했다. Argo CD는 Synced/Healthy, worker Pod는 5/5 Ready, restart 0, active gauge 0이었다. `worker.py`, `run_ledger.py`, `artifact_store.py`의 배포 SHA-256이 로컬 파일과 일치했다.
+- 전체 Hermes 응답과 메타데이터를 Hermes HOME PVC의 task/run 디렉터리에 원자적으로 기록한다. manifest는 source SHA와 결과 해시를 포함하며, 파일 권한은 사용자 전용으로 제한한다. 기존 artifact는 자동 삭제하지 않는다.
+- 결과 댓글에 숨김 run/chunk marker와 정확한 게시 본문을 저장한다. 재시작 때 이미 올라간 조각은 건너뛰고 빠진 결과만 게시한다. 외부 작업을 자동 재실행하지 않는다. 출력의 알려진 토큰 패턴과 주입된 비밀값은 artifact/댓글 저장 전에 가린다.
+- ReadOnly 데이터 경계를 조사했다. 별도 HOME 때문에 Hermes 세션 DB가 일반 프로필과 분리되고, 프로필 로컬 skills/plugins/scripts/`.omh`는 매 run 삭제 후 원본에서 다시 복사되어 학습 변경이 덮일 수 있다. OMH 절대 경로 일부는 공유되지만 회고와 학습이 다음 세션에서 검색되는지는 미확인이다. 별도 Gateway HOME 복사 방식을 상주 Gateway + run별 도구 backend로 대체하는 Phase 2/4 작업이 남아 있다.
+- 이 배포는 실제 Kanzo 태스크로 검증하지 않았다. 게시 재생성·부분 댓글 복구 동작도 태스크 기반으로 아직 검증되지 않았다.
 
 ### 2026-11-14 — SQLite 실행 장부 1차 적용
 

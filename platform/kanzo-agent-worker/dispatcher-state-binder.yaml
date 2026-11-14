@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kanzo-agent-state-binder-v1
+  namespace: mcp
+  annotations:
+    argocd.argoproj.io/sync-wave: '-4'
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kanzo-agent-state-binder
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bind-volume
+          image: busybox:1.37.0
+          command: ["sh", "-ec", "mkdir -p /state/.kanzo; printf 'bound\\n' > /state/.kanzo/.volume-bound"]
+          volumeMounts:
+            - name: state
+              mountPath: /state
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: kanzo-agent-worker-state

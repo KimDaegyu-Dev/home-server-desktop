@@ -5,6 +5,7 @@ resources:
   - executor.yaml
   - dispatcher.yaml
   - dispatcher-state.yaml
+  - dispatcher-state-binder.yaml
   - state-migration-job.yaml
   - hermes-dashboard-ingress.yaml
 configMapGenerator:

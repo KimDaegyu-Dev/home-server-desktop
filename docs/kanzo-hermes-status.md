@@ -4,9 +4,9 @@
 
 ## 현재 상태
 
-- 현재 기준: 2026-11-14. Phase 4의 resident executor와 dispatcher를 별도 Deployment로 나눈 GitOps 구성을 로컬에 구현했다. 기존 worker를 먼저 정지하고 dispatcher 상태를 한 번 이관한 뒤 executor, dispatcher 순으로 시작하도록 sync wave와 검증 migration hook을 배치했다. API Service/네트워크 격리, Hermes Gateway readiness, dispatcher 전용 PVC도 정의했다. 정적 구문 및 Kustomize 검증은 통과했으며 아직 commit/push 또는 클러스터 배포는 하지 않았다.
-- 수명주기 분리: 로컬 GitOps에서 기존 통합 worker를 먼저 정지하고, migration hook이 run ledger/artifact를 새 dispatcher PVC에 복사한 뒤 resident executor와 dispatcher를 순서대로 시작하도록 구성했다. live cluster는 아직 이전 통합 Pod에서 동작한다.
-- 다음 작업: 사용자 Vault key를 반영하도록 Argo에 VaultStaticSecret 템플릿을 동기화하고, VSO가 KANZO_EXECUTOR_API_TOKEN을 실제 Secret에 채우는지 값 없이 확인한다. 그 뒤 worker 정지 → 상태 이관 → executor 준비 → dispatcher 재개 순으로 롤아웃하고 실태스크를 검증한다.
+- 현재 기준: 2026-11-14. Phase 4 GitOps는 `main`에 push했고 Argo가 revision `e00fa29`를 적용 중이다. 기존 worker는 replicas 0으로 내려갔고 상태 migration hook은 ledger 0행·artifact 0개를 검증했다. executor init 중이며 dispatcher는 아직 시작하지 않았다.
+- 수명주기 분리: `0fb3b34`에서 기존 통합 worker를 executor와 dispatcher로 분리했다. PVC binder Job으로 `WaitForFirstConsumer` 교착을 풀었고, worker 코드 ConfigMap은 Server-Side Apply로 적용한다. Hermes broker plugin manifest 줄바꿈과 readiness의 허용 profile 확인도 보완했다. VaultStaticSecret 재시작 대상은 새 executor/dispatcher로 갱신했다.
+- 다음 작업: Vault `kv/mcp/kanzo-agent`의 `KANZO_EXECUTOR_API_TOKEN` 실제 값 동기화를 확인한다. 현재 Secret key는 있으나 디코드 값이 0바이트여서 Executor API가 시작 조건을 통과하지 못한다. 값이 채워지면 VSO 재시작과 executor readiness를 확인한 뒤 dispatcher, 실제 태스크, 취소·결과·Langfuse를 검증한다. Vault MCP 세션 인증도 아직 제공되지 않았다.
 - 기준 스냅샷 `v1`: 커밋 `f11abf6` (`origin`에 push 완료). 런타임 변경 전 worker 코드와 설계 로드맵이 포함되어 있다.
 - 워커 런타임 소스: `e59a758` (`feat(kanzo): persist and recover run artifacts`).
 - 현재 live 기준: Argo CD `kanzo-agent-worker`는 revision `e0bb839f0a6e454cecb75febe7f42cf5337aebfb`에서 Synced/Healthy이고 기존 Pod는 5/5 Ready, restart 0, active gauge 0이다. run ledger는 schema 1, integrity `ok`, 0 rows로 확인했다. live VaultStaticSecret은 아직 새 API-token template을 반영하지 않아 Kubernetes Secret의 해당 key는 비어 있다.
@@ -20,7 +20,7 @@
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 다른 경로는 아직 기존 ReadOnly executor를 쓴다. plugin 복사·활성화 및 memory/reflection의 연속성은 클러스터에서 검증하지 않았다. |
 | 3. durable run ledger와 이벤트 | 일부 구현 | Hermes HOME PVC의 SQLite 장부에 run 상태·설정·소스 SHA·결과와 게시 체크포인트를 기록한다. 재시작 시 미종료 run을 자동 실행하지 않고, 저장 응답과 댓글의 run별 marker를 이용해 누락된 결과 댓글만 복구한 뒤 사람 검토로 보낸다. 이벤트 중복·재연결 구간, 다중 dispatcher lease/CAS, PR 및 다른 외부 게시의 멱등 재개, 실태스크 검증은 남아 있다. 자동 재시도는 추가하지 않는다. |
-| 4. 상주 executor와 작업 도구 격리 | 로컬 GitOps 구현 완료, 배포 전 | Executor API/client, broker·sandbox 수직 경로, 전용 executor/dispatcher Deployment, API Service·NetworkPolicy, gateway readiness probe, 별도 dispatcher-state PVC와 일회성 상태 migration hook을 정의했다. live worker를 먼저 0으로 내리고, migration 성공 후 executor readiness가 확인되면 dispatcher가 시작된다. Vault token VSO sync와 클러스터 cutover 검증이 남아 있다. |
+| 4. 상주 executor와 작업 도구 격리 | 클러스터 cutover 진행 중, executor 준비 대기 | GitOps revision `e00fa29` 적용 중. 기존 worker는 0이며 migration은 검증 완료. executor init과 Vault token 주입이 미완료이고 dispatcher 및 실제 작업 검증은 시작하지 않았다. |
 | 5. 결과·추적·위임 | 시작 전 | 구조화된 완료 근거, run/session tracing, 자식 작업 예산과 결과 게시의 일관성을 구현·확인해야 한다. |
 | 6. 성능·학습 보존 검증 | 시작 전 | 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
 

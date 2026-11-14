@@ -126,6 +126,7 @@ ai-memory는 검증된 장기 공유 지식의 역할을 유지한다. Hermes/OM
 작업:
 
 - 역할 프로필의 설정과 영속 학습 상태를 상주 executor에 연결한다. run별 도구 HOME에는 임시 상태를 두고, 검색 가능한 세션 이력·메모리·회고·학습 스킬은 Hermes 상태 소유자를 통해 사용한다.
+- sandbox backend 선택은 프로세스 전역 `TERMINAL_ENV` 변경으로 전달하지 않는다. 상주 Gateway의 프로필별 terminal scope를 이용하고, Desktop 세션에 설정이 번지지 않도록 Kanzo 자동 작업 전용 프로필을 둔다. provider·model·reasoning은 세션 생성 요청의 실행 override로 전달한다.
 - 검증된 Hermes·OMH·플러그인 의존성을 런타임 준비 단계에서 고정한다. 태스크 시작 때 설치·복구·전체 doctor를 반복하지 않는다.
 - 배포 기본 스킬·플러그인 코드는 버전을 고정하고, 학습 스킬은 쓰기 가능한 영속 자료로 제공한다. 사용자 설정 변경은 새 실행에 반영하며 native 스킬 개선은 버전·출처를 기록해 허용한다.
 - 전체 원본 HOME의 쓰기 가능한 마운트를 제거한다. 필요한 설정·선별된 인증·공유 데이터만 전달한다.
@@ -167,6 +168,9 @@ ai-memory는 검증된 장기 공유 지식의 역할을 유지한다. Hermes/OM
 
 - dispatcher와 상주 Hermes host의 배포·종료 수명을 분리한다. 태스크마다 CLI가 별도 Gateway를 자동 생성하는 경로를 대체한다.
 - 설치 버전의 세션 생성·프로필 라우팅·run 대상 취소 API와 도구 backend 확장 지점을 먼저 확인한다. 필요한 기능이 없으면 adapter 변경 범위를 명시한다. 지원을 확인하기 전 원격 Gateway의 도구가 컨테이너 권한을 상속한다고 가정하지 않는다.
+- Kanzo 자동 실행마다 Gateway에 새 Hermes session을 만들고 canonical `session.create` → `prompt.submit` 흐름을 사용한다. 응답의 `session_id`·`execution_generation`과 admission receipt를 `task_id`·`run_id`·lease에 연결하고, 실행 취소는 해당 generation에 `session.interrupt`를 보낸다. 큐에 대기 중인 제출만 취소할 때는 해당 admission의 `prompt.cancel`을 쓴다.
+- terminal provider에는 Gateway session key가 오며 Kanzo `run_id`가 직접 오지 않는다. dispatcher/broker가 생성된 session과 task/run/lease의 매핑을 등록하고, 모든 sandbox 생성·명령 실행·결과 반환에서 이 매핑과 현재 lease를 확인한다. 여러 delegate는 Hermes가 부모의 환경 키를 공유시키므로 같은 run sandbox와 권한을 상속한다.
+- Hermes 환경 캐시의 resolved key와 세션 종료 cleanup 호출 키가 다를 수 있다. 명시적 run 완료·취소 cleanup, gateway 세션 종료 cleanup, 만료된 sandbox를 회수하는 broker reaper를 함께 구현하고, 한 경로의 실패가 영구 sandbox 누수로 이어지지 않게 한다.
 - native memory·스킬·회고는 상주 Hermes에서 실행하고, terminal·repository file·execute_code·도구가 실행하는 스크립트는 run별 격리 환경으로 라우팅한다. delegate가 쓰는 도구도 같은 run 권한을 상속한다.
 - ReadOnly에는 소스를 읽기 전용으로, scratch·산출물은 쓰기 가능하게 제공한다. 코드 변경에는 별도 쓰기 가능한 checkout을 제공한다. 공통 host의 로컬 terminal/file fallback을 차단하고, 경로·프로세스·네트워크·비밀 전달을 도구 실행 경계에서 강제한다.
 - `cwd` 변경이나 프롬프트 지시만으로 격리했다고 보지 않는다. 컨테이너·별도 도구 서비스 등 설치 버전과 호환되는 한 가지 방식부터 검증하고, run ID와 lease에 묶인 도구 요청만 허용한다.

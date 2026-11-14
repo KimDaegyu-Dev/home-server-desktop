@@ -320,3 +320,11 @@ ai-memory는 검증된 장기 공유 지식의 역할을 유지한다. Hermes/OM
 - [Hermes 학습 루프 개요](https://hermes-agent.nousresearch.com/docs)
 - [Hermes 스킬·자기 개선](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills/)
 - [OMH 메모리 수용·정리 정책](https://github.com/rlaope/oh-my-hermes/blob/main/docs/MEMORY_CONTEXT.md)
+
+## Execution checkpoint
+
+- Rollback snapshot `v1` points to commit `f11abf6` and is pushed to `origin`; it contains the pre-runtime-change worker and the reviewed roadmap.
+- Phase 0 baseline was checked on 2026-11-14: Argo CD was Synced/Healthy at `b3a553e`, the worker was idle (`kanzo_worker_task_active 0`), and its single Pod had five ready containers.
+- The observed idle sample was about 1,006 MiB and 250 millicores across the Pod: dashboard 322 MiB/8m, Gateway 592 MiB/239m, event adapter 13 MiB/1m, read-only executor 59 MiB/1m, worker 20 MiB/1m. This is one sample, not a peak or sizing target.
+- Phase 1 implementation in progress: repository-backed read-only tasks now prepare a checkout and include its exact Git HEAD in the prompt. The worker still deletes that checkout after the run; durable artifacts and shared object caching remain future work.
+- The installed Hermes 0.23.1 `chat --oneshot` launch attaches through the canonical Gateway session flow. The read-only executor currently uses a separate HOME, so its Gateway and session state are separate; persistence changes must account for that boundary.

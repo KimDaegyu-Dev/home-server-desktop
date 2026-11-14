@@ -60,6 +60,10 @@ spec:
   rolloutRestartTargets:
   - kind: Deployment
     name: kanzo-agent-worker
+  - kind: Deployment
+    name: kanzo-agent-executor
+  - kind: Deployment
+    name: kanzo-agent-dispatcher
   mount: kv
   path: mcp/kanzo-agent
   type: kv-v2
@@ -102,7 +106,7 @@ spec:
   vaultAuthRef: kanzo-agent
   rolloutRestartTargets:
   - kind: Deployment
-    name: kanzo-agent-worker
+    name: kanzo-agent-executor
   mount: kv
   path: mcp/kanzo-agent
   type: kv-v2

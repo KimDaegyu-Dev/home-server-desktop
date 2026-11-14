@@ -10,6 +10,10 @@ spec:
       name: kanzo-sandbox-broker
     - kind: Deployment
       name: kanzo-agent-worker
+    - kind: Deployment
+      name: kanzo-agent-executor
+    - kind: Deployment
+      name: kanzo-agent-dispatcher
   mount: kv
   path: mcp/kanzo-agent
   type: kv-v2

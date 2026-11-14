@@ -22,6 +22,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from run_ledger import RunLedger
+
 
 LOG = logging.getLogger("kanzo-agent-worker")
 TASK_ID_RE = re.compile(r"\b([a-zA-Z0-9._-]+#\d+)\b")
@@ -552,6 +554,34 @@ class Worker:
         self.active_change = threading.Event()
         self.active_lock = threading.Lock()
         self.active_run: dict[str, Any] | None = None
+        self.ledger = RunLedger(self.home / "kanzo-worker" / "run-ledger.sqlite3")
+        self._ledger_reconciled = False
+
+    def _reconcile_ledger(self) -> None:
+        """Route an interrupted run to human review before claiming more work."""
+        if self._ledger_reconciled:
+            return
+        for run in self.ledger.list_unfinished():
+            run_id = run["run_id"]
+            task_id = run["task_id"]
+            if run["state"] != "orphaned":
+                self.ledger.transition(run_id, "orphaned", {
+                    "orphan_reason": "worker restarted before a terminal outcome was recorded",
+                })
+            details = self._call("get_task", {"id": task_id})
+            state = status_from_details(details)
+            notice = f"Run `{run_id}` was interrupted by a worker restart. The agent was not rerun; inspect its saved result and artifacts before deciding what to do next."
+            if run_id not in details:
+                self._comment(task_id, notice)
+            if state not in ("done", "review"):
+                self._call("update_task", {"id": task_id, "status": "review", "human": True})
+            self.ledger.mark_publication(run_id, "orphan_review_notice")
+            self.ledger.transition(run_id, "review", {
+                "reconciled_at_restart": True,
+                "kanzo_status_at_reconciliation": state or "unknown",
+            })
+            LOG.warning("Interrupted run %s for %s routed to human review", run_id, task_id)
+        self._ledger_reconciled = True
 
     def start_metrics_server(self) -> None:
         worker = self
@@ -1333,6 +1363,7 @@ class Worker:
             return False
         self.client = McpClient(self.mcp_url, self.token)
         self.client.connect()
+        self._reconcile_ledger()
         # Doing catalog cards are the sole project activation switch.
         catalog = self.env.get("KANZO_CATALOG_PROJECT", "").strip()
         route_by_slug: dict[str, ProjectRoute] = {}
@@ -1385,21 +1416,73 @@ class Worker:
         task_id, status, title_line = parsed
         if status != "doing":
             LOG.warning("Kanzo next_task returned %s in status %s", task_id, status)
-        details = self._call("get_task", {"id": task_id})
-        project = task_id.rsplit("#", 1)[0]
-        task = Task(task_id, project, status, title_line, parse_tags(title_line), details, route_by_slug.get(project))
-        self._current_route = task.route
         run_id = uuid.uuid4().hex[:12]
-        self._comment(task_id, f"Hermes 워커가 작업을 가져왔습니다. 실행 ID: `{run_id}`\n\n작업을 확인하고 결과와 검증 내용을 댓글로 남기겠습니다.")
+        self.ledger.start(task_id, run_id, {
+            "project": task_id.rsplit("#", 1)[0],
+            "title": title_line,
+            "claimed_status": status,
+            "analysis_provider": self.env.get("KANZO_ANALYSIS_PROVIDER", "openai-api"),
+            "analysis_model": self.env.get("KANZO_ANALYSIS_MODEL", "iq_3s"),
+            "code_provider": self.env.get("KANZO_CODE_PROVIDER", "openai-api"),
+            "code_model": self.env.get("KANZO_CODE_MODEL", "coder"),
+        })
+        self.ledger.transition(run_id, "preparing")
         self.metrics["active"] = 1
-        waits_ready, reason = self._dependencies_ready(details)
+        try:
+            details = self._call("get_task", {"id": task_id})
+            project = task_id.rsplit("#", 1)[0]
+            task = Task(task_id, project, status, title_line, parse_tags(title_line), details, route_by_slug.get(project))
+            self._current_route = task.route
+            self._comment(task_id, f"Hermes 워커가 작업을 가져왔습니다. 실행 ID: `{run_id}`\n\n작업을 확인하고 결과와 검증 내용을 댓글로 남기겠습니다.")
+            self.ledger.mark_publication(run_id, "started_comment")
+            waits_ready, reason = self._dependencies_ready(details)
+        except Exception as exc:
+            LOG.exception("Could not prepare Kanzo task %s", task_id)
+            notice_published = False
+            try:
+                self._blocked(task_id, f"Task preparation failed before Hermes started: {exc}")
+                notice_published = True
+            except Exception:
+                LOG.exception("Could not publish preparation failure for %s", task_id)
+            finally:
+                current = self.ledger.get(run_id)
+                if current and current["state"] in {"claimed", "preparing", "running", "finalizing"}:
+                    self.ledger.transition(run_id, "review" if notice_published else "orphaned", {
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:1200],
+                        "hermes_started": False,
+                    })
+                if not notice_published:
+                    self._ledger_reconciled = False
+                self.metrics["active"] = 0
+            return True
         if not waits_ready:
-            self._blocked(task_id, reason)
+            notice_published = False
+            try:
+                self._blocked(task_id, reason)
+                self.ledger.mark_publication(run_id, "dependency_wait_notice")
+                notice_published = True
+            except Exception:
+                LOG.exception("Could not publish dependency wait for %s", task_id)
+            finally:
+                self.ledger.transition(run_id, "waiting" if notice_published else "orphaned", {"reason": reason})
+                if not notice_published:
+                    self._ledger_reconciled = False
             self.metrics["active"] = 0
             self.metrics["tasks"]["unknown|blocked"] = self.metrics["tasks"].get("unknown|blocked", 0) + 1
             return True
         if human_from_details(details):
-            self._blocked(task_id, "사람 전용 태스크로 표시되어 있습니다.")
+            notice_published = False
+            try:
+                self._blocked(task_id, "사람 전용 태스크로 표시되어 있습니다.")
+                self.ledger.mark_publication(run_id, "human_task_notice")
+                notice_published = True
+            except Exception:
+                LOG.exception("Could not publish human-only task notice for %s", task_id)
+            finally:
+                self.ledger.transition(run_id, "review" if notice_published else "orphaned", {"reason": "task is marked human"})
+                if not notice_published:
+                    self._ledger_reconciled = False
             self.metrics["active"] = 0
             self.metrics["tasks"]["unknown|blocked"] = self.metrics["tasks"].get("unknown|blocked", 0) + 1
             return True
@@ -1431,15 +1514,31 @@ class Worker:
             elif task.is_code:
                 checkout = self._checkout_repo(task, active)
             self._refresh_cancel_state(active)
+            source_sha = subprocess.run(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                capture_output=True, text=True, check=False,
+            ).stdout.strip() if (checkout / ".git").exists() else ""
+            self.ledger.transition(run_id, "running", {
+                "source_sha": source_sha or None,
+                "checkout": str(checkout),
+                "read_only": bool(task.route and task.route.read_only),
+            })
             result = self._run_hermes(task, task.is_code, checkout, active)
             # Keep watching through result processing and publication. Turn it
             # off immediately before the worker itself performs a final state
             # transition, so its own review/human update cannot look like cancel.
             self._refresh_cancel_state(active)
             outcome, summary = parse_worker_outcome(result)
+            self.ledger.transition(run_id, "finalizing")
+            self.ledger.save_result(run_id, outcome, result, {
+                "summary": summary,
+                "outcome_marker_present": bool(WORKER_OUTCOME_RE.search(result)),
+            })
             human_actions = parse_marked_tasks(result, HUMAN_ACTION_RE, default_human=True)
             backlog_proposals = parse_marked_tasks(result, BACKLOG_PROPOSAL_RE)
             backlog_notes = self._create_backlog_proposals(task, backlog_proposals)
+            if backlog_proposals:
+                self.ledger.mark_publication(run_id, "backlog_proposals")
             outcome_note = ""
             if not WORKER_OUTCOME_RE.search(result):
                 outcome_note = "\n\nWorker note: Hermes exited without an explicit outcome marker; routed for human review."
@@ -1450,32 +1549,47 @@ class Worker:
                 self._refresh_cancel_state(active)
                 active["accept_cancel"] = False
                 self._create_human_handoff(task, human_actions, handoff_summary)
+                self.ledger.mark_publication(run_id, "human_handoff")
                 outcome = "waiting"
+                self.ledger.save_result(run_id, outcome, result, {"summary": handoff_summary})
+                self.ledger.transition(run_id, "waiting")
             elif task.is_code and not (task.route and task.route.read_only):
                 self._refresh_cancel_state(active)
                 pr_url = self._publish_draft_pr(task, checkout, summary, active)
+                self.ledger.save_result(run_id, "review", result, {"summary": summary, "draft_pr": pr_url})
+                self.ledger.mark_publication(run_id, "draft_pr")
                 notes = "\n\n" + "\n".join(backlog_notes) if backlog_notes else ""
                 self._comment_result(task_id, f"{summary}{outcome_note}{notes}\n\nDraft PR: {pr_url}")
+                self.ledger.mark_publication(run_id, "result_comment")
                 self._refresh_cancel_state(active)
                 active["accept_cancel"] = False
                 self._call("update_task", {"id": task_id, "status": "review", "url": pr_url})
+                self.ledger.mark_publication(run_id, "task_status")
                 outcome = "review"
+                self.ledger.transition(run_id, "review")
             else:
                 notes = "\n\n" + "\n".join(backlog_notes) if backlog_notes else ""
                 self._comment_result(task_id, f"{summary or 'Task completed. See the Hermes run for details.'}{outcome_note}{notes}")
+                self.ledger.mark_publication(run_id, "result_comment")
                 self._refresh_cancel_state(active)
                 active["accept_cancel"] = False
                 if (task.route and task.route.read_only) or outcome == "review":
                     outcome = "review"
                     self._call("update_task", {"id": task_id, "status": "review", "human": True})
+                    self.ledger.mark_publication(run_id, "task_status")
+                    self.ledger.transition(run_id, "review")
                 else:
                     self._call("update_task", {"id": task_id, "status": "done", "human": False})
+                    self.ledger.mark_publication(run_id, "task_status")
+                    self.ledger.transition(run_id, "succeeded")
             self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|{outcome}"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|{outcome}", 0) + 1
             self.metrics["last_success"] = int(time.time())
         except Exception as exc:
             if isinstance(exc, TaskCancelled) or active["cancelled"].is_set():
                 LOG.info("Task %s run %s cancelled by user", task_id, run_id)
                 self._record_cancelled_run(task_id, run_id)
+                self.ledger.transition(run_id, "cancelled", {"reason": "Kanzo review + human=true cancellation signal"})
+                self.ledger.mark_publication(run_id, "cancel_notice")
                 self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|cancelled"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|cancelled", 0) + 1
                 return True
             active["accept_cancel"] = False
@@ -1483,13 +1597,25 @@ class Worker:
             try:
                 if self._handoff_for_failure(task, exc):
                     result_kind = "waiting"
+                    self.ledger.transition(run_id, "waiting", {"error_type": type(exc).__name__, "error": str(exc)[:1200]})
                 else:
                     self._blocked(task_id, str(exc))
                     result_kind = "blocked"
+                    self.ledger.transition(run_id, "review", {"error_type": type(exc).__name__, "error": str(exc)[:1200]})
             except Exception as handoff_error:
                 LOG.exception("Human handoff failed for %s", task_id)
-                self._blocked(task_id, f"Could not create or link the required human action: {handoff_error}\nOriginal failure: {exc}")
+                notice_published = False
+                try:
+                    self._blocked(task_id, f"Could not create or link the required human action: {handoff_error}\nOriginal failure: {exc}")
+                    notice_published = True
+                except Exception:
+                    LOG.exception("Could not publish failure notice for %s", task_id)
                 result_kind = "blocked"
+                current = self.ledger.get(run_id)
+                if current and current["state"] in {"claimed", "preparing", "running", "finalizing"}:
+                    self.ledger.transition(run_id, "review" if notice_published else "orphaned", {"error_type": type(exc).__name__, "handoff_error": str(handoff_error)[:1200]})
+                if not notice_published:
+                    self._ledger_reconciled = False
             self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|{result_kind}"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|{result_kind}", 0) + 1
         finally:
             active["stop_monitor"].set()

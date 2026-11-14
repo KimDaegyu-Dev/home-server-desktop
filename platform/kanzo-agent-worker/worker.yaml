@@ -368,6 +368,10 @@ spec:
               mountPath: /opt/kanzo-agent/worker.py
               subPath: worker.py
               readOnly: true
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/run_ledger.py
+              subPath: run_ledger.py
+              readOnly: true
             - name: workspace
               mountPath: /workspace
             - name: tmp

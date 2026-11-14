@@ -113,7 +113,7 @@ spec:
               \ pathlib import Path\n\nsource = Path('/opt/kanzo-agent/kanzo_terminal_provider.py')\nif not source.is_file():\n\
               \    raise SystemExit('Kanzo terminal provider module is missing')\nhomes = [Path('/opt/data/home'), *(Path('/opt/data/home/profiles')\
               \ / name for name in ('researcher', 'builder', 'reviewer'))]\nfor home in homes:\n    plugin = home / 'plugins'\
-              \ / 'kanzo_broker'\n    plugin.mkdir(parents=True, exist_ok=True)\n    shutil.copy2(source, plugin / '__init__.py')\n\
+              \ / 'kanzo_broker'\n    plugin.mkdir(parents=True, exist_ok=True)\n    staged = plugin / '.__init__.py.tmp'\n    shutil.copy2(source, staged)\n    staged.chmod(0o644)\n    staged.replace(plugin / '__init__.py')\n\
               \    (plugin / 'plugin.yaml').write_text(\n        'name: kanzo_broker\\nversion: 0.1.0\\ndescription: Per-run\
               \ Kanzo Kubernetes terminal backend\\nkind: backend\\n',\n        encoding='utf-8',\n    )\nPY\nhermes plugins\
               \ enable kanzo_broker\nhermes config set plugins.isolation in_process\nhermes config set terminal.backend kanzo_broker\n\

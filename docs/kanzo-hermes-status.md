@@ -6,8 +6,8 @@
 
 - 현재 기준: 2026-11-14, 로드맵의 Phase 1 진행 중.
 - 기준 스냅샷 `v1`: 커밋 `f11abf6` (`origin`에 push 완료). 런타임 변경 전 worker 코드와 설계 로드맵이 포함되어 있다.
-- 워커 런타임 소스: `80e121b` (`fix(kanzo): isolate repository checkouts per run`).
-- 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `80e121b18a5f04bd72c793631aae108c5b0693fd`에서 Synced/Healthy였고 Pod `kanzo-agent-worker-768f8c64f7-79w4h`는 5/5 Ready, restart 0, 태스크 active gauge 0이었다. 배포된 `worker.py` SHA-256은 저장소 파일과 일치했다.
+- 워커 런타임 소스: `314f758` (`fix(kanzo): preserve long task results in comments`).
+- 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `314f758da37cf40be9fac156c389e207ea75770e`에서 Synced/Healthy였고 Pod `kanzo-agent-worker-7bdb6949fd-xxwj9`는 5/5 Ready, restart 0, 태스크 active gauge 0이었다. 배포된 `worker.py` SHA-256은 저장소 파일과 일치했다.
 - 이번 변경은 Hermes 실제 태스크로 검증하지 않았다. Python 문법 검사, Kustomize 렌더링, 배포된 ConfigMap 코드 SHA-256 일치만 확인했다.
 
 ## 단계별 진행
@@ -15,7 +15,7 @@
 | 로드맵 단계 | 상태 | 진행 및 남은 작업 |
 |---|---|---|
 | 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
-| 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. Graphify revision 확인, durable artifact, Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
+| 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 4,200자 단위 Markdown 댓글로 나눠 기존 5,000자 절단을 없앴다. Graphify revision 확인, durable artifact, Git object cache, 불필요한 과거 댓글을 입력에서 제외하는 처리는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 시작 전 | Hermes/OMH의 durable memory, reflection, learned skills, session history 보존과 ReadOnly 학습 쓰기 경계를 검증·구현해야 한다. |
 | 3. durable run ledger와 이벤트 | 시작 전 | lease/run ID, dispatcher 재시작 조정, idempotent publication과 stale 결과 차단을 구현해야 한다. 자동 재시도는 추가하지 않는다. |
 | 4. 상주 executor와 작업 도구 격리 | 조사 일부 완료 | 클러스터 버전은 session API와 terminal provider 확장점을 제공한다. 작업별 도구 backend는 별도 HOME 복제 없이 붙일 수 있지만, provider가 원격 취소를 구현해야 하고 세션 종료 시 환경 정리 키도 맞춰야 한다. 상주 Gateway에 run별 backend를 연결하는 최소 검증과 분리 배포는 남아 있다. |
@@ -45,9 +45,15 @@
 - 실제 클러스터 이미지 `Hermes Agent v0.23.1 (upstream 3b421578)`에서 `session.create`, `prompt.submit`, `session.interrupt` 및 `TerminalEnvironmentProvider` 등록/사용 경로를 확인했다. `terminal`, remote `file`, `execute_code`, delegate가 provider 환경을 공유할 수 있다.
 - provider에는 독립적인 취소 API가 없고 원격 실행 취소를 backend가 직접 처리해야 한다. 세션 종료 시 cleanup 키와 resolved environment key가 일치하지 않을 수 있어, persistent sandbox에는 명시적인 run/session mapping과 회수 경로가 필요하다. 현재까지 Kanzo task로 새 실행 검증은 하지 않았다.
 
+### 2026-11-14 — 긴 결과 댓글 보존
+
+- 커밋 `314f758`를 GitOps `main`에 push했다. Argo CD가 해당 revision에서 Synced/Healthy이고 worker Pod 5/5 Ready, restart 0임을 확인했다. worker 코드 SHA-256 일치와 active gauge 0도 확인했다.
+- Hermes 결과의 고정 5,000자 절단을 제거하고 긴 Markdown을 최대 4,200자 본문 단위의 번호가 있는 Kanzo 댓글로 분할한다. 분할 경계에서 열린 fenced code block은 닫고 다음 댓글에서 다시 연다.
+- 실제 긴 결과를 Kanzo에 게시하는 태스크 검증은 아직 하지 않았다.
+
 ## 롤백
 
-`v1`은 Git 기준선이다. `80e121b` 변경만 되돌릴 때는 `git revert 80e121b`를 만들고 push한다. 모든 런타임 변경을 기준선으로 되돌릴 때는 v1 이후 런타임 커밋을 역순으로 revert한다. `v1` tag 자체로 Argo CD의 추적 브랜치를 바꾸지는 않는다.
+`v1`은 Git 기준선이다. `314f758` 변경만 되돌릴 때는 `git revert 314f758`를 만들고 push한다. 모든 런타임 변경을 기준선으로 되돌릴 때는 v1 이후 런타임 커밋을 역순으로 revert한다. `v1` tag 자체로 Argo CD의 추적 브랜치를 바꾸지는 않는다.
 
 ## 이전 런타임 변경 및 조사 이력
 

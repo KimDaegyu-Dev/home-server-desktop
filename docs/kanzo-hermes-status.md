@@ -18,7 +18,7 @@
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 조사 완료, 구현 전 | ReadOnly executor는 별도 HOME과 `state.db`를 써 일반 Gateway/Desktop의 세션 검색·재개와 분리된다. 프로필 로컬 skills/plugins/scripts/`.omh`를 매 run 복사하며 대상 디렉터리를 지워 학습 변경이 사라질 수 있다. OMH 메모리 절대 경로는 공유되지만 반성 hook의 실행·다음 세션 검색은 검증되지 않았다. 지속 Gateway 세션과 run별 도구 backend로 전환해야 한다. |
 | 3. durable run ledger와 이벤트 | 일부 구현 | Hermes HOME PVC의 SQLite 장부에 run 상태·설정·소스 SHA·결과와 게시 체크포인트를 기록한다. 재시작 시 미종료 run을 자동 실행하지 않고, 저장 응답과 댓글의 run별 marker를 이용해 누락된 결과 댓글만 복구한 뒤 사람 검토로 보낸다. 이벤트 중복·재연결 구간, 다중 dispatcher lease/CAS, PR 및 다른 외부 게시의 멱등 재개, 실태스크 검증은 남아 있다. 자동 재시도는 추가하지 않는다. |
-| 4. 상주 executor와 작업 도구 격리 | 조사 일부 완료 | 클러스터 버전은 session API와 terminal provider 확장점을 제공한다. 작업별 도구 backend는 별도 HOME 복제 없이 붙일 수 있지만, provider가 원격 취소를 구현해야 하고 세션 종료 시 환경 정리 키도 맞춰야 한다. 상주 Gateway에 run별 backend를 연결하는 최소 검증과 분리 배포는 남아 있다. |
+| 4. 상주 executor와 작업 도구 격리 | 조사 일부 완료 | 클러스터 Hermes 0.23.1의 canonical `session.create`/`prompt.submit`/`session.interrupt`와 terminal provider 확장점을 확인했다. `session.create` policy의 terminal scope는 해당 profile 설정에서 만들어져 저장되며 request에 terminal backend override가 없다. Kanzo 전용 프로필의 backend 등록과 session↔run 매핑, remote cancel/cleanup, broker 경계가 필요하다. 상주 Gateway에 run별 backend를 연결하는 최소 검증과 분리 배포는 남아 있다. |
 | 5. 결과·추적·위임 | 시작 전 | 구조화된 완료 근거, run/session tracing, 자식 작업 예산과 결과 게시의 일관성을 구현·확인해야 한다. |
 | 6. 성능·학습 보존 검증 | 시작 전 | 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
 
@@ -31,6 +31,12 @@
 - 결과 댓글에 숨김 run/chunk marker와 정확한 게시 본문을 저장한다. 재시작 때 이미 올라간 조각은 건너뛰고 빠진 결과만 게시한다. 외부 작업을 자동 재실행하지 않는다. 출력의 알려진 토큰 패턴과 주입된 비밀값은 artifact/댓글 저장 전에 가린다.
 - ReadOnly 데이터 경계를 조사했다. 별도 HOME 때문에 Hermes 세션 DB가 일반 프로필과 분리되고, 프로필 로컬 skills/plugins/scripts/`.omh`는 매 run 삭제 후 원본에서 다시 복사되어 학습 변경이 덮일 수 있다. OMH 절대 경로 일부는 공유되지만 회고와 학습이 다음 세션에서 검색되는지는 미확인이다. 별도 Gateway HOME 복사 방식을 상주 Gateway + run별 도구 backend로 대체하는 Phase 2/4 작업이 남아 있다.
 - 이 배포는 실제 Kanzo 태스크로 검증하지 않았다. 게시 재생성·부분 댓글 복구 동작도 태스크 기반으로 아직 검증되지 않았다.
+
+### 2026-11-14 — Hermes session과 terminal 정책 계약 확인
+
+- 배포 이미지 `Hermes Agent v0.23.1`의 `hermes_cli/gateway_chat.py`, `gateway/session_controls.py`, `gateway/session_policy.py`를 확인했다. canonical 대화 경로는 `session.create` → `prompt.submit`이며 중단은 `session.interrupt`다. Gateway connection이 선택한 profile scope에서 세션을 만들고, 생성 정책에는 model/provider, reasoning, toolsets, cwd 등이 전달된다.
+- `session.create`가 받는 `CREATE_FIELDS`에는 run별 terminal backend override가 없다. `build_policy()`는 profile에서 terminal scope를 만들고 `terminal_json`으로 세션 정책에 고정한다. 따라서 Desktop의 전역 환경 변수를 태스크마다 바꾸면 안 된다. Kanzo profile에 등록 backend를 고정하고 broker가 run/session 매핑을 검사하는 방식이 다음 설계·구현 경로다.
+- 확인은 설치된 코드 경로와 설정 계약을 읽은 것이며, API에 모델 요청을 보내거나 실제 Kanzo 태스크를 시작하지 않았다.
 
 ### 2026-11-14 — SQLite 실행 장부 1차 적용
 

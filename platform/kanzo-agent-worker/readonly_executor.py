@@ -69,6 +69,30 @@ def sync_profile(profile: str) -> Path:
         src, dst = source / name, destination / name
         if src.is_file():
             shutil.copy2(src, dst)
+    # Hermes resolves plugin credentials through the active profile's secret
+    # scope. In a multiplexed gateway, ordinary process environment variables
+    # are deliberately not used as a fallback for a routed profile. Carry the
+    # VSO-injected Langfuse values into this isolated profile's private dotenv
+    # file so its Gateway can build the profile-scoped trace client.
+    dotenv = destination / ".env"
+    injected = {
+        name: os.environ[name]
+        for name in (
+            "HERMES_LANGFUSE_PUBLIC_KEY",
+            "HERMES_LANGFUSE_SECRET_KEY",
+            "HERMES_LANGFUSE_BASE_URL",
+        )
+        if os.environ.get(name)
+    }
+    if injected:
+        existing = dotenv.read_text(encoding="utf-8").splitlines() if dotenv.exists() else []
+        keys = set(injected)
+        kept = [line for line in existing if line.partition("=")[0].strip() not in keys]
+        dotenv.write_text(
+            "\n".join([*kept, *(f"{name}={value}" for name, value in injected.items())]) + "\n",
+            encoding="utf-8",
+        )
+        dotenv.chmod(0o600)
     for name in ("skills", "plugins", "scripts", ".omh"):
         src, dst = source / name, destination / name
         if src.is_dir():

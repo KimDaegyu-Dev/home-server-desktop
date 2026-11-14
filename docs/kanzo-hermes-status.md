@@ -207,3 +207,10 @@
 - dispatcher가 resident API URL을 사용하도록 설정되면 원격 API 실패 시 Hermes CLI, local Gateway control socket, ReadOnly loopback 경로로 후퇴하지 않도록 fail-closed 처리했다. 따라서 분리 후 프로필 인증/취소/작업 제출의 권위 상태가 dispatcher 컨테이너에 생기지 않는다.
 - 리뷰에서 ingress 정책이 executor/worker Pod를 선택하면서 8766 이외 연결을 차단할 수 있음을 발견했다. 현재 클러스터에서 확인한 Prometheus label과 Tailscale ingress proxy label을 기준으로 9105/9119 ingress 허용을 추가했다. 실제 policy는 미배포 상태다.
 - 리뷰 지적대로 `/readyz`를 DB/프로필 경로 확인에 그치지 않고 Hermes Gateway의 canonical endpoint가 `ready`인지 확인하도록 보강했다. SIGTERM drain 상태에서는 readiness가 즉시 실패한다. HTTP probe는 인증정보 없이 내부 readiness만 받으며, API 작업 경로는 bearer 인증을 유지한다.
+
+### 2026-11-14 — GitOps 롤아웃 검증
+
+- `0fb3b34`의 executor/dispatcher 분리와 sandbox 구성을 `main`에 반영했다. PVC가 `WaitForFirstConsumer` 상태에서 Argo sync wave를 막는 문제를 상태 PVC binder Job으로 해결했고, migration hook은 ledger 0행·artifact 0개를 검증했다.
+- 대형 worker 코드 ConfigMap의 client-side apply 주석 크기 초과를 해당 ConfigMap의 Server-Side Apply로 바꿨다. Hermes broker plugin manifest의 개행 escaping 오류도 수정해 새 executor Pod에서 재확인 중이다.
+- 현재 Argo는 `734afc7` 롤아웃 중이며 새 executor Pod의 Hermes 초기화 단계다. Kubernetes Secret에는 `KANZO_EXECUTOR_API_TOKEN` 항목이 있지만 디코드 값 길이는 0이다. Executor API는 32자 미만 토큰이면 시작을 거부한다. dispatcher는 아직 실행되지 않았고 Kanzo 작업도 처리하지 않았다.
+- 필요한 Vault 항목은 mount `kv`, path `mcp/kanzo-agent`, field `KANZO_EXECUTOR_API_TOKEN`에 비어 있지 않은 실제 토큰이다. MCP Vault 도구 세션도 아직 Vault 인증 토큰을 받지 못해 직접 확인할 수 없다.

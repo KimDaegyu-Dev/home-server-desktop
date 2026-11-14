@@ -4,11 +4,11 @@
 
 ## 현재 상태
 
-- 현재 기준: 2026-11-14, 로드맵의 Phase 1 진행 중.
+- 현재 기준: 2026-11-14, 로드맵 Phase 1 진행 중, Phase 3 일부 구현.
 - 기준 스냅샷 `v1`: 커밋 `f11abf6` (`origin`에 push 완료). 런타임 변경 전 worker 코드와 설계 로드맵이 포함되어 있다.
-- 워커 런타임 소스: `292ac46` (`fix(kanzo): preserve Markdown fences and comment boundaries`).
-- 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `292ac46d78055b220976020f89a40aa5f9ca7fc9`에서 Synced/Healthy였고 Pod `kanzo-agent-worker-6b8ccc6c9d-72k7z`는 5/5 Ready, restart 0, 태스크 active gauge 0이었다. 배포된 `worker.py` SHA-256은 저장소 파일과 일치했다.
-- 이번 변경은 Hermes 실제 태스크로 검증하지 않았다. Python 문법 검사, Kustomize 렌더링, 배포된 ConfigMap 코드 SHA-256 일치만 확인했다.
+- 워커 런타임 소스: `8ec721a` (`feat(kanzo): persist worker execution ledger`).
+- 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `8ec721a36ff11bc7dfdb43025b298b58e5a79755`에서 Synced/Healthy였고 Pod `kanzo-agent-worker-b5958767-jwnmx`는 5/5 Ready, restart 0, 태스크 active gauge 0이었다. 배포된 `worker.py` SHA-256은 `8cee5a2bdd856ebd17b8a9bb27bd4f55c5701b014bced55aa83e73e090f69ece`, `run_ledger.py`는 `e632d313661e739721a3c785605cb351c6feecac6271847c5f7fb6f2370bc973`으로 저장소 파일과 일치했다.
+- 실제 Kanzo 태스크로는 검증하지 않았다. Python 문법 검사, Kustomize 렌더링, 배포 상태·코드 해시·유휴 active gauge만 확인했다.
 
 ## 단계별 진행
 
@@ -17,12 +17,20 @@
 | 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. Graphify revision 확인, 별도 durable artifact, Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 시작 전 | Hermes/OMH의 durable memory, reflection, learned skills, session history 보존과 ReadOnly 학습 쓰기 경계를 검증·구현해야 한다. |
-| 3. durable run ledger와 이벤트 | 시작 전 | lease/run ID, dispatcher 재시작 조정, idempotent publication과 stale 결과 차단을 구현해야 한다. 자동 재시도는 추가하지 않는다. |
+| 3. durable run ledger와 이벤트 | 일부 구현 | Hermes HOME PVC의 SQLite 장부에 run 상태·설정·소스 SHA·전체 결과·publication 체크포인트를 기록한다. 재시작 시 미종료 run을 Kanzo 사람 검토로 보낸다. 이벤트 중복·재연결·다중 dispatcher lease, 외부 게시의 멱등 재개, 실태스크 검증은 남아 있다. 자동 재시도는 추가하지 않는다. |
 | 4. 상주 executor와 작업 도구 격리 | 조사 일부 완료 | 클러스터 버전은 session API와 terminal provider 확장점을 제공한다. 작업별 도구 backend는 별도 HOME 복제 없이 붙일 수 있지만, provider가 원격 취소를 구현해야 하고 세션 종료 시 환경 정리 키도 맞춰야 한다. 상주 Gateway에 run별 backend를 연결하는 최소 검증과 분리 배포는 남아 있다. |
 | 5. 결과·추적·위임 | 시작 전 | 구조화된 완료 근거, run/session tracing, 자식 작업 예산과 결과 게시의 일관성을 구현·확인해야 한다. |
 | 6. 성능·학습 보존 검증 | 시작 전 | 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
 
 ## 변경 이력
+
+### 2026-11-14 — SQLite 실행 장부 1차 적용
+
+- 커밋 `8ec721a`를 GitOps `main`에 push하고 Argo CD 반영을 확인했다. Argo CD는 Synced/Healthy, 새 worker Pod는 5/5 Ready, restart 0이었다.
+- 실행 상태와 모델 원문 결과를 `kanzo-agent-hermes-home` PVC의 `kanzo-worker/run-ledger.sqlite3`에 기록한다. SQLite WAL/FULL 동기화와 트랜잭션을 쓰고, 저장 디렉터리·DB 파일 권한을 제한한다. 모델·provider, 태스크, source SHA, 결과 게시 단계도 기록한다.
+- 재시작 뒤 종료 상태가 없는 run은 자동 재실행하지 않고, 원 Kanzo 카드에 재시작 중단을 기록해 `review + human=true`로 라우팅한다. 이미 `done` 또는 `review`인 카드는 상태를 덮어쓰지 않는다.
+- 확인: Python 문법 검사, Kustomize 렌더링, ConfigMap 반영, 배포된 두 Python 파일의 SHA-256 일치, Argo Synced/Healthy, Pod 5/5 Ready와 active gauge 0.
+- 실제 Kanzo 태스크 실행은 하지 않았다. 게시 체크포인트는 기록되지만 현재 외부 댓글·PR 게시를 멱등하게 재개하지 않으며, 이벤트 재연결과 lease/CAS 보장도 미구현이다.
 
 ### 2026-11-14 — 기준선 `v1`
 

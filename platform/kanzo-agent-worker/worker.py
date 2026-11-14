@@ -359,7 +359,11 @@ def extract_waits_on(details: str) -> tuple[str, ...]:
 
 
 def status_from_details(details: str) -> str | None:
-    match = re.search(r"^status:\s*(\S+)", details, re.IGNORECASE | re.MULTILINE)
+    # Kanzo's human-readable details include punctuation after the status,
+    # e.g. ``status: review, human: for the user, not for agents``.
+    # Capture the status token itself so cancellation checks don't compare
+    # ``review,`` with ``review`` and silently miss the signal.
+    match = re.search(r"^status:\s*([a-z][a-z0-9_-]*)\b", details, re.IGNORECASE | re.MULTILINE)
     return match.group(1).lower() if match else None
 
 

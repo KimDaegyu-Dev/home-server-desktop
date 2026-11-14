@@ -270,6 +270,7 @@ class Handler(BaseHTTPRequestHandler):
         if env.get("LITELLM_BASE_URL"):
             env["OPENAI_BASE_URL"] = env["LITELLM_BASE_URL"]
         env.pop("MCPPROXY_KANZO_AGENT_TOKEN", None)
+        env.pop("KANZO_BROKER_WORKER_TOKEN", None)
         env.pop("GITHUB_TOKEN", None)
         env.pop("GH_TOKEN", None)
         try:

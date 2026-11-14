@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from artifact_store import ArtifactStore
+from broker_client import BrokerClient
+from executor_client import ExecutorClient
 from run_ledger import RunLedger
 
 
@@ -54,6 +56,10 @@ class WorkerError(RuntimeError):
 
 class TaskCancelled(WorkerError):
     """The user explicitly moved the active task to review with human=true."""
+
+
+class RemoteCancellationUnconfirmed(WorkerError):
+    """The worker cannot prove that the exact remote Gateway run has stopped."""
 
 
 class McpError(WorkerError):
@@ -549,19 +555,24 @@ class Worker:
         self.token = self.env.get("MCPPROXY_KANZO_AGENT_TOKEN", "")
         self.workspace = Path(self.env.get("KANZO_WORKSPACE", "/workspace"))
         self.home = Path(self.env.get("HERMES_HOME", "/opt/data"))
+        # Keep dispatcher recovery state independently configurable from Hermes HOME.
+        # The default preserves the existing on-disk layout until the PVC cutover.
+        self.state_dir = Path(
+            self.env.get("KANZO_WORKER_STATE_DIR", str(self.home / "kanzo-worker"))
+        )
         self.heartbeat_stale_seconds = max(90, int(self.env.get("KANZO_HEARTBEAT_STALE_SECONDS", "900")))
         self.run_once = self.env.get("KANZO_RUN_ONCE", "false").lower() == "true"
         self.enabled = self.env.get("KANZO_ENABLED", "false").lower() == "true"
         self.client: McpClient | None = None
         self.mcp_lock = threading.Lock()
         self.metrics = {"cycles": {}, "tasks": {}, "active": 0, "last_success": 0}
-        self.heartbeat_path = self.home / "worker-heartbeat"
+        self.heartbeat_path = self.state_dir / "worker-heartbeat"
         self.wake_queue: queue.Queue[str] = queue.Queue(maxsize=1)
         self.active_change = threading.Event()
         self.active_lock = threading.Lock()
         self.active_run: dict[str, Any] | None = None
-        self.ledger = RunLedger(self.home / "kanzo-worker" / "run-ledger.sqlite3")
-        self.artifacts = ArtifactStore(self.home / "kanzo-worker" / "artifacts")
+        self.ledger = RunLedger(self.state_dir / "run-ledger.sqlite3")
+        self.artifacts = ArtifactStore(self.state_dir / "artifacts")
         self._ledger_reconciled = False
 
     def _reconcile_ledger(self) -> None:
@@ -752,16 +763,80 @@ class Worker:
         """Keep the resident Gateway session identity beside its Kanzo run."""
         if active.get("gateway_session_id") == session_id:
             return
-        active["gateway_session_id"] = session_id
+        if active.get("gateway_session_id") not in (None, session_id):
+            raise WorkerError("Hermes returned a different session identity for this Kanzo run.")
         try:
             self.ledger.record_fields(active["run_id"], {"gateway_session_id": session_id})
-        except Exception:
-            LOG.exception("Could not persist Hermes session identity for run %s", active["run_id"])
+        except Exception as exc:
+            raise WorkerError("Could not durably persist the Hermes session identity.") from exc
+        active["gateway_session_id"] = session_id
+
+    def _record_gateway_execution_event(self, active: dict[str, Any], event: dict[str, Any]) -> None:
+        """Persist canonical Gateway admission/generation metadata as stream events arrive."""
+        payload = event.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        event_session = event.get("session_id") or payload.get("session_id")
+        if isinstance(event_session, str) and event_session:
+            self._record_hermes_session(active, event_session)
+        fields: dict[str, Any] = {}
+        admission_id = event.get("admission_id") or payload.get("admission_id")
+        if isinstance(admission_id, str) and admission_id:
+            current = active.get("prompt_admission_id")
+            if current not in (None, admission_id):
+                raise WorkerError("Hermes returned multiple prompt admissions for one Kanzo run.")
+            active["prompt_admission_id"] = admission_id
+            fields["prompt_admission_id"] = admission_id
+        generation = event.get("execution_generation")
+        if type(generation) is not int:
+            generation = payload.get("execution_generation")
+        if type(generation) is int and generation >= 0:
+            fields["execution_generation"] = generation
+        if not fields:
+            return
+        try:
+            self.ledger.record_fields(active["run_id"], fields)
+        except Exception as exc:
+            raise WorkerError("Could not durably persist Hermes prompt execution metadata.") from exc
+        if "execution_generation" in fields:
+            active["execution_generation"] = fields["execution_generation"]
+            active["execution_generation_authoritative"] = True
 
     def _interrupt_gateway_session(self, active: dict[str, Any]) -> bool:
         """Interrupt the exact Hermes Gateway session before detaching its CLI viewer."""
         session_id = active.get("gateway_session_id")
         if not isinstance(session_id, str) or not session_id:
+            return False
+        admission_id = active.get("prompt_admission_id")
+        if active.get("executor_kind") == "hermes_gateway_api":
+            client = active.get("executor_client")
+            generation = active.get("execution_generation")
+            if not isinstance(client, ExecutorClient):
+                return False
+            if type(generation) is not int:
+                generation = None
+            try:
+                response = client.cancel(
+                    task_id=active["task_id"], run_id=active["run_id"],
+                    session_id=session_id, admission_id=admission_id,
+                    execution_generation=generation,
+                )
+            except Exception as exc:
+                LOG.warning("Hermes executor API cancel failed for run %s (%s)", active["run_id"], type(exc).__name__)
+                return False
+            if response.get("accepted") is not True:
+                LOG.warning("Hermes executor API did not confirm cancel for run %s", active["run_id"])
+                return False
+            active["gateway_interrupt_accepted"] = True
+            try:
+                self.ledger.record_fields(active["run_id"], {"gateway_interrupt_accepted": True})
+            except Exception:
+                LOG.exception("Could not persist Hermes executor API cancel receipt for run %s", active["run_id"])
+            return True
+        if isinstance(active.get("broker_lease"), dict) and not isinstance(admission_id, str):
+            return False
+        if self.env.get("KANZO_EXECUTOR_API_URL", "").strip():
+            # Once routed to the resident executor, never fall back to a local
+            # Hermes CLI/control socket whose state is no longer authoritative.
             return False
         profile = str(active.get("profile") or "researcher")
         profile_home = self.home if profile == "default" else self.home / "profiles" / profile
@@ -773,7 +848,10 @@ class Worker:
             "--profile-home", str(profile_home),
             "--session-id", session_id,
         ]
-        if isinstance(active.get("execution_generation"), int):
+        if isinstance(admission_id, str):
+            command.extend(["--admission-id", admission_id])
+        if (active.get("execution_generation_authoritative") is True
+                and isinstance(active.get("execution_generation"), int)):
             command.extend(["--generation", str(active["execution_generation"])])
         control_env = self._hermes_env()
         for name in (
@@ -823,7 +901,7 @@ class Worker:
 
     def _cancel_active_executor(self, active: dict[str, Any]) -> bool:
         """Stop only the executor owned by this exact task/run pair."""
-        if active.get("read_only"):
+        if active.get("read_only") and not isinstance(active.get("broker_lease"), dict):
             payload = json.dumps({"task_id": active["task_id"], "run_id": active["run_id"]}).encode()
             request = urllib.request.Request(
                 "http://127.0.0.1:8765/cancel", payload,
@@ -861,6 +939,10 @@ class Worker:
             except Exception:
                 LOG.exception("Could not deliver read-only cancel for %s/%s", active["task_id"], active["run_id"])
                 return False
+        if active.get("executor_kind") == "hermes_gateway_api":
+            if not self._interrupt_gateway_session(active):
+                return False
+            return True
         with self.active_lock:
             process = active.get("process")
         if process is None or process.poll() is not None:
@@ -876,16 +958,86 @@ class Worker:
             self._stop_hermes_process(process)
         return True
 
+    def _mark_cancel_unconfirmed(self, active: dict[str, Any]) -> None:
+        """Persist and publish ambiguity without changing the user's Kanzo state."""
+        if active.get("remote_execution_uncertain"):
+            return
+        active["remote_execution_uncertain"] = True
+        message = (
+            f"Run `{active['run_id']}` received the review + human=true cancellation signal, "
+            "but Hermes Gateway did not confirm interruption of the exact remote execution. "
+            "The worker has stopped result publication and will keep this run isolated; its "
+            "sandbox will not be finalized or removed while the remote outcome is uncertain. "
+            "The run remains unresolved until Gateway confirms cancellation."
+        )
+        try:
+            self.ledger.record_fields(active["run_id"], {
+                "remote_execution_uncertain": True,
+                "cancel_signal_at": active.get("cancel_signal_at"),
+                "cancel_attempts": active.get("cancel_attempts", 0),
+                "cancel_uncertain_at": int(time.time()),
+            })
+        except Exception:
+            LOG.exception("Could not persist uncertain remote cancellation for run %s", active["run_id"])
+        try:
+            self._comment(active["task_id"], message)
+            active["cancel_uncertain_comment_published"] = True
+        except Exception:
+            LOG.exception("Could not publish uncertain remote cancellation for run %s", active["run_id"])
+        LOG.error("Remote cancellation is unconfirmed for %s/%s; quarantining worker run", active["task_id"], active["run_id"])
+
+    def _quarantine_uncertain_cancel(self, active: dict[str, Any]) -> None:
+        """Hold the worker and renew its sandbox lease until a human resolves ambiguity."""
+        if active["cancelled"].is_set():
+            return
+        self._mark_cancel_unconfirmed(active)
+        last_heartbeat = 0.0
+        while not active["cancelled"].wait(timeout=1):
+            now = time.monotonic()
+            if now - last_heartbeat >= 20:
+                self.heartbeat_path.touch()
+                try:
+                    self._heartbeat_sandbox(active)
+                except Exception:
+                    LOG.exception(
+                        "Could not renew sandbox lease during uncertain cancellation for %s/%s",
+                        active["task_id"], active["run_id"],
+                    )
+                last_heartbeat = now
+                LOG.warning(
+                    "Quarantined %s/%s: remote Gateway cancellation remains unconfirmed; "
+                    "the run remains isolated and the worker will not claim another task",
+                    active["task_id"], active["run_id"],
+                )
+
     def _watch_active_task(self, active: dict[str, Any]) -> None:
+        last_uncertain_heartbeat = 0.0
         while not active["stop_monitor"].is_set():
+            if active.get("remote_execution_uncertain"):
+                now = time.monotonic()
+                if now - last_uncertain_heartbeat >= 20:
+                    self.heartbeat_path.touch()
+                    try:
+                        self._heartbeat_sandbox(active)
+                    except Exception:
+                        LOG.exception("Could not renew quarantined sandbox lease for %s", active["run_id"])
+                    last_uncertain_heartbeat = now
             if active.get("cancel_pending"):
                 if not self._active_task_cancel_requested(active):
                     active["cancel_pending"] = False
                     continue
+                active.setdefault("cancel_signal_at", time.monotonic())
+                active["cancel_attempts"] = active.get("cancel_attempts", 0) + 1
                 if self._cancel_active_executor(active):
+                    active["remote_execution_uncertain"] = False
                     active["cancelled"].set()
                     return
-                active["stop_monitor"].wait(timeout=5)
+                elapsed = time.monotonic() - active["cancel_signal_at"]
+                if elapsed >= 120:
+                    self._mark_cancel_unconfirmed(active)
+                    active["stop_monitor"].wait(timeout=30)
+                else:
+                    active["stop_monitor"].wait(timeout=5)
                 continue
             if not self.active_change.wait(timeout=1):
                 continue
@@ -900,14 +1052,23 @@ class Worker:
                     continue
             if self._active_task_cancel_requested(active):
                 active["cancel_pending"] = True
+                active["cancel_signal_at"] = time.monotonic()
+                active["cancel_attempts"] = 1
                 if self._cancel_active_executor(active):
+                    active["remote_execution_uncertain"] = False
                     active["cancelled"].set()
                     return
+                if time.monotonic() - active["cancel_signal_at"] >= 120:
+                    self._mark_cancel_unconfirmed(active)
 
     @staticmethod
     def _raise_if_cancelled(active: dict[str, Any] | None) -> None:
         if active and active["cancelled"].is_set():
             raise TaskCancelled(f"User cancelled active run {active['run_id']} by setting review and human=true.")
+        if active and active.get("remote_execution_uncertain"):
+            raise RemoteCancellationUnconfirmed(
+                f"Remote cancellation for run {active['run_id']} was not confirmed."
+            )
 
     def _run_active_command(
         self,
@@ -956,8 +1117,14 @@ class Worker:
             return
         self._raise_if_cancelled(active)
         if self._active_task_cancel_requested(active):
-            active["cancelled"].set()
-            self._cancel_active_executor(active)
+            active["cancel_pending"] = True
+            active.setdefault("cancel_signal_at", time.monotonic())
+            active["cancel_attempts"] = active.get("cancel_attempts", 0) + 1
+            if self._cancel_active_executor(active):
+                active["remote_execution_uncertain"] = False
+                active["cancelled"].set()
+            elif time.monotonic() - active["cancel_signal_at"] >= 120:
+                self._mark_cancel_unconfirmed(active)
             self._raise_if_cancelled(active)
 
     def _record_cancelled_run(self, task_id: str, run_id: str) -> None:
@@ -1164,6 +1331,19 @@ class Worker:
         return True, ""
 
     def _auth_ready(self, provider: str, profile: str) -> bool:
+        executor_url = self.env.get("KANZO_EXECUTOR_API_URL", "").strip()
+        if executor_url:
+            try:
+                return ExecutorClient(
+                    base_url=executor_url,
+                    token=self.env.get("KANZO_EXECUTOR_API_TOKEN", ""),
+                ).auth_status(provider=provider, profile=profile)
+            except Exception as exc:
+                LOG.warning(
+                    "Hermes executor auth status unavailable for %s/%s (%s)",
+                    profile, provider, type(exc).__name__,
+                )
+                return False
         result = subprocess.run(
             ["hermes", "--profile", profile, "auth", "status", provider],
             text=True,
@@ -1178,8 +1358,16 @@ class Worker:
 
     def _hermes_env(self) -> dict[str, str]:
         env = dict(self.env)
-        env["HERMES_HOME"] = str(self.home)
-        env["HOME"] = str(self.home)
+        # The worker control-plane credential must never enter Hermes or a tool process.
+        env.pop("KANZO_BROKER_WORKER_TOKEN", None)
+        if self.env.get("KANZO_EXECUTOR_API_URL", "").strip():
+            # Dispatcher tools must not inherit or create state under the resident
+            # Hermes profile directory once execution is remote.
+            env["HERMES_HOME"] = env.get("HERMES_HOME", "/tmp/hermes-dispatcher")
+            env["HOME"] = env.get("HOME", "/tmp")
+        else:
+            env["HERMES_HOME"] = str(self.home)
+            env["HOME"] = str(self.home)
         # Hermes' openai-api provider reads the standard OpenAI environment
         # names. Route those to the existing LiteLLM credentials and endpoint.
         if env.get("LITELLM_API_KEY"):
@@ -1313,21 +1501,38 @@ class Worker:
         # The agent gets a separate read-only MCP token; the controller's Kanzo
         # mutation token and GitHub write credential stay out of its environment.
         agent_env.pop("MCPPROXY_KANZO_AGENT_TOKEN", None)
+        agent_env.pop("KANZO_BROKER_WORKER_TOKEN", None)
         if self.env.get("MCPPROXY_AGENT_READ_TOKEN"):
             agent_env["MCPPROXY_AGENT_READ_TOKEN"] = self.env["MCPPROXY_AGENT_READ_TOKEN"]
         else:
             agent_env.pop("MCPPROXY_AGENT_READ_TOKEN", None)
         agent_env.pop("GITHUB_TOKEN", None)
         agent_env.pop("GH_TOKEN", None)
-        command = [
-            "hermes", "--profile", profile, "chat", "--query-file", str(prompt_path), "--oneshot",
-            "--format", "stream-json", "--provider", provider, "--model", model,
-            "--reasoning", reasoning,
-            "--toolsets",
-            "search,memory,skills,todo,terminal,file,delegation,code_execution,clarify,kanban,mcp-home_server",
-        ]
+        if active and isinstance(active.get("broker_lease"), dict):
+            hermes_home = Path(self.env.get("HERMES_HOME", "/opt/data/home"))
+            profile_home = hermes_home if profile == "default" else hermes_home / "profiles" / profile
+            command = [
+                self.env.get("HERMES_PYTHON", "/opt/hermes/.venv/bin/python"),
+                "/opt/kanzo-agent/gateway_execution.py",
+                "--profile-home", str(profile_home),
+                "--session-id", active["gateway_session_id"],
+                "--query-file", str(prompt_path),
+            ]
+        else:
+            command = [
+                "hermes", "--profile", profile,
+                *( ["--resume", active["gateway_session_id"]]
+                   if active and active.get("gateway_session_id") else [] ),
+                "chat", "--query-file", str(prompt_path), "--oneshot",
+                "--format", "stream-json", "--provider", provider, "--model", model,
+                "--reasoning", reasoning,
+                "--toolsets",
+                "search,memory,skills,todo,terminal,file,delegation,code_execution,clarify,kanban,mcp-home_server",
+            ]
         self._raise_if_cancelled(active)
-        if route and route.read_only:
+        if route and route.read_only and not (active and active.get("broker_lease")):
+            if self.env.get("KANZO_EXECUTOR_API_URL", "").strip():
+                raise WorkerError("Read-only task has no broker-enforced sandbox; refusing local Hermes fallback.")
             if active is None:
                 raise WorkerError("Read-only run is missing its task/run cancellation identity.")
             payload = json.dumps({
@@ -1352,6 +1557,8 @@ class Worker:
                                 diagnostics.append(raw_text)
                             continue
                         self.heartbeat_path.touch()
+                        if active is not None:
+                            self._record_gateway_execution_event(active, event)
                         event_session = event.get("session_id")
                         if isinstance(event_session, str) and event_session and active is not None:
                             self._record_hermes_session(active, event_session)
@@ -1378,20 +1585,25 @@ class Worker:
                 raise WorkerError(f"Read-only Hermes executor unavailable; refusing writable fallback: {exc}") from exc
             finally:
                 prompt_path.unlink(missing_ok=True)
-        process = subprocess.Popen(
-            command,
-            cwd=cwd,
-            env=agent_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            start_new_session=(os.name == "posix"),
-        )
+        api_client = active.get("executor_client") if active and active.get("broker_lease") else None
+        using_executor_api = isinstance(api_client, ExecutorClient)
+        if self.env.get("KANZO_EXECUTOR_API_URL", "").strip() and not using_executor_api:
+            raise WorkerError("Resident Hermes executor session is missing; refusing local Gateway fallback.")
+        if active and isinstance(active.get("broker_lease"), dict) and not using_executor_api:
+            raise WorkerError("Sandbox run has no authenticated resident Hermes executor API; refusing direct Gateway fallback.")
+        process: subprocess.Popen[str] | None = None
+        if not using_executor_api:
+            process = subprocess.Popen(
+                command, cwd=cwd, env=agent_env, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, bufsize=1,
+                start_new_session=(os.name == "posix"),
+            )
         if active is not None:
             with self.active_lock:
                 active["process"] = process
-                active["executor_kind"] = "hermes_gateway_cli"
+                active["executor_kind"] = (
+                    "hermes_gateway_api" if using_executor_api else "hermes_gateway_cli"
+                )
         text_parts: list[str] = []
         diagnostics: list[str] = []
         started_at = time.monotonic()
@@ -1399,15 +1611,24 @@ class Worker:
         last_heartbeat = started_at
         last_progress = started_at
         last_output_at = started_at
-        last_event = "process_started"
-        assert process.stdout is not None
+        last_event = "executor_api_started" if using_executor_api else "process_started"
 
         stream: queue.Queue[tuple[str, str | Exception | None]] = queue.Queue()
 
         def read_output() -> None:
             try:
-                for output_line in process.stdout:
-                    stream.put(("line", output_line))
+                if using_executor_api:
+                    assert isinstance(api_client, ExecutorClient) and active is not None
+                    events = api_client.iter_submit_events(
+                        session_id=active["gateway_session_id"],
+                        task_id=active["task_id"], run_id=active["run_id"], prompt=prompt,
+                    )
+                    for event in events:
+                        stream.put(("line", json.dumps(event, ensure_ascii=False)))
+                else:
+                    assert process is not None and process.stdout is not None
+                    for output_line in process.stdout:
+                        stream.put(("line", output_line))
             except Exception as exc:
                 stream.put(("error", exc))
             finally:
@@ -1415,11 +1636,13 @@ class Worker:
 
         reader = threading.Thread(target=read_output, daemon=True, name="hermes-output-reader")
         reader.start()
+        exit_code = 0
         try:
             self._raise_if_cancelled(active)
             stream_finished = False
             while not stream_finished:
                 now = time.monotonic()
+                self._raise_if_cancelled(active)
                 remaining = deadline - now
                 if remaining <= 0:
                     idle_seconds = int(now - last_output_at)
@@ -1436,6 +1659,7 @@ class Worker:
                 if event_type == "heartbeat":
                     if now - last_heartbeat >= 30:
                         self.heartbeat_path.touch()
+                        self._heartbeat_sandbox(active)
                         last_heartbeat = now
                     if now - last_progress >= 600:
                         self._comment(task.task_id, "작업이 계속 진행 중입니다. 아직 검증된 종료 결과는 없습니다.")
@@ -1463,15 +1687,28 @@ class Worker:
                 last_event = str(event.get("type", "unknown_event"))
                 if event.get("tool_name"):
                     last_event += f"/{str(event['tool_name'])[:100]}"
+                if active is not None:
+                    self._record_gateway_execution_event(active, event)
                 event_session = event.get("session_id")
                 if isinstance(event_session, str) and event_session and active is not None:
                     self._record_hermes_session(active, event_session)
                 if event.get("type") == "text" and isinstance(event.get("text"), str):
                     text_parts.append(event["text"])
+                elif event.get("type") == "executor_exit":
+                    if active is not None and (
+                        event.get("settled") is True or event.get("gateway_turn_settled") is True
+                    ):
+                        active["gateway_turn_finished"] = True
+                    if type(event.get("code")) is int:
+                        exit_code = event["code"]
+                elif event.get("type") == "result" and isinstance(event.get("exit_code"), int):
+                    if active is not None:
+                        active["gateway_turn_finished"] = True
                 elif event.get("type") in ("error", "error_detail", "tool_error"):
                     diagnostics.append(json.dumps(event, ensure_ascii=False))
                 if now - last_heartbeat >= 30:
                     self.heartbeat_path.touch()
+                    self._heartbeat_sandbox(active)
                     last_heartbeat = now
                 if now - last_progress >= 600:
                     self._comment(task.task_id, "작업이 계속 진행 중입니다. 아직 검증된 종료 결과는 없습니다.")
@@ -1484,7 +1721,8 @@ class Worker:
                     f"Hermes exceeded the 2700-second task deadline; "
                     f"last output event={last_event}, stdout idle={idle_seconds}s."
                 )
-            exit_code = process.wait(timeout=remaining)
+            if process is not None:
+                exit_code = process.wait(timeout=remaining)
         except subprocess.TimeoutExpired as exc:
             idle_seconds = int(time.monotonic() - last_output_at)
             raise WorkerError(
@@ -1493,25 +1731,31 @@ class Worker:
             ) from exc
         finally:
             prompt_path.unlink(missing_ok=True)
-            if process.poll() is None:
-                if active is not None and active.get("executor_kind") == "hermes_gateway_cli":
-                    if not active.get("gateway_interrupt_accepted"):
-                        interrupted = self._interrupt_gateway_session(active)
-                        if not interrupted:
-                            LOG.error(
-                                "Hermes CLI is ending while Gateway interrupt is unconfirmed for run %s; "
-                                "remote execution outcome requires review",
-                                active["run_id"],
-                            )
+            if active is not None and active.get("executor_kind") in {"hermes_gateway_cli", "hermes_gateway_api"}:
+                process_code = process.poll() if process is not None else (0 if active.get("gateway_turn_finished") else None)
+                should_interrupt = (
+                    process_code is None
+                    or (process_code != 0 and not active.get("gateway_turn_finished"))
+                )
+                if should_interrupt and not active.get("gateway_interrupt_accepted"):
+                    interrupted = self._interrupt_gateway_session(active)
+                    if not interrupted:
+                        LOG.error(
+                            "Hermes Gateway executor is ending while interrupt is unconfirmed for run %s; "
+                            "remote execution outcome requires review",
+                            active["run_id"],
+                        )
+            if process is not None and process.poll() is None:
                 self._stop_hermes_process(process)
-            if process.stdout:
+            if process is not None and process.stdout:
                 process.stdout.close()
             reader.join(timeout=5)
             if active is not None:
                 with self.active_lock:
-                    if active.get("process") is process:
+                    if process is not None and active.get("process") is process:
                         active["process"] = None
-                    if active.get("executor_kind") == "hermes_gateway_cli":
+                    if (not active.get("remote_execution_uncertain")
+                            and active.get("executor_kind") in {"hermes_gateway_cli", "hermes_gateway_api"}):
                         active.pop("executor_kind", None)
         self._raise_if_cancelled(active)
         if exit_code:
@@ -1525,6 +1769,68 @@ class Worker:
         if not result:
             raise WorkerError("Hermes exited successfully without returning a result.")
         return result
+
+    def _prepare_sandbox(self, task: Task, checkout: Path, source_sha: str,
+                         active: dict[str, Any]) -> None:
+        """Prepare the source Pod and bind an empty Gateway session before prompt submission."""
+        route = task.route
+        has_git = (checkout / ".git").exists()
+        if not has_git and route is not None and route.repo:
+            raise WorkerError("Kanzo project route has a repository but checkout is not a Git worktree.")
+        if has_git and not source_sha:
+            raise WorkerError("Kanzo sandbox requires an exact repository source revision.")
+        client = BrokerClient()
+        if has_git:
+            lease = client.prepare(
+                active["task_id"], active["run_id"], checkout, source_sha,
+                bool(route and route.read_only),
+            )
+        else:
+            lease = client.prepare_empty(
+                active["task_id"], active["run_id"], bool(route and route.read_only)
+            )
+        active["broker_client"] = client
+        active["broker_lease"] = lease
+
+        def progress() -> None:
+            self._refresh_cancel_state(active)
+            self.heartbeat_path.touch()
+
+        client.wait_ready(lease, cancelled=active["cancelled"], progress=progress)
+        profile = route.profile if route else "researcher"
+        if task.is_code:
+            provider = (route.provider if route else "") or self.env.get("KANZO_CODE_PROVIDER", "openai-api")
+            model = (route.model if route else "") or self.env.get("KANZO_CODE_MODEL", "coder")
+            reasoning = (route.reason if route else "") or "high"
+        else:
+            provider = (route.provider if route else "") or self.env.get("KANZO_ANALYSIS_PROVIDER", "openai-api")
+            model = (route.model if route else "") or self.env.get("KANZO_ANALYSIS_MODEL", "iq_3s")
+            reasoning = (route.reason if route else "") or "high"
+        executor = ExecutorClient()
+        prepared = executor.create_session(
+            task_id=active["task_id"], run_id=active["run_id"], profile=profile,
+            provider=provider, model=model, reasoning=reasoning,
+        )
+        session_id = prepared.get("session_id")
+        generation = prepared.get("execution_generation")
+        if not isinstance(session_id, str) or not session_id or type(generation) is not int:
+            raise WorkerError("Hermes Gateway did not return a verifiable run session.")
+        try:
+            self.ledger.record_fields(active["run_id"], {
+                "gateway_session_id": session_id,
+                "session_created_generation": generation,
+            })
+        except Exception as exc:
+            raise WorkerError("Could not durably bind the Gateway session to the Kanzo run.") from exc
+        active["gateway_session_id"] = session_id
+        active["executor_client"] = executor
+        # session.create's generation predates prompt.submit; it is not valid
+        # for cancelling the task's later execution.
+        active["execution_generation"] = None
+        active["execution_generation_authoritative"] = False
+        client.bind(lease, session_id, profile)
+        active["broker_bound"] = True
+
 
     def _publish_draft_pr(self, task: Task, checkout: Path, summary: str, active: dict[str, Any] | None = None) -> str:
         token = self.env.get("GITHUB_TOKEN", "")
@@ -1589,6 +1895,13 @@ class Worker:
         return pr.stdout.strip()
 
     def process_one(self) -> bool:
+        with self.active_lock:
+            if self.active_run and self.active_run.get("remote_execution_uncertain"):
+                LOG.error(
+                    "Worker remains quarantined on unresolved remote run %s; refusing to claim more tasks",
+                    self.active_run.get("run_id"),
+                )
+                return False
         if not self.enabled:
             LOG.info("KANZO_ENABLED is false; worker is idle")
             return False
@@ -1755,13 +2068,25 @@ class Worker:
                 ["git", "-C", str(checkout), "rev-parse", "HEAD"],
                 capture_output=True, text=True, check=False,
             ).stdout.strip() if (checkout / ".git").exists() else ""
-            self.ledger.transition(run_id, "running", {
+            self.ledger.record_fields(run_id, {
                 "source_sha": source_sha or None,
                 "checkout": str(checkout),
                 "branch": active.get("branch"),
                 "read_only": bool(task.route and task.route.read_only),
             })
+            self._prepare_sandbox(task, checkout, source_sha, active)
+            self.ledger.transition(run_id, "running")
             result = self._run_hermes(task, task.is_code, checkout, active)
+            broker_client = active.get("broker_client")
+            broker_lease = active.get("broker_lease")
+            if isinstance(broker_client, BrokerClient) and isinstance(broker_lease, dict):
+                if (checkout / ".git").exists() and not (task.route and task.route.read_only):
+                    transfer = broker_client.apply_changes(
+                        broker_lease, active["gateway_session_id"], checkout
+                    )
+                    active["sandbox_change_count"] = int(transfer.get("files_written", 0)) + int(transfer.get("files_deleted", 0))
+                broker_client.finalize(broker_lease)
+                active["broker_finalized"] = True
             result = self._redact_sensitive_output(result)
             # Keep watching through result processing and publication. Turn it
             # off immediately before the worker itself performs a final state
@@ -1871,6 +2196,19 @@ class Worker:
             self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|{outcome}"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|{outcome}", 0) + 1
             self.metrics["last_success"] = int(time.time())
         except Exception as exc:
+            if active.get("cancel_pending") and not active["cancelled"].is_set():
+                while active.get("cancel_pending") and not active["cancelled"].is_set():
+                    if active.get("remote_execution_uncertain"):
+                        self._quarantine_uncertain_cancel(active)
+                        break
+                    signal_at = active.get("cancel_signal_at", time.monotonic())
+                    if time.monotonic() - signal_at >= 120:
+                        self._mark_cancel_unconfirmed(active)
+                        self._quarantine_uncertain_cancel(active)
+                        break
+                    active["cancelled"].wait(timeout=1)
+            if isinstance(exc, RemoteCancellationUnconfirmed):
+                self._quarantine_uncertain_cancel(active)
             if isinstance(exc, TaskCancelled) or active["cancelled"].is_set():
                 LOG.info("Task %s run %s cancelled by user", task_id, run_id)
                 self._persist_run_diagnostic(
@@ -1912,21 +2250,42 @@ class Worker:
                     self._ledger_reconciled = False
             self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|{result_kind}"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|{result_kind}", 0) + 1
         finally:
-            active["stop_monitor"].set()
+            unresolved_remote = bool(active.get("remote_execution_uncertain"))
+            if not unresolved_remote:
+                active["stop_monitor"].set()
             active["accept_cancel"] = False
-            with self.active_lock:
-                if self.active_run is active:
-                    self.active_run = None
-            if checkout != self.workspace and checkout.exists():
-                shutil.rmtree(checkout, ignore_errors=True)
-            active_checkout = active.get("checkout")
-            if active_checkout and Path(active_checkout) != self.workspace and Path(active_checkout).exists():
-                shutil.rmtree(active_checkout, ignore_errors=True)
-            self.metrics["active"] = 0
+            broker_client = active.get("broker_client")
+            broker_lease = active.get("broker_lease")
+            if (
+                isinstance(broker_client, BrokerClient)
+                and isinstance(broker_lease, dict)
+                and not active.get("broker_finalized")
+                and not unresolved_remote
+            ):
+                try:
+                    broker_client.finalize(broker_lease)
+                    active["broker_finalized"] = True
+                except Exception as cleanup_error:
+                    LOG.error(
+                        "Sandbox cleanup did not confirm for task %s run %s (%s)",
+                        task_id, run_id, type(cleanup_error).__name__,
+                    )
+            if not unresolved_remote:
+                with self.active_lock:
+                    if self.active_run is active:
+                        self.active_run = None
+                if checkout != self.workspace and checkout.exists():
+                    shutil.rmtree(checkout, ignore_errors=True)
+                active_checkout = active.get("checkout")
+                if active_checkout and Path(active_checkout) != self.workspace and Path(active_checkout).exists():
+                    shutil.rmtree(active_checkout, ignore_errors=True)
+                self.metrics["active"] = 0
         return True
 
     def run(self) -> int:
-        self.home.mkdir(parents=True, exist_ok=True)
+        if not self.env.get("KANZO_EXECUTOR_API_URL", "").strip():
+            self.home.mkdir(parents=True, exist_ok=True)
+        self.state_dir.mkdir(parents=True, exist_ok=True)
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.start_metrics_server()
         try:

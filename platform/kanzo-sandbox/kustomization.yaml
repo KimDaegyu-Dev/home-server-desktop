@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces.yaml
+  - broker-rbac.yaml
+  - broker-service.yaml
+  - broker-deployment.yaml
+  - broker-storage.yaml
+  - sandbox-network-policy.yaml
+  - sandbox-limits.yaml
+configMapGenerator:
+  - name: kanzo-sandbox-broker-code
+    namespace: mcp
+    files:
+      - sandbox_broker.py=sandbox_broker.py
+  - name: kanzo-sandbox-code
+    namespace: kanzo-sandboxes
+    options:
+      disableNameSuffixHash: true
+    files:
+      - sandbox_runner.py=sandbox_runner.py
+      - sandbox_init.py=sandbox_init.py

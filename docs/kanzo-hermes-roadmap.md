@@ -1,6 +1,6 @@
 # Kanzo · Hermes 실행 구조 개선 로드맵
 
-Design SSOT: this document defines architecture and acceptance criteria. Execution progress is tracked separately.
+설계 SSOT: 이 문서는 목표 구조, 설계 원칙, 단계별 완료 기준을 정의한다. 구현 진행률과 검증 이력은 [별도 진행 상태 문서](kanzo-hermes-status.md)에서 관리한다.
 
 ## 목표와 판단 원칙
 
@@ -26,7 +26,8 @@ Hermes의 학습 루프 보존을 실행 구조 선택의 선행 조건으로 �
 Kanzo 카탈로그·태스크
   → 변경 이벤트 수신 / 시작·재연결 시 상태 대조
   → dispatcher + 영속 실행 장부
-  → 상주 Hermes executor / 명시적인 세션·프로필 라우팅
+  → 인증된 내부 executor API
+      → 상주 Hermes executor / 명시적인 세션·프로필 라우팅
       → run별 도구 실행 경계 → 소스·명령·파일·검증 → 산출물 보존
       → LiteLLM / 목적별 MCP / Hermes Langfuse 관측
       ↔ 프로필·프로젝트의 영속 기억 / 학습 스킬 / 세션 이력 / 회고 상태
@@ -39,6 +40,7 @@ Hermes Desktop → 상시 serve → 명시적으로 지정한 Hermes 상태 소�
 |---|---|
 | Kanzo | 사용자 승인, 프로젝트 활성 여부, 태스크 순서·선행 관계, 결과 열람 |
 | dispatcher | claim, 실행 소유권, 모델 자원 입장 제한, 취소, 실행 종료 확정, 결과 게시 |
+| executor API | dispatcher의 인증된 run 요청을 검증하고 Gateway 세션·제출 이벤트·정확한 취소를 중계 |
 | 상주 executor | 프로필별 기억·회고·세션 상태를 소유하며 run별 실행 컨텍스트 관리 |
 | 작업 도구 실행 경계 | 고정된 소스·권한으로 명령·파일·검증 도구를 실행하고 run별 프로세스·산출물 관리 |
 | Hermes | 도구 사용·전문가 위임·결과 제출과 함께 기존 회고·기억·스킬 학습 루프 수행 |
@@ -46,6 +48,10 @@ Hermes Desktop → 상시 serve → 명시적으로 지정한 Hermes 상태 소�
 | Langfuse | LLM·도구·위임 관측. 실행 상태의 유일한 저장소로 사용하지 않음 |
 
 dispatcher는 Kanzo 부모 작업을, Hermes는 허용된 실행 내부 전문가 작업을 관리한다. 하나의 자식 작업을 여러 dispatcher가 동시에 실행시키지 않는다. Hermes Kanban을 지속적인 협업에 사용할 때는 보드 경로와 실행 소유자를 명시하고, Desktop Gateway와 executor가 같은 카드를 중복 실행하지 않게 한다.
+
+dispatcher와 상주 Hermes host는 배포·종료 수명을 분리하되 dispatcher가 Hermes Gateway 프로토콜이나 프로필 HOME에 직접 연결하지 않는다. Hermes v0.23.1의 canonical Gateway attach는 프로필의 로컬 control socket에서 일회용 티켓을 발급받은 다음 WebSocket에 연결한다. `HERMES_TUI_GATEWAY_URL`은 그 인증 경계를 대체하는 일반 원격 API가 아니다. Gateway와 같은 상태 소유자 안에 내부 executor API를 두고, 그 API만 로컬 티켓 발급·session 생성·prompt admission·이벤트 전달·정확한 취소를 수행한다. dispatcher에는 Gateway의 자격 증명, Hermes HOME, Kubernetes sandbox 권한을 주지 않는다.
+
+내부 executor API 계약은 `task_id`, `run_id`, profile, provider/model/reasoning, prompt, broker lease identity를 요청 단위로 검증한다. API는 동일 run의 중복 session/submit을 거부하고 session ID와 admission receipt를 dispatcher에 먼저 반환해 dispatcher가 영속 장부에 기록한 뒤 prompt 이벤트를 소비하게 한다. 실행 결과는 API 응답 스트림으로 전달하며, 취소 요청은 dispatcher가 영속 장부에서 읽은 session·admission·execution generation을 그대로 지정한다. executor의 API credential은 Vault/VSO에서만 주입하고, 일반 Desktop 세션에는 자동 실행 client env나 sandbox provider scope를 적용하지 않는다. API 재시작 시 실행을 자동 재제출하지 않으며 Gateway 상태와 run ledger를 대조해 사람 검토 대상으로 복구한다.
 
 상주 Hermes host 한 개와 자동 태스크 슬롯 한 개로 시작한다. 역할 프로필 수만큼 host를 복제하지 않는다. 설치 버전의 multiplex·secret scope·상태 저장 동작을 검증한 뒤 프로필을 라우팅한다. Desktop과 자동 실행이 같은 프로필을 사용할 때 상태 소유자를 공유할 수 있는지 확인하고, 같은 SQLite 파일을 독립된 두 host가 직접 쓰는 구조를 피한다. serve endpoint를 분리하는 것과 Hermes 엔진을 하나 더 띄우는 것은 별개의 결정이다.
 
@@ -167,6 +173,8 @@ ai-memory는 검증된 장기 공유 지식의 역할을 유지한다. Hermes/OM
 작업:
 
 - dispatcher와 상주 Hermes host의 배포·종료 수명을 분리한다. 태스크마다 CLI가 별도 Gateway를 자동 생성하는 경로를 대체한다.
+- Hermes의 로컬 Gateway control socket을 dispatcher에 노출하지 않고, 인증된 내부 executor API를 통해 session 생성·prompt submit/이벤트·정확한 취소를 요청한다. API는 상주 Gateway와 프로필 상태를 소유하는 runtime 안에 두며 dispatcher는 Hermes HOME을 마운트하지 않는다.
+- API의 task/run/profile/model/sandbox lease 검증, submit receipt 선기록, 중복 요청 차단, 연결 단절 후 상태 대조 계약을 정의한다. API 재시작이나 HTTP reconnect를 모델 요청 자동 재시도로 사용하지 않는다.
 - 설치 버전의 세션 생성·프로필 라우팅·run 대상 취소 API와 도구 backend 확장 지점을 먼저 확인한다. 필요한 기능이 없으면 adapter 변경 범위를 명시한다. 지원을 확인하기 전 원격 Gateway의 도구가 컨테이너 권한을 상속한다고 가정하지 않는다.
 - Kanzo 자동 실행마다 Gateway에 새 Hermes session을 만들고 canonical `session.create` → `prompt.submit` 흐름을 사용한다. 응답의 `session_id`·`execution_generation`과 admission receipt를 `task_id`·`run_id`·lease에 연결하고, 실행 취소는 해당 generation에 `session.interrupt`를 보낸다. 큐에 대기 중인 제출만 취소할 때는 해당 admission의 `prompt.cancel`을 쓴다.
 - terminal provider에는 Gateway session key가 오며 Kanzo `run_id`가 직접 오지 않는다. dispatcher/broker가 생성된 session과 task/run/lease의 매핑을 등록하고, 모든 sandbox 생성·명령 실행·결과 반환에서 이 매핑과 현재 lease를 확인한다. 여러 delegate는 Hermes가 부모의 환경 키를 공유시키므로 같은 run sandbox와 권한을 상속한다.
@@ -174,6 +182,7 @@ ai-memory는 검증된 장기 공유 지식의 역할을 유지한다. Hermes/OM
 - sandbox Pod는 별도 namespace의 broker가 고정 템플릿으로 생성·삭제한다. Gateway와 worker의 ServiceAccount에는 Kubernetes 자격 증명이나 sandbox Pod 관리 권한을 주지 않는다. broker API는 run에 묶인 제한 토큰만 받고, Pod spec·이미지·ServiceAccount·Secret·hostPath를 호출자가 지정할 수 없게 한다.
 - 현재 `/workspace`는 Pod 내부 `emptyDir`이므로 sandbox와 직접 공유할 수 없다. worker가 경로·용량을 제한한 source archive와 Git SHA/checksum을 broker로 보내고, broker가 고정된 sandbox에 전달한다. 종료 후 sandbox는 변경·삭제 manifest와 output archive를 반환하고, worker는 경로 탈출·symlink·용량을 검증한 뒤 자신의 checkout에 적용한다. GitHub/Kanzo write credential은 sandbox에 보내지 않는다.
 - sandbox 내부 exec supervisor는 명령마다 별도 process group과 exec ID를 관리한다. 취소 시 원격 exec 연결 종료만 믿지 않고 해당 process group을 종료·회수하며, broker는 취소되었거나 lease가 만료된 run의 늦은 결과를 거부한다. sandbox namespace에는 기본 거부 네트워크 정책, Pod 보안 설정, resource quota와 TTL 회수를 적용한다.
+- sandbox는 기본적으로 직접 인터넷에 연결하지 않는다. lockfile 기반 검증에 외부 package restore가 꼭 필요한 경우, sandbox에서 임의 egress를 열지 않고 허용된 registry만 제공하는 내부 cache/proxy 경로를 둔다. proxy 자격 증명은 sandbox 환경에 넘기지 않고, repository script가 임의 URL로 우회할 수 없도록 네트워크 정책과 proxy allowlist를 함께 적용한다. 필수 restore 경로가 없으면 해당 검증을 통과했다고 보고하지 않는다.
 - broker와 실행 이미지는 Hermes 이미지와 분리하고 digest를 고정한다. broker는 K3s Pod lifecycle에 필요한 최소 권한만 가지며, 실행 이미지에는 셸·Hermes file tool이 요구하는 유틸리티와 실제 사용할 언어 런타임만 포함한다. 저장소의 Buildah→K3s image import 경로를 사용하고 Docker daemon 의존성을 추가하지 않는다.
 - native memory·스킬·회고는 상주 Hermes에서 실행하고, terminal·repository file·execute_code·도구가 실행하는 스크립트는 run별 격리 환경으로 라우팅한다. delegate가 쓰는 도구도 같은 run 권한을 상속한다.
 - ReadOnly에는 소스를 읽기 전용으로, scratch·산출물은 쓰기 가능하게 제공한다. 코드 변경에는 별도 쓰기 가능한 checkout을 제공한다. 공통 host의 로컬 terminal/file fallback을 차단하고, 경로·프로세스·네트워크·비밀 전달을 도구 실행 경계에서 강제한다.

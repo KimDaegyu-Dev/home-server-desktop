@@ -1,0 +1,593 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kanzo-agent-executor
+  namespace: mcp
+  annotations:
+    argocd.argoproj.io/sync-wave: '-1'
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kanzo-agent-executor
+  namespace: mcp
+  labels:
+    app.kubernetes.io/name: kanzo-agent-executor
+  annotations:
+    argocd.argoproj.io/sync-wave: '0'
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo-agent-executor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kanzo-agent-executor
+    spec:
+      serviceAccountName: kanzo-agent-executor
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: seed-hermes-config
+          image: busybox:1.37.0@sha256:66a6306db78bf2dbf3487f293aa8d6990d8e506fdffab9cc43fe422becf886e4
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - "mkdir -p /data/home\nif [ ! -f /data/home/config.yaml ]; then\n  cp /config/config.yaml /data/home/config.yaml\n\
+              \  chmod 0600 /data/home/config.yaml\nfi\nchmod 0700 /data/home\n"
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /data
+            - name: hermes-config
+              mountPath: /config
+              readOnly: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10000
+            runAsGroup: 10000
+            capabilities:
+              drop:
+                - ALL
+        - name: bootstrap-omh
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          imagePullPolicy: Never
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - "export HERMES_HOME=/opt/data/home HOME=/opt/data/home\npython - <<'PY'\nimport json\nimport shutil\nfrom pathlib\
+              \ import Path\n\nimage_store = Path('/opt/hermes/tools')\nhome_store = Path('/opt/data/home/tools')\nimage_facts\
+              \ = json.loads((image_store / 'facts.json').read_text(encoding='utf-8'))\npnpm = image_facts.get('packages',\
+              \ {}).get('pnpm')\nif not pnpm:\n    raise SystemExit('image is missing the pinned pnpm package metadata')\n\
+              home_store.mkdir(parents=True, exist_ok=True)\nentry = pnpm['entry']\nshutil.copytree(image_store / entry, home_store\
+              \ / entry, dirs_exist_ok=True)\nfacts_path = home_store / 'facts.json'\nhome_facts = json.loads(facts_path.read_text(encoding='utf-8'))\
+              \ if facts_path.exists() else {'packages': {}, 'schema': image_facts.get('schema')}\nhome_facts.setdefault('packages',\
+              \ {})['pnpm'] = pnpm\nfacts_path.write_text(json.dumps(home_facts, sort_keys=True, indent=2) + '\\n', encoding='utf-8')\n\
+              PY\n/opt/hermes/.venv/bin/python -c 'from pm.install import installed_package; assert installed_package(\"pnpm\"\
+              ) is not None'\nhermes kanban init\nhermes config set kanban.dispatch_in_gateway true\nhermes config set kanban.dispatch_interval_seconds\
+              \ 60\nhermes config set kanban.review_dispatch true\nhermes profile list | grep -Eq '(^|[[:space:]])researcher([[:space:]]|$)'\
+              \ || \\\n  hermes profile create researcher --clone-from default --description \"Analyzes source code, official\
+              \ docs, and external information; returns evidence-linked findings.\" --no-alias\nhermes profile list | grep\
+              \ -Eq '(^|[[:space:]])builder([[:space:]]|$)' || \\\n  hermes profile create builder --clone-from default --description\
+              \ \"Implements scoped changes using the local coder model and returns changed files plus verification evidence.\"\
+              \ --no-alias\nhermes profile list | grep -Eq '(^|[[:space:]])reviewer([[:space:]]|$)' || \\\n  hermes profile\
+              \ create reviewer --clone-from default --description \"Reviews proposed work for correctness, regressions, and\
+              \ missing evidence; reports findings without owning implementation.\" --no-alias\nhermes -p researcher config\
+              \ set model.provider openai-api\nhermes -p researcher config set model.default iq_3s\nhermes -p builder config\
+              \ set model.provider openai-api\nhermes -p builder config set model.default coder\nhermes -p reviewer config\
+              \ set model.provider openai-api\nhermes -p reviewer config set model.default iq_3s\nhermes tools enable kanban\n\
+              hermes -p researcher tools enable kanban\nhermes -p builder tools enable kanban\nhermes -p reviewer tools enable\
+              \ kanban\nhermes config set model.provider openai-api\nhermes config set model.default iq_3s\nhermes config\
+              \ set model.context_length 65536\nhermes -p researcher config set model.context_length 65536\nhermes -p reviewer\
+              \ config set model.context_length 65536\npython - <<'PY'\nfrom pathlib import Path\nfrom ruamel.yaml import\
+              \ YAML\n\nhomes = [Path('/opt/data/home'), *(Path('/opt/data/home/profiles') / name for name in ('researcher',\
+              \ 'builder', 'reviewer'))]\nyaml = YAML()\nfor home in homes:\n    config_path = home / 'config.yaml'\n    config\
+              \ = yaml.load(config_path.read_text(encoding='utf-8')) or {}\n    terminal = config.setdefault('terminal', {})\n\
+              \    if not isinstance(terminal, dict):\n        raise SystemExit(f'{config_path} has an invalid terminal configuration')\n\
+              \    names = terminal.get('client_env_passthrough', [])\n    if not isinstance(names, list) or any(not isinstance(name,\
+              \ str) for name in names):\n        raise SystemExit(f'{config_path} has an invalid client_env_passthrough list')\n\
+              \    for name in ('KANZO_AUTOMATED_RUN', 'KANZO_TASK_ID', 'KANZO_RUN_ID'):\n        if name not in names:\n\
+              \            names.append(name)\n    terminal['client_env_passthrough'] = names\n    with config_path.open('w',\
+              \ encoding='utf-8') as stream:\n        yaml.dump(config, stream)\nPY\npython - <<'PY'\nimport shutil\nfrom\
+              \ pathlib import Path\n\nsource = Path('/opt/kanzo-agent/kanzo_terminal_provider.py')\nif not source.is_file():\n\
+              \    raise SystemExit('Kanzo terminal provider module is missing')\nhomes = [Path('/opt/data/home'), *(Path('/opt/data/home/profiles')\
+              \ / name for name in ('researcher', 'builder', 'reviewer'))]\nfor home in homes:\n    plugin = home / 'plugins'\
+              \ / 'kanzo_broker'\n    plugin.mkdir(parents=True, exist_ok=True)\n    shutil.copy2(source, plugin / '__init__.py')\n\
+              \    (plugin / 'plugin.yaml').write_text(\n        'name: kanzo_broker\\\\nversion: 0.1.0\\\\ndescription: Per-run\
+              \ Kanzo Kubernetes terminal backend\\\\nkind: backend\\\\n',\n        encoding='utf-8',\n    )\nPY\nhermes plugins\
+              \ enable kanzo_broker\nhermes config set plugins.isolation in_process\nhermes config set terminal.backend kanzo_broker\n\
+              for profile in researcher builder reviewer; do\n  hermes -p \"$profile\" plugins enable kanzo_broker\n  hermes\
+              \ -p \"$profile\" config set plugins.isolation in_process\n  hermes -p \"$profile\" config set terminal.backend\
+              \ kanzo_broker\ndone\npython - <<'PY'\nimport os\nfrom pathlib import Path\n\nroot = Path('/opt/data/home')\n\
+              values = {\n    'MCPPROXY_URL': os.environ['MCPPROXY_URL'],\n    'MCPPROXY_AGENT_READ_TOKEN': os.environ.get('MCPPROXY_AGENT_READ_TOKEN',\
+              \ ''),\n    'LITELLM_API_KEY': os.environ.get('LITELLM_API_KEY', ''),\n    'LITELLM_BASE_URL': os.environ['LITELLM_BASE_URL'],\n\
+              \    'OPENAI_API_KEY': os.environ.get('LITELLM_API_KEY', ''),\n    'OPENAI_BASE_URL': os.environ['LITELLM_BASE_URL'],\n\
+              \    'KANZO_ANALYSIS_MODEL': 'iq_3s',\n}\nhomes = [root, *(root / 'profiles' / name for name in ('researcher',\
+              \ 'builder', 'reviewer'))]\nfor home in homes:\n    path = home / '.env'\n    existing = path.read_text(encoding='utf-8').splitlines()\
+              \ if path.exists() else []\n    kept = [line for line in existing if line.partition('=')[0] not in values]\n\
+              \    path.write_text('\\n'.join([*kept, *(f'{key}={value}' for key, value in values.items())]) + '\\n', encoding='utf-8')\n\
+              \    path.chmod(0o600)\nPY\nomh setup --no-interactive --json\nmkdir -p /opt/data/home/.omh/routing\ncp /routing/model-chains.json\
+              \ /opt/data/home/.omh/routing/model-chains.json\nomh model-chains show --json\nomh doctor --json\n"
+          env:
+            - name: MCPPROXY_URL
+              value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
+            - name: MCPPROXY_AGENT_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: MCPPROXY_AGENT_READ_TOKEN
+                  optional: true
+            - name: LITELLM_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/kanzo_terminal_provider.py
+              subPath: kanzo_terminal_provider.py
+              readOnly: true
+            - name: omh-routing
+              mountPath: /routing
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10000
+            runAsGroup: 10000
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: hermes-gateway
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          imagePullPolicy: Never
+          command:
+            - hermes
+            - gateway
+            - run
+          env:
+            - name: HERMES_HOME
+              value: /opt/data/home
+            - name: HOME
+              value: /opt/data/home
+            - name: MCPPROXY_URL
+              value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
+            - name: MCPPROXY_AGENT_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: MCPPROXY_AGENT_READ_TOKEN
+                  optional: true
+            - name: LITELLM_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+            - name: OPENAI_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: HERMES_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_PUBLIC_KEY
+            - name: HERMES_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_SECRET_KEY
+            - name: HERMES_LANGFUSE_BASE_URL
+              value: http://langfuse-web.langfuse.svc.cluster.local:3000
+            - name: MCPPROXY_URL
+              value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
+            - name: MCPPROXY_AGENT_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: MCPPROXY_AGENT_READ_TOKEN
+                  optional: true
+            - name: KANZO_BROKER_URL
+              value: http://kanzo-sandbox-broker.mcp.svc.cluster.local:8080
+            - name: KANZO_BROKER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-sandbox-broker-credentials
+                  key: KANZO_BROKER_GATEWAY_TOKEN
+                  optional: true
+            - name: KANZO_ANALYSIS_MODEL
+              value: iq_3s
+            - name: LITELLM_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+            - name: OPENAI_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: HERMES_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_PUBLIC_KEY
+            - name: HERMES_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_SECRET_KEY
+            - name: HERMES_LANGFUSE_BASE_URL
+              value: http://langfuse-web.langfuse.svc.cluster.local:3000
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/kanzo_terminal_provider.py
+              subPath: kanzo_terminal_provider.py
+              readOnly: true
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              cpu: '2'
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+        - name: hermes-dashboard
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          imagePullPolicy: Never
+          command:
+            - hermes
+            - serve
+            - --host
+            - 0.0.0.0
+            - --port
+            - '9119'
+          ports:
+            - name: dashboard
+              containerPort: 9119
+              protocol: TCP
+          env:
+            - name: HERMES_HOME
+              value: /opt/data/home
+            - name: HOME
+              value: /opt/data/home
+            - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+            - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+            - name: HERMES_DASHBOARD_BASIC_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: HERMES_DASHBOARD_BASIC_AUTH_SECRET
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /api/status
+              port: dashboard
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: dashboard
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: dashboard
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: '1'
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+        - name: hermes-executor-api
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          imagePullPolicy: Never
+          command:
+            - python
+            - /opt/kanzo-agent/executor_api.py
+          ports:
+            - name: executor-api
+              containerPort: 8766
+              protocol: TCP
+          env:
+            - name: HERMES_HOME
+              value: /opt/data/home
+            - name: HOME
+              value: /opt/data/home
+            - name: MCPPROXY_URL
+              value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
+            - name: MCPPROXY_AGENT_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: MCPPROXY_AGENT_READ_TOKEN
+                  optional: true
+            - name: LITELLM_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: LITELLM_API_KEY
+                  optional: true
+            - name: OPENAI_BASE_URL
+              value: http://litellm.litellm.svc.cluster.local:4000/v1
+            - name: HERMES_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_PUBLIC_KEY
+            - name: HERMES_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_SECRET_KEY
+            - name: HERMES_LANGFUSE_BASE_URL
+              value: http://langfuse-web.langfuse.svc.cluster.local:3000
+            - name: KANZO_EXECUTOR_API_HOST
+              value: 0.0.0.0
+            - name: KANZO_EXECUTOR_API_PORT
+              value: '8766'
+            - name: KANZO_EXECUTOR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kanzo-agent-credentials
+                  key: KANZO_EXECUTOR_API_TOKEN
+                  optional: false
+            - name: KANZO_EXECUTOR_DATA_DIR
+              value: /opt/data/home/kanzo-worker/executor-state
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/executor_api.py
+              subPath: executor_api.py
+              readOnly: true
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/gateway_control.py
+              subPath: gateway_control.py
+              readOnly: true
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/gateway_session.py
+              subPath: gateway_session.py
+              readOnly: true
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/gateway_execution.py
+              subPath: gateway_execution.py
+              readOnly: true
+          startupProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/readyz', timeout=2)
+            periodSeconds: 5
+            failureThreshold: 24
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/livez', timeout=2)
+            periodSeconds: 20
+            failureThreshold: 3
+            timeoutSeconds: 3
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/readyz', timeout=2)
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10000
+            runAsGroup: 10000
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: hermes-home
+          persistentVolumeClaim:
+            claimName: kanzo-agent-hermes-home
+        - name: workspace
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: hermes-config
+          configMap:
+            name: kanzo-agent-hermes-config
+            defaultMode: 292
+        - name: omh-routing
+          configMap:
+            name: kanzo-agent-omh-routing
+            defaultMode: 292
+        - name: worker-code
+          configMap:
+            name: kanzo-agent-worker-code
+            defaultMode: 292
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kanzo-agent-hermes-dashboard
+  namespace: mcp
+  labels:
+    app.kubernetes.io/name: kanzo-agent-hermes-dashboard
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kanzo-agent-executor
+  ports:
+    - name: dashboard
+      port: 9119
+      targetPort: dashboard
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kanzo-agent-executor-egress
+  namespace: mcp
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo-agent-executor
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mcp
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: litellm
+      ports:
+        - protocol: TCP
+          port: 4000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: langfuse
+      ports:
+        - protocol: TCP
+          port: 3000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: search
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - protocol: TCP
+          port: 443

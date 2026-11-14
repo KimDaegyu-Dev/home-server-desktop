@@ -1,0 +1,61 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kanzo-sandboxes-default-deny
+  namespace: kanzo-sandboxes
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kanzo-sandboxes-broker-runner
+  namespace: kanzo-sandboxes
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo-sandbox-runner
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mcp
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kanzo-sandbox-broker
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # The pod-level policy applies to init and runner containers alike.
+    # Kubernetes NetworkPolicy cannot express init-container-only egress.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mcp
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kanzo-sandbox-broker
+      ports:
+        - protocol: TCP
+          port: 8080
+    # DNS is needed to resolve the in-cluster broker Service name. Keep this
+    # limited to CoreDNS; all other sandbox egress remains denied.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

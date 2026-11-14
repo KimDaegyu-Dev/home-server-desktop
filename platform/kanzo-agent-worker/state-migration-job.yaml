@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kanzo-agent-state-migration-v1
+  namespace: mcp
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: '-1'
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kanzo-agent-state-migration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: kanzo-agent-worker
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          imagePullPolicy: Never
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - "sleep 65\npython /opt/kanzo-agent/migrate_dispatcher_state.py \\\n  --source /legacy/home/kanzo-worker \\\n\
+              \  --destination /dispatcher/state\n"
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: '1'
+          volumeMounts:
+            - name: legacy-hermes-home
+              mountPath: /legacy
+            - name: dispatcher-state
+              mountPath: /dispatcher
+            - name: worker-code
+              mountPath: /opt/kanzo-agent
+              readOnly: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: legacy-hermes-home
+          persistentVolumeClaim:
+            claimName: kanzo-agent-hermes-home
+        - name: dispatcher-state
+          persistentVolumeClaim:
+            claimName: kanzo-agent-worker-state
+        - name: worker-code
+          configMap:
+            name: kanzo-agent-worker-code
+            defaultMode: 292

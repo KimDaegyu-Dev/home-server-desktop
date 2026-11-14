@@ -4,11 +4,12 @@
 
 ## 현재 상태
 
-- 현재 기준: 2026-11-14. Phase 1은 핵심 구현 후 잔여 항목 확인 중, Phase 2는 데이터 경계 조사 완료·전환 미구현, Phase 3은 내구성 장부·이벤트 복구 일부 구현, Phase 4는 세션 ID 보존과 정확한 Gateway 취소가 배포됐으며 run별 도구 격리·broker는 미구현이다. Phase 5–6은 시작 전이다.
-- 다음 작업: Kanzo 전용 terminal environment provider와 broker의 최소 수직 경로를 구현한다. Gateway 세션 ID, Kanzo task/run ID, 현재 lease를 매 도구 요청에서 검증하고, 고정 sandbox로 terminal·file·execute_code를 연결한다.
+- 현재 기준: 2026-11-14. Phase 4의 resident executor와 dispatcher를 별도 Deployment로 나눈 GitOps 구성을 로컬에 구현했다. 기존 worker를 먼저 정지하고 dispatcher 상태를 한 번 이관한 뒤 executor, dispatcher 순으로 시작하도록 sync wave와 검증 migration hook을 배치했다. API Service/네트워크 격리, Hermes Gateway readiness, dispatcher 전용 PVC도 정의했다. 정적 구문 및 Kustomize 검증은 통과했으며 아직 commit/push 또는 클러스터 배포는 하지 않았다.
+- 수명주기 분리: 로컬 GitOps에서 기존 통합 worker를 먼저 정지하고, migration hook이 run ledger/artifact를 새 dispatcher PVC에 복사한 뒤 resident executor와 dispatcher를 순서대로 시작하도록 구성했다. live cluster는 아직 이전 통합 Pod에서 동작한다.
+- 다음 작업: 사용자 Vault key를 반영하도록 Argo에 VaultStaticSecret 템플릿을 동기화하고, VSO가 KANZO_EXECUTOR_API_TOKEN을 실제 Secret에 채우는지 값 없이 확인한다. 그 뒤 worker 정지 → 상태 이관 → executor 준비 → dispatcher 재개 순으로 롤아웃하고 실태스크를 검증한다.
 - 기준 스냅샷 `v1`: 커밋 `f11abf6` (`origin`에 push 완료). 런타임 변경 전 worker 코드와 설계 로드맵이 포함되어 있다.
 - 워커 런타임 소스: `e59a758` (`feat(kanzo): persist and recover run artifacts`).
-- 마지막 워커 롤아웃 확인: Argo CD `kanzo-agent-worker`가 revision `4b4b316c0861a9461fe48db2676a2af6a5c17f62`에서 Synced/Healthy이고 Pod `kanzo-agent-worker-578c4977c7-fm266`는 5/5 Ready, restart 0, 태스크 active gauge 0이다. 배포된 `worker.py`, `run_ledger.py`, `readonly_executor.py`, `gateway_control.py` SHA-256이 저장소 파일과 각각 일치한다.
+- 현재 live 기준: Argo CD `kanzo-agent-worker`는 revision `e0bb839f0a6e454cecb75febe7f42cf5337aebfb`에서 Synced/Healthy이고 기존 Pod는 5/5 Ready, restart 0, active gauge 0이다. run ledger는 schema 1, integrity `ok`, 0 rows로 확인했다. live VaultStaticSecret은 아직 새 API-token template을 반영하지 않아 Kubernetes Secret의 해당 key는 비어 있다.
 - 새 worker 로그에서 활성 프로젝트에 처리 가능한 태스크가 없음을 확인했다. 실제 Kanzo 태스크 실행 및 취소는 이번 롤아웃에서 수행하지 않았다.
 
 ## 단계별 진행
@@ -17,13 +18,49 @@
 |---|---|---|
 | 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
-| 2. 프로필·상태·공유 데이터 경계 | 조사 완료, 구현 전 | ReadOnly executor는 별도 HOME과 `state.db`를 써 일반 Gateway/Desktop의 세션 검색·재개와 분리된다. 프로필 로컬 skills/plugins/scripts/`.omh`를 매 run 복사하며 대상 디렉터리를 지워 학습 변경이 사라질 수 있다. OMH 메모리 절대 경로는 공유되지만 반성 hook의 실행·다음 세션 검색은 검증되지 않았다. 지속 Gateway 세션과 run별 도구 backend로 전환해야 한다. |
+| 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 다른 경로는 아직 기존 ReadOnly executor를 쓴다. plugin 복사·활성화 및 memory/reflection의 연속성은 클러스터에서 검증하지 않았다. |
 | 3. durable run ledger와 이벤트 | 일부 구현 | Hermes HOME PVC의 SQLite 장부에 run 상태·설정·소스 SHA·결과와 게시 체크포인트를 기록한다. 재시작 시 미종료 run을 자동 실행하지 않고, 저장 응답과 댓글의 run별 marker를 이용해 누락된 결과 댓글만 복구한 뒤 사람 검토로 보낸다. 이벤트 중복·재연결 구간, 다중 dispatcher lease/CAS, PR 및 다른 외부 게시의 멱등 재개, 실태스크 검증은 남아 있다. 자동 재시도는 추가하지 않는다. |
-| 4. 상주 executor와 작업 도구 격리 | 부분 구현 | Hermes 0.23.1의 사용자 plugin 등록 경로, `TerminalEnvironmentProvider`, 세션 문맥을 확인했다. `HERMES_SESSION_ID`는 저장된 Gateway `session_id`이며 `HERMES_SESSION_KEY`(라우팅 키) 및 provider `task_id`(환경 캐시 키)와 구별된다. worker와 ReadOnly executor가 `session_id`를 run ledger에 저장하고, 새 `gateway_control.py`는 해당 프로필 Gateway에서 특정 admission 또는 execution generation만 취소한다. ConfigMap으로 배포했고 Argo Synced/Healthy, Pod 5/5 Ready, restart 0, 코드 SHA-256 일치, active gauge 0을 확인했다. Kanzo 실제 run 취소는 아직 검증하지 않았다. Kanzo 전용 provider, task/run/lease broker 매핑, 별도 sandbox namespace·고정 Pod, terminal/file/execute_code의 원격 실행·프로세스 취소·cleanup은 미구현이다. |
+| 4. 상주 executor와 작업 도구 격리 | 로컬 GitOps 구현 완료, 배포 전 | Executor API/client, broker·sandbox 수직 경로, 전용 executor/dispatcher Deployment, API Service·NetworkPolicy, gateway readiness probe, 별도 dispatcher-state PVC와 일회성 상태 migration hook을 정의했다. live worker를 먼저 0으로 내리고, migration 성공 후 executor readiness가 확인되면 dispatcher가 시작된다. Vault token VSO sync와 클러스터 cutover 검증이 남아 있다. |
 | 5. 결과·추적·위임 | 시작 전 | 구조화된 완료 근거, run/session tracing, 자식 작업 예산과 결과 게시의 일관성을 구현·확인해야 한다. |
 | 6. 성능·학습 보존 검증 | 시작 전 | 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
 
 ## 변경 이력
+
+### 2026-11-14 — Gateway와 dispatcher 분리 경계 조사
+
+- Hermes v0.23.1 소스에서 기본 attach가 로컬 control socket으로 session ticket을 발급받은 뒤 Gateway WebSocket에 연결하는 것을 확인했다. 명시적 `HERMES_TUI_GATEWAY_URL`은 해당 티켓 발급 절차를 건너뛰며, 공식 문서도 이를 일반적인 원격 attach 설정으로 설명하지 않는다.
+- 다음 설계는 Gateway 세션·프로필 상태를 소유하는 상주 Hermes executor API를 두고 dispatcher와 그 API 사이에 인증된 내부 계약을 두는 것이다. 같은 HOME PVC를 독립 프로세스에서 직접 공유하거나 dispatcher가 Hermes 비공개 control socket을 직접 사용하는 방안은 검증되지 않았다.
+- Gateway 연결 제약과 executor API 경계는 로드맵의 목표 구조 및 Phase 4 설계 항목에 반영했다. 여기에는 조사 근거와 미검증 상태를 남긴다.
+
+### 2026-11-14 — Hermes 의존 이미지와 sandbox 런타임 분리
+
+- broker와 run별 sandbox의 image 참조를 Hermes/OMH worker 이미지에서 분리했다. broker용 Python slim 이미지를 추가하고, 실행 이미지는 digest 고정 Node 22 기반에 Python 3·pip·venv·컴파일 도구, 셸·Git 유틸리티, 사전 준비된 pnpm을 포함하도록 구성했다. Buildah 스크립트가 두 이미지를 각각 빌드·K3s containerd에 import하도록 했다.
+- worker·sandbox Kustomize 렌더링, sandbox/worker Python 14개 AST 구문 분석, `git diff --check`를 확인했다. 이미지 빌드/import는 실행하지 않았으므로 결과 digest, 실제 명령 환경, 패키지 설치용 내부 proxy, Pod 실행은 아직 검증되지 않았다. 직접 외부 egress는 현재 NetworkPolicy에서 거부된다.
+
+### 2026-11-14 — Gateway submission과 run/session 추적 보강
+
+- 독립 검토에서 session cwd가 worker workspace를 가리켜 run sandbox 밖 파일 도구 경로를 만들 수 있고, `session.create`의 초기 generation을 실제 prompt 실행 generation으로 오인해 취소가 거부될 수 있음을 확인했다. Gateway session cwd를 `/workspace`로 바꾸고, run 상태는 sandbox 준비가 끝나고 prompt 직전까지 `preparing`으로 둔다.
+- Hermes v0.23.1의 공식 CLI 문서는 `stream-json` 출력에 admission ID가 없음을 확인했다. 그래서 broker-backed run은 CLI 재호출 대신 새 `gateway_execution.py` helper에서 canonical `prompt.submit`을 호출하고, receipt를 worker에 즉시 전달해 run ledger에 저장하도록 전환했다. `session.create` generation은 별도로 기록하고, 취소에 쓸 generation은 run 이벤트에서 확인된 값만 authoritative로 취급한다. 장부 저장 실패는 prompt 시작 전에 작업 실패로 처리한다.
+- worker source archive, broker 검증기, sandbox init의 크기/파일 수 한계를 각각 4 GiB·20,000개로 일치시켰다. worker ConfigMap/Pod mount에 helper를 추가했다.
+- 정적 확인: 10개 Python 파일 AST 파싱, sandbox/worker 두 Kustomize 렌더링, `git diff --check` 통과. 이는 코드와 manifest 구문만 확인한다. Hermes 설치 버전 API 응답, 실제 admission/cancel 처리, 격리 tool 실행은 아직 검증되지 않았고 배포하지 않았다.
+
+### 2026-11-14 — admission 단위 취소와 프로필 연결 정밀화
+
+- broker 작업 취소 시 run 장부에 저장된 admission ID를 `gateway_control.py`에 전달한다. 해당 admission이 queued면 그 ID만 취소하고, started면 같은 admission의 execution generation과 현재 running 상태가 확인될 때만 interrupt한다. 누락·중복·terminal admission은 취소 성공으로 추정하지 않는다. 이전 Gateway CLI 경로는 admission ID가 없는 기존 run에만 남긴다.
+- `gateway_execution.py`는 현재 admission ID와 일치하는 Gateway 이벤트에서만 execution generation을 전달한다. submit receipt나 다른 admission 이벤트의 generation은 사용하지 않는다. 실행 helper도 선택한 프로필의 Gateway endpoint `profile_id`를 검사한다. admission receipt는 durable ledger 기록 전에도 실행 메모리에 보존해, ledger 오류 시 finally 경로에서 해당 admission만 취소할 수 있게 했다. helper 연결과 취소 연결 모두 Hermes의 context-local home override로 프로필별 Gateway ticket을 발급한다.
+- 정적 확인을 다시 실행했다: worker/sandbox Python 파일 14개 AST 파싱, 두 Kustomize 렌더링, `git diff --check` 통과, 로드맵 파일 변경 없음. kubectl context 조회는 `current-context is not set`으로 실패했다. 따라서 클러스터 상태 확인이나 배포는 하지 않았으며, 실제 Gateway API 동작은 아직 검증 전이다.
+- 추가 정적 리뷰에서 발견한 자동 세션의 local terminal fallback 가능성은 `KANZO_AUTOMATED_RUN`·task ID·run ID를 Gateway session client env에 포함하고, profile의 `client_env_passthrough`와 broker mapping 대조를 적용해 실패 시 broker-only로 만들었다. Hermes v0.23.1 `execute_code`는 terminal backend의 environment builder를 재사용하므로 같은 provider를 통과하는 계약이 확인됐다. 그 실제 세션 전파와 실행은 클러스터에서 아직 검증되지 않았다.
+- broker run lease를 180초로 제한하고 worker가 30초 주기로 heartbeat를 보내 연장하도록 했다. worker가 사라지면 만료 후 reaper가 sandbox Pod를 회수하도록 바꿨다. 종료 중 API 장애와 프로세스 잔존은 런타임 장애 주입으로 확인해야 한다.
+- 검토에서 남은 구조적 미완료는 Gateway와 dispatcher가 같은 `Recreate` Deployment/Pod에 들어 있는 점, broker·sandbox가 같은 Hermes 이미지 태그를 재사용하는 점, MCP 도구별 권한 경계와 실제 delegate inheritance 확인이다. 이미지 빌드/롤아웃은 진행하지 않았다.
+
+### 2026-11-14 — run별 sandbox 수직 경로 코드 초안
+
+- worker는 깨끗한 Git checkout에서 추적 파일만 archive로 만들고 broker에 보내도록 `broker_client.py`와 `workspace_transfer.py`를 연결했다. Hermes prompt 제출 전 Gateway 세션을 생성하고 task/run lease에 bind한 뒤 같은 세션을 resume한다. 완료 시 변경 archive의 SHA-256과 경로/삭제 manifest를 검증하고 checkout에 적용한 뒤 run을 finalize한다. read-only repo run은 같은 Gateway 세션을 사용하도록 연결했다.
+- broker는 단일-use source archive, lease/session binding, Kubernetes API 기반 고정 per-run Pod, terminal start/poll/cancel proxy, 변경 archive 반환, 만료 cleanup을 구현하는 초안이다. sandbox 명령과 runner가 같은 UID를 쓰므로 runner에 `PR_SET_DUMPABLE=0`을 적용하고 자격 증명 파일·Secret 생성 및 Secret RBAC를 제거했다. runner는 시작 환경에서 토큰을 읽어 자식 프로세스 환경에서 제외하며, 제한된 argv 실행, process-group 취소, output/시간/동시성 제한과 workspace diff export를 제공한다. source init은 내부 broker에서 digest 확인 후 regular-file/directory만 안전하게 추출한다.
+- GitOps 초안은 `kanzo-sandbox` Argo Application, broker Deployment/Service/PVC, VSO credentials, namespaced Pod-only RBAC, sandbox default-deny NetworkPolicy, ResourceQuota를 포함한다. worker/Gateway profile에 terminal provider를 설치·선택하도록 bootstrap 경로도 추가했다.
+- 검증: 9개 Python 파일 AST 구문 검사 통과, `platform/kanzo-sandbox` 및 `platform/kanzo-agent-worker` Kustomize 렌더링 통과, `git diff --check` 통과. 이건 정적 검사만 의미한다. task 실행이나 클러스터 변경은 아직 하지 않았다.
+- 남은 선행 작업: broker/worker API의 장애·재요청·pod cleanup 경합 점검, Hermes 0.23.1의 plugin 활성화 및 CLI resume 옵션을 설치 버전에서 확인, secret scope와 namespace RBAC 검토, ConfigMap/image mount 검증, 실제 sandbox run으로 terminal/file/execute_code·read-only·취소·결과 회수를 검증한다. 이 기준이 충족되기 전에는 롤아웃하지 않는다.
+
 
 ### 2026-11-14 — Gateway 세션 식별 및 정확한 취소 배포
 
@@ -133,3 +170,40 @@
 | ai-memory·Graphify 등 MCP | 같은 외부 서비스에 연결. 허용 범위와 데이터 scope는 별도 확인 필요 |
 
 같은 메모리 저장소를 사용한다는 사실만으로 프로젝트·사용자별 검색 범위가 올바르다고 판단하지 않는다. 또한 별도 HOME이 있어도 원본 PVC 전체를 쓰기 가능하게 마운트한 상태에서는 강한 파일 접근 격리로 간주하지 않는다.
+
+
+### 2026-11-14 — 상주 executor API 연결
+
+- 인증된 executor API와 표준 라이브러리 클라이언트를 worker ConfigMap에 연결했다. worker는 API로 세션을 만들고 submit 이벤트를 스트리밍하며 admission/generation receipt를 장부에 기록하고 task/run/session/admission identity를 지정해 취소한다. API client가 없으면 Gateway helper 직접 호출로 우회하지 않고 실패 종료한다.
+- 8766 포트 API sidecar, SQLite 상태 경로, worker URL/token 참조, `KANZO_EXECUTOR_API_TOKEN`용 VaultStaticSecret template을 추가했다. API와 dispatcher는 아직 같은 Pod에 있어 별도 수명주기 분리는 남아 있다.
+- 세션 생성 시 Kanzo 및 Hermes Langfuse task/run 식별자를 Gateway session environment에 붙인다.
+- 취소 경로는 API 소유 원격 실행을 로컬 process 부재보다 먼저 처리한다. worker가 generation receipt를 받기 전에도 API가 같은 admission에 저장한 generation을 사용해 취소하도록 보강했다.
+- 정적 확인 통과: worker/sandbox Kustomize 렌더링, 실행 관련 Python 9개 AST 파싱, `git diff --check`. 테스트, 이미지 빌드, 클러스터 배포, 태스크 실행은 하지 않았다.
+- Vault MCP 쓰기는 이 세션에 Vault token이 없어 실패했다. `KANZO_EXECUTOR_API_TOKEN`이 Vault에 준비됐는지는 확인되지 않았으며 sidecar 시작 전에 secret 경로를 검증해야 한다. 롤아웃은 하지 않았다.
+
+
+### 2026-11-14 — Phase 4 실행 경계 보강 및 이미지 빌드
+
+- executor API/client는 `executor_exit`의 `settled=true`와 code 0 및 정상 child 종료를 모두 요구한다. 스트림이 끊기거나 terminal receipt가 없으면 성공 처리하지 않고 `ambiguous`로 남긴다. SIGTERM은 새 요청을 차단하고, 기록된 admission이 있으면 그 실행만 취소 시도한 뒤 확인 결과에 따라 `cancelled` 또는 `ambiguous`를 저장한다. worker가 admission receipt를 아직 못 받았을 때도 API가 저장한 해당 run의 admission을 사용해 취소할 수 있다.
+- Kanzo의 review + human=true 이후 Gateway 취소가 확인되지 않으면 worker는 결과 게시·sandbox finalize·새 태스크 claim을 멈추고 run과 lease를 격리한다. 취소 확인 전 완료나 종료로 꾸미지 않는다.
+- broker가 sandbox init/runner에서 실행하는 인터프리터를 `python3`로 맞췄다. 기존 이미지 빌드에서 PNPM_VERSION build arg가 Docker build stage에 전달되지 않아 태그와 실제 패키지 버전이 달랐음을 확인했다. ARG를 stage에 다시 선언하고 pnpm 버전 일치 검사를 추가해 `12.18.0`을 직접 설치하도록 수정했다. 수정 이미지 두 개를 Buildah로 빌드해 로컬 K3s containerd에 import했다. sandbox 이미지에서 Python 3.11.2와 pnpm 12.18.0 실행을 확인했다.
+- Hermes 0.23.1의 실제 file tool 구현은 현재 선택된 terminal environment의 `execute`를 사용한다. Kanzo 자동 세션은 `KANZO_AUTOMATED_RUN`·task/run ID를 전달하고 broker provider가 정확한 Hermes session mapping을 요구하므로, 파일 도구가 별도 로컬 workspace 경로로 바로 쓰는 것으로 보인다는 정적 감사 가정은 코드 경로와 일치하지 않는다. 실제 세션에서 파일 쓰기·read-only 거부는 아직 검증되지 않았다.
+- 정적 확인 통과: worker/sandbox Kustomize 렌더링, worker 및 sandbox Python 16개 AST 구문 분석, `git diff --check`. 테스트와 클러스터 rollout은 하지 않았다. Vault MCP에 유효한 Vault token이 없어 `KANZO_EXECUTOR_API_TOKEN`은 기록하지 못했고, dispatcher와 executor는 아직 같은 Pod 수명주기를 공유한다.
+
+### 2026-11-14 — dispatcher 상태 경로 분리 준비
+
+- worker의 heartbeat, run ledger, 결과 artifact 경로를 Hermes 프로필 HOME과 독립적으로 지정할 수 있도록 `KANZO_WORKER_STATE_DIR`를 추가했다. 기본값은 기존 `/opt/data/home/kanzo-worker`를 유지하므로 PVC 전환 전 런타임 동작은 바뀌지 않는다.
+- 다음 단계는 dispatcher 전용 영속 볼륨과 기존 ledger/artifact의 안전한 이관 절차를 마련한 뒤에만 새 경로를 켜는 것이다. 이 변경은 코드 준비 단계이며 클러스터에 배포하지 않았다.
+- Vault MCP 도구 호출은 `vault token not provided for session`으로 실패했다. 따라서 `kv/mcp/kanzo-agent`의 `KANZO_EXECUTOR_API_TOKEN` 존재 여부와 VSO 동기화는 아직 확인되지 않았다.
+- executor API에 인증된 provider/profile 인증 상태 확인 API와 무인증 `/livez`, `/readyz` probe 경로를 추가했다. dispatcher는 `KANZO_EXECUTOR_API_URL`이 설정되면 자기 컨테이너의 Hermes CLI를 실행하지 않고 resident executor에 인증 상태를 묻는다. 이로써 별도 Pod 전환에 필요한 API 계약은 준비됐지만, 현재 매니페스트 URL은 여전히 loopback이고 배포·런타임 확인은 하지 않았다.
+- 기존 API sidecar에도 named port와 startup/readiness/liveness probe를 붙여 executor API가 프로세스 상태뿐 아니라 저장소·프로필 준비까지 보고되게 했다. 별도 Pod 전환 때 그대로 재사용할 수 있다.
+
+### 2026-11-14 — Executor API 서비스 경계 및 상태 이관 준비
+
+- dispatcher state migration 도구를 추가했다. worker 정지 상태에서만 실행하고, source에 unfinished run이 있으면 거부하며, SQLite backup·무결성/행 수·artifact 해시를 검증한다. 새 도구는 worker code ConfigMap에 포함된다. 아직 PVC 이관은 하지 않았다.
+- Executor API에 내부 ClusterIP Service를 추가하고 worker의 호출을 Service DNS로 전환했다. ingress/egress NetworkPolicy는 worker Pod만 8766에 접근하도록 제한한다. API에는 Kubernetes readiness/liveness probe를 추가했다.
+- resident executor Deployment 분리 자체는 미완료다. 현재 Service와 API는 기존 worker Pod를 가리키며, 클러스터는 이전 Argo revision `e0bb839f`에서 1/1 Ready 상태다. Vault API 토큰 키는 live Secret에서 비어 있어 배포하거나 롤아웃하지 않았다.
+- 정적 점검: worker/API/client/migration Python AST parse, worker Kustomize render, `git diff --check` 통과. 테스트는 실행하지 않았다.
+- dispatcher가 resident API URL을 사용하도록 설정되면 원격 API 실패 시 Hermes CLI, local Gateway control socket, ReadOnly loopback 경로로 후퇴하지 않도록 fail-closed 처리했다. 따라서 분리 후 프로필 인증/취소/작업 제출의 권위 상태가 dispatcher 컨테이너에 생기지 않는다.
+- 리뷰에서 ingress 정책이 executor/worker Pod를 선택하면서 8766 이외 연결을 차단할 수 있음을 발견했다. 현재 클러스터에서 확인한 Prometheus label과 Tailscale ingress proxy label을 기준으로 9105/9119 ingress 허용을 추가했다. 실제 policy는 미배포 상태다.
+- 리뷰 지적대로 `/readyz`를 DB/프로필 경로 확인에 그치지 않고 Hermes Gateway의 canonical endpoint가 `ready`인지 확인하도록 보강했다. SIGTERM drain 상태에서는 readiness가 즉시 실패한다. HTTP probe는 인증정보 없이 내부 readiness만 받으며, API 작업 경로는 bearer 인증을 유지한다.

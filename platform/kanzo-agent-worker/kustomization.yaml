@@ -2,14 +2,24 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - worker.yaml
+  - executor.yaml
+  - dispatcher.yaml
+  - dispatcher-state.yaml
+  - state-migration-job.yaml
   - hermes-dashboard-ingress.yaml
 configMapGenerator:
   - name: kanzo-agent-hermes-config
     namespace: mcp
+    options:
+      annotations:
+        argocd.argoproj.io/sync-wave: "-2"
     files:
       - config.yaml=hermes-config.yaml
   - name: kanzo-agent-worker-code
     namespace: mcp
+    options:
+      annotations:
+        argocd.argoproj.io/sync-wave: "-2"
     files:
       - worker.py=worker.py
       - run_ledger.py=run_ledger.py
@@ -17,7 +27,18 @@ configMapGenerator:
       - event_adapter.py=event_adapter.py
       - readonly_executor.py=readonly_executor.py
       - gateway_control.py=gateway_control.py
+      - gateway_session.py=gateway_session.py
+      - gateway_execution.py=gateway_execution.py
+      - executor_api.py=executor_api.py
+      - executor_client.py=executor_client.py
+      - migrate_dispatcher_state.py=migrate_dispatcher_state.py
+      - broker_client.py=broker_client.py
+      - workspace_transfer.py=workspace_transfer.py
+      - kanzo_terminal_provider.py=kanzo_terminal_provider.py
   - name: kanzo-agent-omh-routing
     namespace: mcp
+    options:
+      annotations:
+        argocd.argoproj.io/sync-wave: "-2"
     files:
       - model-chains.json=model-chains.json

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kanzo-sandbox-broker
+  namespace: mcp
+  labels:
+    app.kubernetes.io/name: kanzo-sandbox-broker
+    app.kubernetes.io/part-of: kanzo-sandbox
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kanzo-sandbox-broker
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

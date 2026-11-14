@@ -46,6 +46,7 @@ async def _interrupt_via_gateway(
     profile_home: Path,
     session_id: str,
     requested_generation: int | None,
+    requested_admission_id: str | None,
 ) -> dict[str, Any]:
     from hermes_cli.gateway_runtime import discover_gateway_endpoint
     from hermes_cli.gateway_client import connect_gateway
@@ -119,9 +120,6 @@ async def _interrupt_via_gateway(
                     else:
                         generation = generation_value
 
-                    if reason is None and requested_generation is not None and requested_generation != generation:
-                        reason = "generation_mismatch"
-
                     pending = snapshot.get("pending")
                     if (
                         reason is None
@@ -140,19 +138,15 @@ async def _interrupt_via_gateway(
                         reason = "pending_state_unverified"
 
                     if reason is None:
-                        queued = [
-                            item for item in pending
-                            if isinstance(item, dict) and item.get("status") == "queued"
-                        ]
-                        if queued:
-                            if (
-                                len(queued) != 1
-                                or not isinstance(queued[0].get("admission_id"), str)
-                                or not queued[0].get("admission_id")
-                            ):
-                                reason = "queued_admission_ambiguous"
-                            else:
-                                admission_id = queued[0]["admission_id"]
+                        if requested_admission_id is not None:
+                            matches = [
+                                item for item in pending
+                                if item.get("admission_id") == requested_admission_id
+                            ]
+                            if len(matches) != 1:
+                                reason = "admission_not_found_or_ambiguous"
+                            elif matches[0].get("status") == "queued":
+                                admission_id = requested_admission_id
                                 action = "prompt.cancel"
                                 try:
                                     receipt = await client.rpc(
@@ -171,32 +165,86 @@ async def _interrupt_via_gateway(
                                     )
                                     if not accepted:
                                         reason = "prompt_cancel_unconfirmed"
-                        else:
-                            started = any(
-                                isinstance(item, dict)
-                                and item.get("status") == "started"
-                                and item.get("execution_generation") == generation
-                                for item in pending
-                            )
-                            if snapshot.get("running") is True or started:
-                                action = "session.interrupt"
-                                try:
-                                    handle = await client.rpc(
-                                        "session.interrupt",
-                                        session_id=session_id,
-                                        execution_generation=generation,
-                                    )
-                                except Exception:
-                                    reason = "session_interrupt_failed"
+                            elif matches[0].get("status") == "started":
+                                target_generation = matches[0].get("execution_generation")
+                                if type(target_generation) is not int or target_generation < 0:
+                                    reason = "admission_generation_unverified"
+                                elif requested_generation is not None and requested_generation != target_generation:
+                                    reason = "generation_mismatch"
+                                elif snapshot.get("running") is not True:
+                                    reason = "admission_not_running"
                                 else:
-                                    accepted = (
-                                        isinstance(handle, dict)
-                                        and handle.get("execution_generation") == generation
-                                    )
-                                    if not accepted:
-                                        reason = "session_interrupt_unconfirmed"
+                                    generation = target_generation
+                                    action = "session.interrupt"
+                                    try:
+                                        handle = await client.rpc(
+                                            "session.interrupt",
+                                            session_id=session_id,
+                                            execution_generation=target_generation,
+                                        )
+                                    except Exception:
+                                        reason = "session_interrupt_failed"
+                                    else:
+                                        accepted = (
+                                            isinstance(handle, dict)
+                                            and handle.get("execution_generation") == target_generation
+                                        )
+                                        if not accepted:
+                                            reason = "session_interrupt_unconfirmed"
                             else:
-                                reason = "session_idle"
+                                reason = "admission_not_active"
+                        else:
+                            if requested_generation is not None and requested_generation != generation:
+                                reason = "generation_mismatch"
+                            queued = [item for item in pending if item.get("status") == "queued"]
+                            if reason is None and queued:
+                                if len(queued) != 1:
+                                    reason = "queued_admission_ambiguous"
+                                else:
+                                    admission_id = queued[0]["admission_id"]
+                                    action = "prompt.cancel"
+                                    try:
+                                        receipt = await client.rpc(
+                                            "prompt.cancel",
+                                            session_id=session_id,
+                                            admission_id=admission_id,
+                                        )
+                                    except Exception:
+                                        reason = "prompt_cancel_failed"
+                                    else:
+                                        accepted = (
+                                            isinstance(receipt, dict)
+                                            and receipt.get("admission_id") == admission_id
+                                            and receipt.get("status") == "terminal"
+                                            and receipt.get("outcome") == "cancelled"
+                                        )
+                                        if not accepted:
+                                            reason = "prompt_cancel_unconfirmed"
+                            elif reason is None:
+                                started = any(
+                                    item.get("status") == "started"
+                                    and item.get("execution_generation") == generation
+                                    for item in pending
+                                )
+                                if snapshot.get("running") is True or started:
+                                    action = "session.interrupt"
+                                    try:
+                                        handle = await client.rpc(
+                                            "session.interrupt",
+                                            session_id=session_id,
+                                            execution_generation=generation,
+                                        )
+                                    except Exception:
+                                        reason = "session_interrupt_failed"
+                                    else:
+                                        accepted = (
+                                            isinstance(handle, dict)
+                                            and handle.get("execution_generation") == generation
+                                        )
+                                        if not accepted:
+                                            reason = "session_interrupt_unconfirmed"
+                                else:
+                                    reason = "session_idle"
             finally:
                 if detach_session_id and subscription_id:
                     try:
@@ -226,6 +274,7 @@ def interrupt_session(
     profile_home: str | os.PathLike[str],
     session_id: str,
     execution_generation: int | None = None,
+    admission_id: str | None = None,
 ) -> dict[str, Any]:
     """Cancel this stored Hermes session through its verified profile Gateway.
 
@@ -241,6 +290,11 @@ def interrupt_session(
         type(execution_generation) is not int or execution_generation < 0
     ):
         return _outcome(False, "none", "generation_invalid")
+    if admission_id is not None and (
+        not isinstance(admission_id, str) or not admission_id or len(admission_id) > 256
+        or any(ord(char) < 32 for char in admission_id)
+    ):
+        return _outcome(False, "none", "admission_id_invalid")
     try:
         home = Path(profile_home).expanduser().resolve(strict=True)
         if not home.is_dir():
@@ -262,7 +316,7 @@ def interrupt_session(
 
         token = set_hermes_home_override(home)
         try:
-            return asyncio.run(_interrupt_via_gateway(home, session_id, execution_generation))
+            return asyncio.run(_interrupt_via_gateway(home, session_id, execution_generation, admission_id))
         finally:
             reset_hermes_home_override(token)
     except Exception:
@@ -283,12 +337,14 @@ def main(argv: list[str] | None = None) -> int:
     interrupt_parser.add_argument("--profile-home", required=True)
     interrupt_parser.add_argument("--session-id", required=True)
     interrupt_parser.add_argument("--generation", type=int)
+    interrupt_parser.add_argument("--admission-id")
     args = parser.parse_args(argv)
 
     result = interrupt_session(
         args.profile_home,
         args.session_id,
         args.generation,
+        args.admission_id,
     )
     sys.stdout.write(json.dumps(result, separators=(",", ":"), ensure_ascii=True) + "\n")
     return 0 if result["accepted"] else 2

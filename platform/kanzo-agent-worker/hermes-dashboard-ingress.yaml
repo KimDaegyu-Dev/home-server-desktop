@@ -15,6 +15,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: kanzo-agent-worker
+                name: kanzo-agent-hermes-dashboard
                 port:
                   number: 9119

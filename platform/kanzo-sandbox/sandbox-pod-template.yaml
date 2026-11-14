@@ -1,0 +1,106 @@
+# Reference pod specification for broker integration. This file is deliberately
+# not included in kustomization.yaml: the broker must create one isolated Pod per
+# run after the authenticated lease/source-transfer contract is implemented.
+# `kanzo-sandbox-code` below is the generator's logical name. Kustomize appends a
+# content hash to the actual ConfigMap object; broker integration must resolve
+# that rendered name before creating the Pod (for example, via generated config
+# wired into the broker deployment), rather than assume the unsuffixed API name.
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: kanzo-sandbox-
+  namespace: kanzo-sandboxes
+  labels:
+    app.kubernetes.io/name: kanzo-sandbox-runner
+    app.kubernetes.io/part-of: kanzo-sandbox
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    runAsGroup: 10000
+    seccompProfile:
+      type: RuntimeDefault
+  initContainers:
+    - name: source-init
+      image: localhost/home-server/kanzo-sandbox:0.1.0-node22.23.5-python3-pnpm12.18.0
+      imagePullPolicy: Never
+      command: [python3, /opt/kanzo/sandbox_init.py]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+          ephemeral-storage: 256Mi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+          ephemeral-storage: 8Gi
+      volumeMounts:
+        - name: sandbox-code
+          mountPath: /opt/kanzo
+          readOnly: true
+        - name: run-workspace
+          mountPath: /workspace
+        - name: tmp
+          mountPath: /tmp
+  containers:
+    - name: runner
+      image: localhost/home-server/kanzo-sandbox:0.1.0-node22.23.5-python3-pnpm12.18.0
+      imagePullPolicy: Never
+      command: [python3, /opt/kanzo/sandbox_runner.py]
+      ports:
+        - name: runner
+          containerPort: 8000
+          protocol: TCP
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: runner
+        periodSeconds: 2
+        timeoutSeconds: 1
+        failureThreshold: 30
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+          ephemeral-storage: 256Mi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+          ephemeral-storage: 8Gi
+      volumeMounts:
+        - name: sandbox-code
+          mountPath: /opt/kanzo
+          readOnly: true
+        - name: run-workspace
+          mountPath: /workspace
+        - name: scratch
+          mountPath: /scratch
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: sandbox-code
+      configMap:
+        name: kanzo-sandbox-code
+        defaultMode: 0444
+    - name: run-workspace
+      emptyDir:
+        sizeLimit: 8Gi
+    - name: scratch
+      emptyDir:
+        sizeLimit: 4Gi
+    - name: tmp
+      emptyDir:
+        sizeLimit: 1Gi

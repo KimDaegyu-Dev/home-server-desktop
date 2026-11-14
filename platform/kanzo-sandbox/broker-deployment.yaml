@@ -1,0 +1,127 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: kanzo-sandbox-broker-credentials
+  namespace: mcp
+spec:
+  vaultAuthRef: kanzo-agent
+  rolloutRestartTargets:
+    - kind: Deployment
+      name: kanzo-sandbox-broker
+    - kind: Deployment
+      name: kanzo-agent-worker
+  mount: kv
+  path: mcp/kanzo-agent
+  type: kv-v2
+  refreshAfter: 1h
+  hmacSecretData: true
+  destination:
+    create: true
+    name: kanzo-sandbox-broker-credentials
+    overwrite: true
+    transformation:
+      excludes: [".*"]
+      templates:
+        KANZO_BROKER_WORKER_TOKEN:
+          text: '{{- get .Secrets "MCPPROXY_KANZO_AGENT_TOKEN" -}}'
+        KANZO_BROKER_GATEWAY_TOKEN:
+          text: '{{- get .Secrets "MCPPROXY_AGENT_READ_TOKEN" -}}'
+        KANZO_BROKER_LEASE_KEY:
+          text: '{{- get .Secrets "HERMES_DASHBOARD_BASIC_AUTH_SECRET" -}}'
+      excludeRaw: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kanzo-sandbox-broker
+  namespace: mcp
+  labels:
+    app.kubernetes.io/name: kanzo-sandbox-broker
+    app.kubernetes.io/part-of: kanzo-sandbox
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo-sandbox-broker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kanzo-sandbox-broker
+        app.kubernetes.io/part-of: kanzo-sandbox
+    spec:
+      serviceAccountName: kanzo-sandbox-broker
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        runAsGroup: 10000
+        fsGroup: 10000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: broker
+          image: localhost/home-server/kanzo-sandbox-broker:0.1.0-python3.13
+          imagePullPolicy: Never
+          command: [python, /opt/kanzo-sandbox/sandbox_broker.py]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: KANZO_BROKER_INTERNAL_URL
+              value: http://kanzo-sandbox-broker.mcp.svc.cluster.local:8080
+            - name: KANZO_SANDBOX_IMAGE
+              value: localhost/home-server/kanzo-sandbox:0.1.0-node22.23.5-python3-pnpm12.18.0
+            - name: KANZO_SANDBOX_CODE_CONFIGMAP
+              value: kanzo-sandbox-code
+            - name: KANZO_BROKER_DATA_DIR
+              value: /var/lib/kanzo-broker
+          envFrom:
+            - secretRef:
+                name: kanzo-sandbox-broker-credentials
+          volumeMounts:
+            - name: broker-code
+              mountPath: /opt/kanzo-sandbox
+              readOnly: true
+            - name: broker-data
+              mountPath: /var/lib/kanzo-broker
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+              ephemeral-storage: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: broker-code
+          configMap:
+            name: kanzo-sandbox-broker-code
+            defaultMode: 0444
+        - name: broker-data
+          persistentVolumeClaim:
+            claimName: kanzo-sandbox-broker-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi

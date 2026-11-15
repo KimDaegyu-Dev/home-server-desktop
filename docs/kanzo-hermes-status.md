@@ -4,14 +4,12 @@
 
 ## 현재 상태
 
-- 현재 기준: 2026-11-14. Phase 4 GitOps는 `main`에 push했고 Argo가 revision `e00fa29`를 적용 중이다. 기존 worker는 replicas 0으로 내려갔고 상태 migration hook은 ledger 0행·artifact 0개를 검증했다. executor init 중이며 dispatcher는 아직 시작하지 않았다.
-- 수명주기 분리: `0fb3b34`에서 기존 통합 worker를 executor와 dispatcher로 분리했다. PVC binder Job으로 `WaitForFirstConsumer` 교착을 풀었고, worker 코드 ConfigMap은 Server-Side Apply로 적용한다. Hermes broker plugin manifest 줄바꿈과 readiness의 허용 profile 확인도 보완했다. VaultStaticSecret 재시작 대상은 새 executor/dispatcher로 갱신했다.
-- 다음 작업: Vault `kv/mcp/kanzo-agent`의 `KANZO_EXECUTOR_API_TOKEN` 실제 값 동기화를 확인한다. 현재 Secret key는 있으나 디코드 값이 0바이트여서 Executor API가 시작 조건을 통과하지 못한다. 값이 채워지면 VSO 재시작과 executor readiness를 확인한 뒤 dispatcher, 실제 태스크, 취소·결과·Langfuse를 검증한다. Vault MCP 세션 인증도 아직 제공되지 않았다.
-- 기준 스냅샷 `v1`: 커밋 `f11abf6` (`origin`에 push 완료). 런타임 변경 전 worker 코드와 설계 로드맵이 포함되어 있다.
-- 워커 런타임 소스: `e59a758` (`feat(kanzo): persist and recover run artifacts`).
-- 현재 live 기준: Argo CD `kanzo-agent-worker`는 revision `e0bb839f0a6e454cecb75febe7f42cf5337aebfb`에서 Synced/Healthy이고 기존 Pod는 5/5 Ready, restart 0, active gauge 0이다. run ledger는 schema 1, integrity `ok`, 0 rows로 확인했다. live VaultStaticSecret은 아직 새 API-token template을 반영하지 않아 Kubernetes Secret의 해당 key는 비어 있다.
-- 새 worker 로그에서 활성 프로젝트에 처리 가능한 태스크가 없음을 확인했다. 실제 Kanzo 태스크 실행 및 취소는 이번 롤아웃에서 수행하지 않았다.
-
+- 확인 기준: 2026-11-15. 사용자가 `KANZO_EXECUTOR_API_TOKEN`을 추가했다. Kubernetes Secret `mcp/kanzo-agent-credentials`에서 디코드 값 64바이트를 확인했다. Vault MCP 읽기는 시간 초과되어 Vault 원본 필드는 직접 읽지 못했다.
+- Argo CD 애플리케이션 `kanzo-agent-worker`는 revision `7d01ee376d8d0c43ea6b4c43fb4083502c3b36e3`에서 `Synced / Healthy`다. Executor `3/3 Ready`, Dispatcher `2/2 Ready`이며 executor API `/readyz`는 `ready`를 반환했다.
+- WSL/K3s 런타임은 복구 후에도 상태가 일치하지 않는다. API는 노드를 `Ready`, 여러 Pod를 `Running`으로 보고하지만 `cni0`는 `NO-CARRIER`/`linkdown`이다. K3s 로그에 kubelet proxy `no route to host`가 남고, `kubectl exec`/`logs`도 `pod does not exist` 또는 `NotFound`로 실패한다. 실제 태스크는 검증하지 못했다.
+- 마지막으로 확보한 dispatcher 로그에서 MCPProxy가 `call_tool_read` 요청의 `kanzo:list_tasks`를 `destructive` 권한이 필요하다는 이유로 거부했다. 워커 토큰은 존재하지만, 실제 도구 분류와 권한 매핑을 확인해 바로잡아야 태스크를 진행할 수 있다.
+- 다음 작업: K3s Pod 네트워크와 kubelet proxy를 안정화하고, Kanzo 읽기 도구의 MCPProxy 경로/annotation을 확인한다. 이후 범위가 제한된 태스크로 claim, Hermes 실행, 결과/comment, 취소, Langfuse 연계를 검증한다.
+- V1 롤백 스냅샷: 커밋 `f11abf6` (`origin`에 push 완료). worker 기준 소스: `e59a758` (`feat(kanzo): persist and recover run artifacts`).
 ## 단계별 진행
 
 | 로드맵 단계 | 상태 | 진행 및 남은 작업 |

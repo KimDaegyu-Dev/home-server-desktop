@@ -370,7 +370,7 @@ index 9ac0129..23d8f67 100644
  [[package]]
  name = "zmij"
 diff --git a/Cargo.toml b/Cargo.toml
-index a72176d..c8ff7ab 100644
+index a72176d..d96ff96 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -30,6 +30,7 @@ serde = { version = "1.0.229", features = ["derive"] }
@@ -382,7 +382,7 @@ index a72176d..c8ff7ab 100644
  toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "serde"] }
  
 diff --git a/src/app.js b/src/app.js
-index ffbf7df..f160c6b 100644
+index ffbf7df..dc498fb 100644
 --- a/src/app.js
 +++ b/src/app.js
 @@ -16,6 +16,7 @@ if (!HTMLFormElement.prototype.requestSubmit) {
@@ -453,7 +453,7 @@ index ffbf7df..f160c6b 100644
    if (!confirm(tr("Delete this comment? This cannot be undone."))) return;
    try {
 diff --git a/src/index.html b/src/index.html
-index f27d0f6..f0a0196 100644
+index f27d0f6..81f460e 100644
 --- a/src/index.html
 +++ b/src/index.html
 @@ -383,6 +383,10 @@ html:not([data-hide~="waiting"]) .card.waiting:not(:hover) { opacity: .6; }
@@ -489,7 +489,7 @@ index f27d0f6..f0a0196 100644
        <h3>Comments <span class="count" id="p-comment-count"></span></h3>
        <div id="p-comments"></div>
 diff --git a/src/mcp.rs b/src/mcp.rs
-index 23ff9d8..6b89a2b 100644
+index 23ff9d8..240319b 100644
 --- a/src/mcp.rs
 +++ b/src/mcp.rs
 @@ -233,6 +233,8 @@ struct CreateTaskArgs {
@@ -510,7 +510,16 @@ index 23ff9d8..6b89a2b 100644
  }
  
  #[derive(Deserialize, JsonSchema)]
-@@ -484,10 +488,10 @@ impl Kanzo {
+@@ -280,6 +284,8 @@ struct NextTaskArgs {
+     project: Option<String>,
+     /// As in list_tasks, like tag:bug.
+     filter: Option<String>,
++    /// Optional durable identity; retrying this claim returns the same task.
++    run_id: Option<String>,
+ }
+ 
+ impl Kanzo {
+@@ -484,10 +490,11 @@ impl Kanzo {
      ) -> Result<CallToolResult, ErrorData> {
          Ok(self
              .run_for(&ext, move |ctx, store| {
@@ -519,11 +528,12 @@ index 23ff9d8..6b89a2b 100644
                  let project = ctx.project(store, project.as_deref())?;
                  let status = status.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
 -                let patch = TaskPatch { description, status, tags, human, waits_on, ..Default::default() };
-+                let patch = TaskPatch { description, status, tags, human, waits_on, agent_config, ..Default::default() };
++                let patch =
++                    TaskPatch { description, status, tags, human, waits_on, agent_config, ..Default::default() };
                  let t = store.create_task_in(project.id, &title, patch)?;
                  Ok(format!("Created {} in {}: {}{}", t.key(), t.status, t.title, waits_note(store, &t)?))
              })
-@@ -511,6 +515,7 @@ impl Kanzo {
+@@ -511,6 +518,7 @@ impl Kanzo {
                          human: args.human,
                          url: args.url,
                          waits_on: args.waits_on,
@@ -531,7 +541,20 @@ index 23ff9d8..6b89a2b 100644
                      },
                  )?;
                  let moved = if before.status != after.status {
-@@ -695,6 +700,9 @@ fn task_detail(ctx: &Ctx, store: &Store, t: &Task) -> store::Result<String> {
+@@ -551,7 +559,11 @@ impl Kanzo {
+                 let project = ctx.scope(store, args.project.as_deref())?;
+                 let id = project.as_ref().map(|p| p.id);
+                 let filter = args.filter.as_deref().unwrap_or("");
+-                match store.next_task_matching(id, filter)? {
++                let claimed = match args.run_id.as_deref() {
++                    Some(run_id) => store.claim_task_matching(id, filter, run_id)?,
++                    None => store.next_task_matching(id, filter)?,
++                };
++                match claimed {
+                     Some(task) => Ok(format!("Moved to {}:\n{}", task.status, task_detail(ctx, store, &task)?)),
+                     None => {
+                         let waiting = store.waiting_in_todo(id, filter)?;
+@@ -695,6 +707,9 @@ fn task_detail(ctx: &Ctx, store: &Store, t: &Task) -> store::Result<String> {
      if !t.description.is_empty() && shown(&hidden, "description") {
          let _ = writeln!(out, "\n{}", t.description);
      }
@@ -542,7 +565,7 @@ index 23ff9d8..6b89a2b 100644
      if !own.is_empty() {
          let _ = writeln!(out, "\nImages: {}", own.join(", "));
 diff --git a/src/store.rs b/src/store.rs
-index 8205f50..ca61887 100644
+index 8205f50..c323335 100644
 --- a/src/store.rs
 +++ b/src/store.rs
 @@ -6,12 +6,15 @@
@@ -562,11 +585,19 @@ index 8205f50..ca61887 100644
  
  /// The oldest schema version whose Kanzo can still use a database at the latest one.
  /// Adding a table or a column with a default leaves older versions working, so a board
-@@ -54,8 +57,19 @@ const MIGRATIONS: &[&str] = &[
+@@ -54,8 +57,27 @@ const MIGRATIONS: &[&str] = &[
       CREATE TRIGGER task_waits_insert AFTER INSERT ON task_waits BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;
       CREATE TRIGGER task_waits_delete AFTER DELETE ON task_waits BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END;",
      "ALTER TABLE projects ADD COLUMN position REAL;",
 +    "ALTER TABLE tasks ADD COLUMN agent_config_json TEXT NOT NULL DEFAULT 'null';",
++    "CREATE TABLE task_claims (
++         run_id     TEXT PRIMARY KEY,
++         task_id    INTEGER NOT NULL,
++         project_id INTEGER,
++         query      TEXT NOT NULL,
++         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
++     );
++     CREATE INDEX task_claims_by_task ON task_claims(task_id);",
  ];
  
 +static CHANGE_EVENTS: OnceLock<broadcast::Sender<()>> = OnceLock::new();
@@ -582,7 +613,7 @@ index 8205f50..ca61887 100644
  const PROJECT_COLORS: &[&str] = &["gray", "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"];
  
  const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
-@@ -124,6 +138,21 @@ pub struct Task {
+@@ -124,6 +146,21 @@ pub struct Task {
      /// The tasks this one waits on that aren't done yet. Left out when there are none, as on most tasks.
      #[serde(skip_serializing_if = "Vec::is_empty")]
      pub waiting_on: Vec<i64>,
@@ -604,7 +635,7 @@ index 8205f50..ca61887 100644
  }
  
  impl Task {
-@@ -169,6 +198,7 @@ pub struct TaskPatch {
+@@ -169,6 +206,7 @@ pub struct TaskPatch {
      pub human: Option<bool>,
      /// Task keys, comma-separated; it replaces the list.
      pub waits_on: Option<String>,
@@ -612,7 +643,7 @@ index 8205f50..ca61887 100644
  }
  
  const STATUSES: [&str; 4] = ["todo", "doing", "review", "done"];
-@@ -258,10 +288,15 @@ impl Store {
+@@ -258,10 +296,15 @@ impl Store {
  
      /// Immediate, so concurrent writers queue up on the busy timeout instead of failing halfway.
      fn write<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -628,7 +659,7 @@ index 8205f50..ca61887 100644
                  Ok(v)
              }
              Err(e) => {
-@@ -438,9 +473,9 @@ impl Store {
+@@ -438,9 +481,9 @@ impl Store {
      pub fn unlink_repo(&self, slug: &str, repo: &str) -> Result<Project> {
          let project = self.find_project(slug)?;
          let repo = repo_from_url(repo).unwrap_or_else(|| repo.trim().to_ascii_lowercase());
@@ -641,7 +672,7 @@ index 8205f50..ca61887 100644
          if removed == 0 {
              return Err(Error::NotFound(format!("repo {repo} is not linked to project {}", project.slug)));
          }
-@@ -460,7 +495,10 @@ impl Store {
+@@ -460,7 +503,10 @@ impl Store {
              return Err(Error::Invalid("project name is empty".into()));
          }
          let project = self.find_project(slug)?;
@@ -653,7 +684,7 @@ index 8205f50..ca61887 100644
          self.find_project(&project.slug)
      }
  
-@@ -469,7 +507,10 @@ impl Store {
+@@ -469,7 +515,10 @@ impl Store {
              return Err(Error::Invalid(format!("unknown color {color:?}; use one of: {}", PROJECT_COLORS.join(", "))));
          }
          let project = self.find_project(slug)?;
@@ -665,7 +696,7 @@ index 8205f50..ca61887 100644
          self.find_project(&project.slug)
      }
  
-@@ -511,13 +552,16 @@ impl Store {
+@@ -511,13 +560,16 @@ impl Store {
      pub fn delete_project(&self, slug: &str) -> Result<Project> {
          let project = self.find_project(slug)?;
          // Tasks and comments go with it through ON DELETE CASCADE.
@@ -684,7 +715,7 @@ index 8205f50..ca61887 100644
          FROM tasks t JOIN projects p ON p.id = t.project_id";
  
      fn task_row(r: &Row) -> rusqlite::Result<Task> {
-@@ -535,6 +579,8 @@ impl Store {
+@@ -535,6 +587,8 @@ impl Store {
              updated_at: r.get(7)?,
              comments: r.get(8)?,
              waiting_on: Vec::new(),
@@ -693,7 +724,7 @@ index 8205f50..ca61887 100644
          })
      }
  
-@@ -684,19 +730,21 @@ impl Store {
+@@ -684,19 +738,34 @@ impl Store {
      }
  
      // One write, or an agent could take a task before it's human, or before it waits.
@@ -705,7 +736,11 @@ index 8205f50..ca61887 100644
          self.check_status(status)?;
          let description = patch.description.as_deref().unwrap_or("").trim();
          let tags = clean_tags(patch.tags.as_deref().unwrap_or("")).join(",");
-+        let agent_config = patch.agent_config.as_ref().map(serde_json::to_string).transpose()
++        let agent_config = patch
++            .agent_config
++            .as_ref()
++            .map(serde_json::to_string)
++            .transpose()
 +            .map_err(|e| Error::Invalid(format!("invalid agent configuration: {e}")))?;
          let id = self.write(|c| {
              let position = Self::end_of_column(c, status, 0)?;
@@ -715,20 +750,33 @@ index 8205f50..ca61887 100644
 -                params![project_id, title, description, status, position, tags, patch.human.unwrap_or(false)],
 +                "INSERT INTO tasks (project_id, title, description, status, position, tags, human, agent_config_json) \
 +                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, coalesce(?8, 'null'))",
-+                params![project_id, title, description, status, position, tags, patch.human.unwrap_or(false), agent_config],
++                params![
++                    project_id,
++                    title,
++                    description,
++                    status,
++                    position,
++                    tags,
++                    patch.human.unwrap_or(false),
++                    agent_config
++                ],
              )?;
              let id = c.last_insert_rowid();
              if let Some(keys) = &patch.waits_on {
-@@ -756,6 +804,8 @@ impl Store {
+@@ -756,6 +825,12 @@ impl Store {
          if let Some(s) = &patch.status {
              self.check_status(s)?;
          }
-+        let agent_config = patch.agent_config.as_ref().map(serde_json::to_string).transpose()
++        let agent_config = patch
++            .agent_config
++            .as_ref()
++            .map(serde_json::to_string)
++            .transpose()
 +            .map_err(|e| Error::Invalid(format!("invalid agent configuration: {e}")))?;
          self.write(|c| {
              let current = self.get_task(id)?;
              // Only what the patch changes is written, and only then is the task newer.
-@@ -764,10 +814,11 @@ impl Store {
+@@ -764,10 +839,11 @@ impl Store {
                  &format!(
                      "UPDATE tasks SET title = coalesce(?1, title), project_id = coalesce(?2, project_id),
                         human = coalesce(?3, human), tags = coalesce(?4, tags),
@@ -743,7 +791,7 @@ index 8205f50..ca61887 100644
                  ),
                  params![
                      title,
-@@ -776,7 +827,8 @@ impl Store {
+@@ -776,7 +852,8 @@ impl Store {
                      tags,
                      patch.description.as_deref().map(str::trim),
                      id,
@@ -753,7 +801,77 @@ index 8205f50..ca61887 100644
                  ],
              )?;
              if let Some(s) = &patch.status
-@@ -947,7 +999,10 @@ impl Store {
+@@ -928,9 +1005,45 @@ impl Store {
+     }
+ 
+     pub fn next_task_matching(&self, project_id: Option<i64>, query: &str) -> Result<Option<Task>> {
++        self.next_task_matching_with_run_id(project_id, query, None)
++    }
++
++    /// Claim a task with a durable run identity. Repeating the same request returns
++    /// the original task instead of claiming another todo after a lost response.
++    pub fn claim_task_matching(&self, project_id: Option<i64>, query: &str, run_id: &str) -> Result<Option<Task>> {
++        if run_id.is_empty()
++            || run_id.len() > 128
++            || !run_id.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
++        {
++            return Err(Error::Invalid(
++                "run_id must contain 1-128 ASCII letters, digits, dots, underscores, or hyphens".into(),
++            ));
++        }
++        self.next_task_matching_with_run_id(project_id, query, Some(run_id))
++    }
++
++    fn next_task_matching_with_run_id(
++        &self,
++        project_id: Option<i64>,
++        query: &str,
++        run_id: Option<&str>,
++    ) -> Result<Option<Task>> {
+         let (todo, values) = self.agents_todo(project_id, query)?;
+         let to = STATUSES[1];
+-        let id = self.write(|c| {
++        let (id, is_retry) = self.write(|c| {
++            if let Some(run_id) = run_id {
++                let existing: Option<(i64, Option<i64>, String)> = c
++                    .query_row("SELECT task_id, project_id, query FROM task_claims WHERE run_id = ?1", [run_id], |r| {
++                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
++                    })
++                    .optional()?;
++                if let Some((task_id, claimed_project, claimed_query)) = existing {
++                    if claimed_project != project_id || claimed_query != query {
++                        return Err(Error::Invalid("run_id is already bound to a different claim request".into()));
++                    }
++                    return Ok((Some(task_id), true));
++                }
++            }
+             let sql = format!("SELECT t.id {todo} AND NOT {WAITING} ORDER BY t.position LIMIT 1");
+             let id: Option<i64> = c.query_row(&sql, rusqlite::params_from_iter(values), |r| r.get(0)).optional()?;
+             if let Some(id) = id {
+@@ -939,15 +1052,31 @@ impl Store {
+                     &format!("UPDATE tasks SET status = ?1, position = ?2, updated_at = {NOW} WHERE id = ?3"),
+                     params![to, position, id],
+                 )?;
++                if let Some(run_id) = run_id {
++                    c.execute(
++                        "INSERT INTO task_claims (run_id, task_id, project_id, query) VALUES (?1, ?2, ?3, ?4)",
++                        params![run_id, id, project_id, query],
++                    )?;
++                }
+             }
+-            Ok(id)
++            Ok((id, false))
+         })?;
+-        id.map(|id| self.get_task(id)).transpose()
++        match id {
++            Some(id) => match self.get_task(id) {
++                Ok(task) => Ok(Some(task)),
++                Err(Error::NotFound(_)) if run_id.is_some() && is_retry => Ok(None),
++                Err(error) => Err(error),
++            },
++            None => Ok(None),
++        }
+     }
  
      pub fn delete_task(&self, id: i64) -> Result<Task> {
          let task = self.get_task(id)?;
@@ -765,7 +883,7 @@ index 8205f50..ca61887 100644
          Ok(task)
      }
  
-@@ -1007,15 +1062,21 @@ impl Store {
+@@ -1007,15 +1136,21 @@ impl Store {
  
      pub fn delete_comment(&self, id: i64) -> Result<Comment> {
          let comment = self.get_comment(id)?;
@@ -790,7 +908,7 @@ index 8205f50..ca61887 100644
      }
  
      pub fn list_images(&self, task_id: i64) -> Result<Vec<Image>> {
-@@ -1036,7 +1097,10 @@ impl Store {
+@@ -1036,7 +1171,10 @@ impl Store {
              .query_row(&format!("{} WHERE id = ?1", Self::IMAGE_SELECT), [id], Self::image_row)
              .optional()?
              .ok_or_else(|| Error::NotFound(format!("no image {id}")))?;
@@ -802,8 +920,38 @@ index 8205f50..ca61887 100644
          Ok(image)
      }
  
+@@ -1798,6 +1936,29 @@ mod tests {
+         assert_eq!(next("  ").as_deref(), Some("Not in the epic"));
+     }
+ 
++    #[test]
++    fn run_keyed_claim_is_idempotent_and_bound_to_its_request() {
++        let (_dir, s) = store();
++        let api = s.create_project("api", "", None).unwrap();
++        let first = s.create_task(api.id, "First", "").unwrap();
++        s.create_task(api.id, "Second", "").unwrap();
++
++        let claimed = s.claim_task_matching(Some(api.id), "", "run-123").unwrap().unwrap();
++        assert_eq!(claimed.id, first.id);
++        assert_eq!(claimed.status, "doing");
++
++        let retried = s.claim_task_matching(Some(api.id), "", "run-123").unwrap().unwrap();
++        assert_eq!(retried.id, first.id);
++        assert_eq!(retried.status, "doing");
++
++        s.delete_task(first.id).unwrap();
++        assert!(s.claim_task_matching(Some(api.id), "", "run-123").unwrap().is_none());
++
++        let next = s.claim_task_matching(Some(api.id), "", "run-456").unwrap().unwrap();
++        assert_eq!(next.title, "Second");
++        assert!(s.claim_task_matching(Some(api.id), "tag:changed", "run-123").is_err());
++    }
++
+     #[test]
+     fn agents_cannot_filter_through_hidden_properties() {
+         let (_dir, s) = store();
 diff --git a/src/web.rs b/src/web.rs
-index 0c6ab81..394062f 100644
+index 0c6ab81..99f2bb6 100644
 --- a/src/web.rs
 +++ b/src/web.rs
 @@ -1,4 +1,5 @@
@@ -812,12 +960,15 @@ index 0c6ab81..394062f 100644
  use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
  use std::sync::{Arc, Mutex, OnceLock};
  use std::time::{Duration, Instant};
-@@ -8,12 +9,13 @@ use axum::body::Bytes;
+@@ -8,12 +9,16 @@ use axum::body::Bytes;
  use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
  use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
  use axum::middleware::{self, Next};
 -use axum::response::{Html, IntoResponse, Response};
-+use axum::response::{sse::{Event, KeepAlive, Sse}, Html, IntoResponse, Response};
++use axum::response::{
++    Html, IntoResponse, Response,
++    sse::{Event, KeepAlive, Sse},
++};
  use axum::routing::{delete, get, patch, post};
  use axum::{Extension, Json, Router};
  use serde::{Deserialize, Serialize};
@@ -827,7 +978,7 @@ index 0c6ab81..394062f 100644
  use tokio_util::sync::CancellationToken;
  
  use crate::home::Home;
-@@ -199,6 +201,9 @@ fn router(home: Home, guard: Arc<Guard>, shutdown: CancellationToken) -> Router
+@@ -199,6 +204,9 @@ fn router(home: Home, guard: Arc<Guard>, shutdown: CancellationToken) -> Router
          .route("/api/sync", get(sync_status).post(sync_now).put(sync_repo))
          .route("/api/settings", patch(update_settings))
          .route_layer(middleware::from_fn_with_state(guard.clone(), forward));
@@ -837,7 +988,7 @@ index 0c6ab81..394062f 100644
      Router::new()
          .route("/", get(|| async { Html(INDEX) }))
          .route("/app.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], APP_JS) }))
-@@ -223,6 +228,13 @@ fn router(home: Home, guard: Arc<Guard>, shutdown: CancellationToken) -> Router
+@@ -223,6 +231,13 @@ fn router(home: Home, guard: Arc<Guard>, shutdown: CancellationToken) -> Router
          .layer(middleware::from_fn_with_state(guard, protect))
          .layer(middleware::map_response(stamp_version))
          .with_state(Arc::new(home))
@@ -845,13 +996,13 @@ index 0c6ab81..394062f 100644
 +}
 +
 +async fn events() -> impl IntoResponse {
-+    let stream = store::subscribe_changes()
-+        .map(|_| Ok::<_, Infallible>(Event::default().event("kanzo.changed").data("{}")));
++    let stream =
++        store::subscribe_changes().map(|_| Ok::<_, Infallible>(Event::default().event("kanzo.changed").data("{}")));
 +    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(20)).text("keep-alive"))
  }
  
  /// Pages compare it with the version they loaded with, and reload after an update. Set on
-@@ -562,12 +574,13 @@ struct NewTask {
+@@ -562,12 +577,17 @@ struct NewTask {
      project: String,
      title: String,
      description: Option<String>,
@@ -862,11 +1013,15 @@ index 0c6ab81..394062f 100644
      with_store(home, move |_, s| {
          let project = s.find_project(&t.project)?;
 -        s.create_task_in(project.id, &t.title, TaskPatch { description: t.description, ..Default::default() })
-+        s.create_task_in(project.id, &t.title, TaskPatch { description: t.description, agent_config: t.agent_config, ..Default::default() })
++        s.create_task_in(
++            project.id,
++            &t.title,
++            TaskPatch { description: t.description, agent_config: t.agent_config, ..Default::default() },
++        )
      })
      .await
  }
-@@ -619,6 +632,7 @@ struct Patch {
+@@ -619,6 +639,7 @@ struct Patch {
      human: Option<bool>,
      url: Option<String>,
      waits_on: Option<String>,
@@ -874,7 +1029,7 @@ index 0c6ab81..394062f 100644
  }
  
  async fn update_task(State(home): Shared, Path(id): Path<i64>, Json(p): Json<Patch>) -> Response {
-@@ -635,6 +649,7 @@ async fn update_task(State(home): Shared, Path(id): Path<i64>, Json(p): Json<Pat
+@@ -635,6 +656,7 @@ async fn update_task(State(home): Shared, Path(id): Path<i64>, Json(p): Json<Pat
                  human: p.human,
                  url: p.url,
                  waits_on: p.waits_on,

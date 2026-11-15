@@ -1963,27 +1963,73 @@ class Worker:
         else:
             projects = [self.env.get("KANZO_PROJECT", "all").strip() or "all"]
         parsed = None
+        run_id = ""
+        claim_query = "-is:human -is:waiting"
+        pending_claims = self.ledger.pending_claims()
+        claim_requests: list[dict[str, Any]] = []
+        if pending_claims:
+            pending = pending_claims[0]
+            if not catalog or pending["project"] in route_by_slug:
+                claim_requests.append(pending)
+            else:
+                LOG.warning(
+                    "Pending claim %s is for inactive project %s; preserving it without calling Kanzo",
+                    pending["run_id"], pending["project"],
+                )
         for project in projects:
-            claimed = self._call("next_task", {"project": project, "filter": "-is:human -is:waiting"})
+            if claim_requests and claim_requests[0]["project"] == project:
+                continue
+            claim_requests.append({
+                "run_id": uuid.uuid4().hex[:12],
+                "project": project,
+                "query": claim_query,
+                "metadata": {
+                    "project": project,
+                    "analysis_provider": self.env.get("KANZO_ANALYSIS_PROVIDER", "openai-api"),
+                    "analysis_model": self.env.get("KANZO_ANALYSIS_MODEL", "iq_3s"),
+                    "code_provider": self.env.get("KANZO_CODE_PROVIDER", "openai-api"),
+                    "code_model": self.env.get("KANZO_CODE_MODEL", "coder"),
+                },
+            })
+        for intent in claim_requests:
+            run_id = intent["run_id"]
+            project = intent["project"]
+            claim_query = intent["query"]
+            claim_metadata = intent["metadata"]
+            self.ledger.prepare_claim(run_id, project, claim_query, claim_metadata)
+            claimed = self._call("next_task", {
+                "project": project, "filter": claim_query, "run_id": run_id,
+            })
             parsed = parse_task_line(claimed)
             if parsed:
+                task_id, status, title_line = parsed
+                self.ledger.start_claimed(task_id, run_id)
+                self.ledger.record_fields(run_id, {"title": title_line, "claimed_status": status})
                 break
+            if claimed.startswith("Nothing in todo for ") or claimed.startswith("Nothing ready in todo for "):
+                self.ledger.clear_claim(run_id)
+                continue
+            raise WorkerError(
+                f"Kanzo claim response was not recognized; preserving run {run_id} for idempotent recovery."
+            )
         if not parsed:
             LOG.info("No agent-eligible task is available in active projects")
             return False
         task_id, status, title_line = parsed
         if status != "doing":
             LOG.warning("Kanzo next_task returned %s in status %s", task_id, status)
-        run_id = uuid.uuid4().hex[:12]
-        self.ledger.start(task_id, run_id, {
-            "project": task_id.rsplit("#", 1)[0],
-            "title": title_line,
-            "claimed_status": status,
-            "analysis_provider": self.env.get("KANZO_ANALYSIS_PROVIDER", "openai-api"),
-            "analysis_model": self.env.get("KANZO_ANALYSIS_MODEL", "iq_3s"),
-            "code_provider": self.env.get("KANZO_CODE_PROVIDER", "openai-api"),
-            "code_model": self.env.get("KANZO_CODE_MODEL", "coder"),
-        })
+        task_project = task_id.rsplit("#", 1)[0]
+        if status != "doing" or (catalog and task_project not in route_by_slug):
+            reason = (
+                f"Project {task_project!r} is no longer active in the Kanzo catalog."
+                if catalog and task_project not in route_by_slug
+                else f"The claimed task is now in {status!r}, so Hermes did not start it."
+            )
+            self._comment(task_id, f"Recovered claim `{run_id}` was not executed. {reason} The card was routed to human review.")
+            if status not in {"done", "review"}:
+                self._call("update_task", {"id": task_id, "status": "review", "human": True})
+            self.ledger.transition(run_id, "review", {"claim_not_executed": reason})
+            return True
         self.ledger.transition(run_id, "preparing")
         self.metrics["active"] = 1
         try:

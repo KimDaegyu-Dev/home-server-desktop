@@ -36,7 +36,7 @@ class RunNotFoundError(RunLedgerError):
     """Raised when an operation references an unknown run ID."""
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 STATES = frozenset(
     {
         "claimed",
@@ -54,7 +54,7 @@ STATES = frozenset(
 ACTIVE_STATES = ("claimed", "preparing", "running", "finalizing")
 UNFINISHED_STATES = (*ACTIVE_STATES, "orphaned")
 TRANSITIONS = {
-    "claimed": frozenset({"preparing", "cancelled", "failed", "orphaned"}),
+    "claimed": frozenset({"preparing", "review", "cancelled", "failed", "orphaned"}),
     "preparing": frozenset(
         {"running", "review", "waiting", "cancelled", "failed", "orphaned"}
     ),
@@ -193,12 +193,38 @@ class RunLedger:
                     self._connection.execute(
                         "CREATE INDEX runs_state_created ON runs(state, created_at)"
                     )
+                    self._connection.execute(
+                        """CREATE TABLE claim_intents (
+                            run_id TEXT PRIMARY KEY,
+                            project TEXT NOT NULL,
+                            query TEXT NOT NULL,
+                            metadata_json TEXT NOT NULL,
+                            created_at TEXT NOT NULL
+                        )"""
+                    )
                     self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                     self._connection.execute("COMMIT")
                 except Exception:
                     self._connection.execute("ROLLBACK")
                     raise
-            elif version != SCHEMA_VERSION or tables != {"runs"}:
+            elif version == 1 and tables == {"runs"}:
+                self._connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self._connection.execute(
+                        """CREATE TABLE claim_intents (
+                            run_id TEXT PRIMARY KEY,
+                            project TEXT NOT NULL,
+                            query TEXT NOT NULL,
+                            metadata_json TEXT NOT NULL,
+                            created_at TEXT NOT NULL
+                        )"""
+                    )
+                    self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                    self._connection.execute("COMMIT")
+                except Exception:
+                    self._connection.execute("ROLLBACK")
+                    raise
+            elif version != SCHEMA_VERSION or tables != {"runs", "claim_intents"}:
                 raise LedgerCorruptionError("Execution ledger schema version is unsupported")
 
             self._connection.execute("PRAGMA journal_mode = WAL")
@@ -282,6 +308,72 @@ class RunLedger:
                 ) VALUES (?, ?, 'claimed', ?, ?, ?, '{}', NULL, '{}')""",
                 (run_id, task_id, now, now, metadata_json),
             )
+            return self._record(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
+
+    def prepare_claim(
+        self, run_id: str, project: str, query: str, metadata: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Persist the exact Kanzo claim request before sending it over MCP."""
+        if not run_id or not project:
+            raise ValueError("run_id and project must be non-empty strings")
+        metadata_json = _json_dump(_require_mapping(metadata, "metadata"))
+        with self._transaction() as connection:
+            row = connection.execute("SELECT * FROM claim_intents WHERE run_id = ?", (run_id,)).fetchone()
+            if row is not None:
+                if row["project"] != project or row["query"] != query or row["metadata_json"] != metadata_json:
+                    raise DuplicateRunError("run_id is already bound to a different pending claim")
+                return {
+                    "run_id": row["run_id"], "project": row["project"], "query": row["query"],
+                    "metadata": _json_load(row["metadata_json"]), "created_at": row["created_at"],
+                }
+            if connection.execute("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)).fetchone():
+                raise DuplicateRunError("run_id already exists")
+            now = _now()
+            connection.execute(
+                "INSERT INTO claim_intents (run_id, project, query, metadata_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (run_id, project, query, metadata_json, now),
+            )
+            return {"run_id": run_id, "project": project, "query": query,
+                    "metadata": _json_load(metadata_json), "created_at": now}
+
+    def pending_claims(self) -> list[dict[str, Any]]:
+        with self._lock:
+            try:
+                rows = self._connection.execute("SELECT * FROM claim_intents ORDER BY created_at").fetchall()
+                return [{
+                    "run_id": row["run_id"], "project": row["project"], "query": row["query"],
+                    "metadata": _json_load(row["metadata_json"]), "created_at": row["created_at"],
+                } for row in rows]
+            except sqlite3.DatabaseError as exc:
+                raise LedgerCorruptionError("Unable to read pending claim intents") from exc
+
+    def clear_claim(self, run_id: str) -> None:
+        with self._transaction() as connection:
+            connection.execute("DELETE FROM claim_intents WHERE run_id = ?", (run_id,))
+
+    def start_claimed(self, task_id: str, run_id: str) -> dict[str, Any]:
+        """Atomically turn a durable intent into a run after Kanzo confirms its claim."""
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValueError("task_id must be a non-empty string")
+        with self._transaction() as connection:
+            intent = connection.execute("SELECT * FROM claim_intents WHERE run_id = ?", (run_id,)).fetchone()
+            if intent is None:
+                raise RunNotFoundError("pending claim intent does not exist")
+            active = connection.execute(
+                f"SELECT run_id FROM runs WHERE state IN ({','.join('?' for _ in UNFINISHED_STATES)}) LIMIT 1",
+                UNFINISHED_STATES,
+            ).fetchone()
+            if active is not None:
+                raise ActiveRunError("An unfinished run already exists")
+            now = _now()
+            connection.execute(
+                """INSERT INTO runs (
+                    run_id, task_id, state, created_at, updated_at,
+                    metadata_json, fields_json, result_json, publication_json
+                ) VALUES (?, ?, 'claimed', ?, ?, ?, '{}', NULL, '{}')""",
+                (run_id, task_id, now, now, intent["metadata_json"]),
+            )
+            connection.execute("DELETE FROM claim_intents WHERE run_id = ?", (run_id,))
             return self._record(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
 
     def transition(

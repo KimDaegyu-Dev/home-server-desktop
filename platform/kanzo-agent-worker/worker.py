@@ -225,7 +225,10 @@ class Task:
 
     @property
     def hermes_toolsets(self) -> list[str]:
-        return [] if self.is_tool_free else list(STANDARD_HERMES_TOOLSETS)
+        # Hermes treats an empty configured toolset list as "no native tools, but
+        # include profile-default MCP servers". Its documented sentinel is needed
+        # to suppress MCPProxy too.
+        return ["no_mcp"] if self.is_tool_free else list(STANDARD_HERMES_TOOLSETS)
 
 
 @dataclass(frozen=True)

@@ -42,9 +42,9 @@ TOOLSETS = [
 ]
 TOOLSET_POLICIES = {
     "standard": tuple(TOOLSETS),
-    # A genuinely tool-free run still uses the resident Gateway, profile, HOME,
-    # Langfuse hook, and normal session lifecycle. It has no agent tool calls.
-    "response_only": (),
+    # Hermes interprets an empty list as "no native tools, include profile MCPs".
+    # The no_mcp sentinel suppresses those defaults as well as native tools.
+    "response_only": ("no_mcp",),
 }
 PROFILES = {"default", "researcher", "builder", "reviewer"}
 REASONING = {"low", "medium", "high", "xhigh", "extra_high"}

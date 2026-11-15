@@ -637,7 +637,8 @@ def register(ctx: Any) -> None:
     # Hermes' ShellFileOperations applies the host safe-root check before it
     # dispatches a write to the selected terminal environment. Keep the global
     # HERMES_WRITE_SAFE_ROOT unchanged; bypass only that one denial when the
-    # broker confirms this one-shot session and the target is in its workspace.
+    # active environment for this exact session is the broker and the broker
+    # resolves the target inside the run's workspace or scratch directory.
     from agent import file_safety
     from tools import file_operations
 
@@ -654,28 +655,52 @@ def register(ctx: Any) -> None:
                 for root in ("/workspace", "/scratch")
             ):
                 return denial
-            source = session_context.get_session_env("HERMES_SESSION_SOURCE", "")
-            source = getattr(source, "value", source)
             session_id = session_context.get_session_env("HERMES_SESSION_ID", "")
             base_url = os.getenv("KANZO_BROKER_URL", "").strip()
             token = os.getenv("KANZO_BROKER_TOKEN", "")
             if (
-                source != "oneshot"
-                or not isinstance(session_id, str) or not session_id.strip()
+                not isinstance(session_id, str) or not session_id.strip()
                 or len(session_id) > 256
                 or any(ord(char) < 0x20 for char in session_id)
                 or not base_url or not token
             ):
                 return denial
             try:
+                # Match the selected backend to the session, not just the
+                # configured default. This prevents authorizing a host/local
+                # file operation with an unrelated broker session proof.
+                from tools.terminal_tool import _active_environments, _env_lock
+                with _env_lock:
+                    matches = [
+                        env for env in _active_environments.values()
+                        if getattr(env, "_hermes_backend_name", "") == "kanzo_broker"
+                        and getattr(env, "_session_id", "") == session_id
+                    ]
+                if len(matches) != 1:
+                    return denial
+                environment = matches[0]
                 proof = _BrokerClient(
                     base_url, token, request_timeout=3
                 ).post(
                     "/v1/terminal/authorize",
                     {"hermes_session_id": session_id},
                 )
-            except Exception:
+                resolved = environment.execute(
+                    ["/usr/bin/realpath", "-m", "--", normalized],
+                    cwd="/workspace",
+                    timeout=5,
+                )
+            except Exception as exc:
                 # Broker outage or an unbound session retains the host denial.
+                _LOG.warning("file safe-root authorization failed (%s)", type(exc).__name__)
+                return denial
+            resolved_path = resolved.get("output", "").strip()
+            if resolved.get("exit_code") != 0 or "\n" in resolved_path:
+                return denial
+            if not any(
+                resolved_path == root or resolved_path.startswith(root + os.sep)
+                for root in ("/workspace", "/scratch")
+            ):
                 return denial
             if (
                 proof.get("hermes_session_id") == session_id
@@ -685,6 +710,7 @@ def register(ctx: Any) -> None:
                 and proof.get("temp_dir") == "/scratch"
             ):
                 return None
+            _LOG.warning("file safe-root authorization denied (broker session proof mismatch)")
             return denial
 
         _kanzo_write_denial._kanzo_broker_workspace = True  # type: ignore[attr-defined]

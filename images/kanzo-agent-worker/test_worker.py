@@ -124,6 +124,23 @@ read_only: true"""
         worker.ledger.close()
         state_dir.cleanup()
 
+    def test_shutdown_drains_without_claiming_more_tasks(self):
+        state_dir = tempfile.TemporaryDirectory()
+        worker = Worker({
+            "KANZO_ENABLED": "true",
+            "MCPPROXY_KANZO_AGENT_TOKEN": "token",
+            "KANZO_WORKER_STATE_DIR": state_dir.name,
+        })
+        worker._call = lambda *_: self.fail("draining worker must not call Kanzo")
+
+        worker.request_shutdown()
+
+        self.assertTrue(worker.shutdown_requested.is_set())
+        self.assertFalse(worker.process_one())
+        self.assertEqual(worker.wake_queue.get_nowait(), "shutdown")
+        worker.ledger.close()
+        state_dir.cleanup()
+
     def test_worker_leaves_tasks_unclaimed_when_executor_is_restarting(self):
         state_dir = tempfile.TemporaryDirectory()
         worker = Worker({

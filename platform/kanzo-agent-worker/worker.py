@@ -574,6 +574,7 @@ class Worker:
         self.active_change = threading.Event()
         self.active_lock = threading.Lock()
         self.active_run: dict[str, Any] | None = None
+        self.shutdown_requested = threading.Event()
         self.ledger = RunLedger(self.state_dir / "run-ledger.sqlite3")
         self.artifacts = ArtifactStore(self.state_dir / "artifacts")
         self._ledger_reconciled = False
@@ -677,7 +678,10 @@ class Worker:
             def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
                 if self.path in ("/healthz", "/readyz"):
                     age = time.time() - worker.heartbeat_path.stat().st_mtime if worker.heartbeat_path.exists() else 10**9
-                    ok = age < worker.heartbeat_stale_seconds
+                    # A long-running task is active work, not a stale worker.
+                    ok = age < worker.heartbeat_stale_seconds or worker.metrics["active"] > 0
+                    if self.path == "/readyz" and worker.shutdown_requested.is_set():
+                        ok = False
                     self.send_response(200 if ok else 503)
                     self.end_headers()
                     self.wfile.write(b"ok\n" if ok else b"stale\n")
@@ -2038,6 +2042,8 @@ class Worker:
         return pr.stdout.strip()
 
     def process_one(self) -> bool:
+        if self.shutdown_requested.is_set():
+            return False
         with self.active_lock:
             if self.active_run and self.active_run.get("remote_execution_uncertain"):
                 LOG.error(
@@ -2485,12 +2491,12 @@ class Worker:
         except queue.Full:
             pass
         retry_delay = 2
-        while True:
+        while not self.shutdown_requested.is_set():
             self.heartbeat_path.touch()
             try:
                 self.wake_queue.get(timeout=30)
                 found_any = False
-                while self.process_one():
+                while not self.shutdown_requested.is_set() and self.process_one():
                     found_any = True
                 result = "task" if found_any else "idle"
                 retry_delay = 2
@@ -2509,6 +2515,19 @@ class Worker:
             self.heartbeat_path.touch()
             if self.run_once:
                 return 0
+        LOG.info("Worker drained; exiting after active task finished")
+        return 0
+
+    def request_shutdown(self, signum: int | None = None) -> None:
+        """Stop taking work and let the current task finish before exiting."""
+        if self.shutdown_requested.is_set():
+            return
+        LOG.info("Shutdown requested%s; draining active task", f" by signal {signum}" if signum else "")
+        self.shutdown_requested.set()
+        try:
+            self.wake_queue.put_nowait("shutdown")
+        except queue.Full:
+            pass
 
 
 def main() -> int:
@@ -2516,7 +2535,14 @@ def main() -> int:
     if os.environ.get("KANZO_HEALTHCHECK") == "true":
         heartbeat = Path(os.environ.get("HERMES_HOME", "/opt/data")) / "worker-heartbeat"
         return 0 if heartbeat.exists() and time.time() - heartbeat.stat().st_mtime < 900 else 1
-    return Worker().run()
+    worker = Worker()
+
+    def handle_shutdown(signum: int, _frame: Any) -> None:
+        worker.request_shutdown(signum)
+
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_shutdown)
+    return worker.run()
 
 
 if __name__ == "__main__":

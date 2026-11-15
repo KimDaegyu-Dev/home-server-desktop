@@ -158,8 +158,20 @@ class _BrokerClient:
                 if response.status not in (200, 201, 202, 204):
                     raise KanzoBrokerError(f"broker returned HTTP {response.status}")
         except urllib.error.HTTPError as exc:
-            # Do not include response bodies: they may contain secrets or task content.
-            raise KanzoBrokerError(f"broker returned HTTP {exc.code}") from None
+            # Broker errors are fixed machine codes, not task content. Preserve
+            # only a tightly validated code so request-boundary failures can be
+            # diagnosed without exposing response bodies or credentials.
+            error_code = ""
+            try:
+                raw_error = exc.read(4096)
+                error_payload = json.loads(raw_error.decode("utf-8"))
+                candidate = error_payload.get("error") if isinstance(error_payload, dict) else None
+                if isinstance(candidate, str) and re.fullmatch(r"[a-z0-9_]{1,80}", candidate):
+                    error_code = candidate
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                pass
+            suffix = f" ({error_code})" if error_code else ""
+            raise KanzoBrokerError(f"broker returned HTTP {exc.code}{suffix}") from None
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise KanzoBrokerError(f"broker request failed: {type(exc).__name__}") from None
         if not raw:

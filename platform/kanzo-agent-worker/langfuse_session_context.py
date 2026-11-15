@@ -33,7 +33,10 @@ NEW = '''def _env(name: str, default: str = "") -> str:
             if value:
                 return str(value).strip()
         except Exception:
-            pass
+            # A missing session context must not inherit another run's IDs
+            # from the shared Gateway process environment.
+            return default.strip()
+        return default.strip()
     return os.environ.get(name, default).strip()
 '''
 MARKER = "# Kanzo IDs are bound to the active Gateway session"

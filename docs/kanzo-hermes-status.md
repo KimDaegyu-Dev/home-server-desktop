@@ -4,10 +4,11 @@
 
 ## 현재 상태
 
-- 확인 기준: 2026-11-15. Executor/Dispatcher는 K3s 안에서 확인했다. Argo `kanzo-agent-worker` revision `8dccff206e3b9a23ed1aefe6f5c8b5583233055c`가 `Synced / Healthy`이며 Executor 3/3, Dispatcher 2/2 Ready다.
+- 확인 기준: 2026-11-15. Argo `kanzo`와 `kanzo-agent-worker`가 revision `1ec912e1a2a5fe3cd97a0094c01ceba7e23fe74a`에서 `Synced / Healthy`다. Kanzo `0.4.2-agent.3` 1/1, Dispatcher 2/2, Executor 3/3 컨테이너가 Ready다.
 - 이벤트 어댑터는 Kanzo SSE에 연결되고 재연결 직후 worker wake로 상태를 다시 맞춘다. 현재는 자동화 태스크를 추가하지 않았으며, `hermes-harness-lab#29`는 human-action 선행 카드 #31을 기다린다.
 - Langfuse용 세션별 Kanzo task/run ID 전달과 automated profile의 잘못된 `uid:10000` 귀속은 GitOps에 수정·배포했다. live init 로그와 세 프로필 설정은 확인됐지만, 수정 후 실제 실행 trace는 아직 대조하지 않았다.
-- 다음 작업: #29의 human-owned 선행 판단을 보존한 채, 승인된 Todo 실행 한 건에서 Kanzo 상태·run ledger·artifact·Gateway session·Langfuse metadata를 대조한다. 동시에 Kanzo API의 run-keyed claim/CAS 지원을 확인해 claim 후 ledger 기록 사이의 crash gap을 닫고, 이후 재연결/게시 멱등성과 Phase 6 성능·학습 보존을 검증한다.
+- Kanzo run-ID 멱등 claim과 worker의 durable claim intent 복구를 구현·배포했다. live MCPProxy discovery에서 `kanzo:next_task`가 선택적 `run_id` 인자를 노출하는 것을 확인했고, `hermes-harness-lab#29`는 Todo지만 human-owned #31에 대기 중이다. 실행 가능한 Todo가 없어 실제 모델 실행의 crash/restart 복구는 아직 검증하지 않았다.
+- 다음 작업: 사람의 #31 판단 후 #29가 실행 가능해지면 한 번의 run에서 Kanzo 상태·claim ID·run ledger·artifact·Gateway session·Langfuse metadata를 대조한다. 이후 이벤트 중복/재연결, 외부 게시 멱등성, 다중 dispatcher 소유권, Phase 6 성능·학습 보존을 검증한다.
 - V1 롤백 스냅샷: 커밋 `f11abf6` (`origin`에 push 완료). worker 기준 소스: `e59a758` (`feat(kanzo): persist and recover run artifacts`).
 ## 단계별 진행
 
@@ -16,7 +17,7 @@
 | 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 다른 경로는 아직 기존 ReadOnly executor를 쓴다. plugin 복사·활성화 및 memory/reflection의 연속성은 클러스터에서 검증하지 않았다. |
-| 3. durable run ledger와 이벤트 | 일부 구현 | Hermes HOME PVC의 SQLite 장부에 run 상태·설정·소스 SHA·결과와 게시 체크포인트를 기록한다. 재시작 시 미종료 run을 자동 실행하지 않고, 저장 응답과 댓글의 run별 marker를 이용해 누락된 결과 댓글만 복구한 뒤 사람 검토로 보낸다. 이벤트 중복·재연결 구간, 다중 dispatcher lease/CAS, PR 및 다른 외부 게시의 멱등 재개, 실태스크 검증은 남아 있다. 자동 재시도는 추가하지 않는다. |
+| 3. durable run ledger와 이벤트 | claim 복구 구현·배포, 통합 실행 검증 대기 | Kanzo는 `run_id`별 claim 결과를 DB에 원자적으로 보관하고 같은 요청 재호출 시 같은 task를 돌려준다. Worker는 Kanzo 호출 전에 project/filter/run ID intent를 SQLite에 기록하고, 재시작 후 동일 요청을 복구한다. 해석할 수 없는 응답은 intent를 유지하며 비활성 프로젝트의 pending claim은 Kanzo를 호출하지 않는다. 기존 ledger v1→v2 migration과 v1 이전 상태 verifier 호환을 확인했다. 실제 task 실행을 통한 crash-window/재연결 테스트, 다중 dispatcher lease/CAS, PR 등 외부 게시의 멱등 재개는 남아 있다. 자동 재시도는 추가하지 않는다. |
 | 4. 상주 executor와 작업 도구 격리 | 배포 완료, 일부 시나리오 검증 대기 | Executor와 Dispatcher는 별도 Deployment 및 영속 run state를 사용한다. 작업별 sandbox/lease, heartbeat, 취소·불확실성 격리 경로가 배포됐다. 동시성·복구·장기 작업 시나리오 검증은 남았다. |
 | 5. 결과·추적·위임 | 일부 완료 | 성공·실패·취소 결과와 artifact/run ledger가 기록되고, Hermes 단일 추적 경로 및 Kanzo session correlation을 확인했다. 최근 수정의 task/run trace metadata와 최종 상태 대조, delegate 예산 검증은 남았다. |
 | 6. 성능·학습 보존 검증 | 시작 전 | 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
@@ -257,3 +258,11 @@
 - marker 최초 생성은 기존 초기화를 그대로 수행해 `bootstrap-omh` 165초가 걸렸다. 이후 executor Pod를 한 번 재시작해 marker 경로를 실제 검증했다. 세 init 컨테이너가 3초 만에 끝났고 Pod는 생성 `01:53:27Z`부터 Ready `01:53:43Z`까지 16초였다. `/readyz`는 `ready`를 반환했다.
 - 롤아웃 후 Argo `kanzo-agent-worker`는 `Synced/Healthy`, revision `f3350f085fd07abb3aafd282a9fb4f49fdf7bce2`; Executor 3/3, Dispatcher 2/2 Ready다. `bootstrap-omh` 초기화 중 Hermes CLI가 `uv.lock` 동기화 경고를 반복했으나 exit 0으로 완료했고, 빠른 경로에는 그 반복 CLI 호출이 없다. 경고 자체의 정리는 별도 확인이 남았다.
 - 실행 가능한 Todo가 없어 모델 작업은 만들지 않았다. #29는 #31에 대기 중이므로 새 Langfuse trace 검증은 아직 남아 있다.
+
+### 2026-11-15 — run-ID 멱등 claim과 재시작 intent 복구 배포
+
+- Kanzo `next_task`에 선택적 `run_id` 경로를 추가했다. `BEGIN IMMEDIATE` 안에서 Todo 선택·Doing 이동·run ID 기록을 묶고, 재호출은 원래 task만 반환한다. claim 이력은 task 삭제 후에도 남겨 같은 run이 다른 Todo로 바뀌지 않게 했다. GitOps build 스크립트가 기존 카탈로그 폼/SSE 패치와 claim 패치를 적용해 `localhost/home-server/kanzo:0.4.2-agent.3`를 빌드·K3s에 import했다.
+- Worker ledger schema v2에 `claim_intents`를 추가했다. Kanzo 호출 전에 정확한 project/filter/run ID/route metadata를 저장하고, Kanzo 응답 후 intent→run 전환을 한 SQLite 트랜잭션으로 수행한다. 네트워크 오류나 해석 불가 응답에서는 intent를 남겨 같은 run ID로 재개한다. 카탈로그에서 비활성화된 project의 intent는 재활성화될 때까지 Kanzo에 재전송하지 않는다.
+- 상태 이전 Sync hook이 기존 성공 migration의 ledger v1을 현재 버전으로 거부하는 것을 배포 중 발견했다. verifier가 v1과 v2 schema를 검증하도록 고쳐 hook을 성공시켰으며, dispatcher/executor도 새 ConfigMap을 참조한다. Argo `kanzo`와 `kanzo-agent-worker`는 commit `1ec912e`에서 Synced/Healthy다.
+- 검증: Kanzo `cargo fmt --check`, 전체 Rust 테스트 75/75, release 이미지 빌드 및 K3s import, Worker Python 구문 확인, 신규 ledger와 v1→v2 migration smoke, 두 Kustomize 렌더링을 통과했다. 실행 중인 dispatcher에서 MCPProxy를 통해 `kanzo:next_task` signature의 선택적 `run_id` 인자를 확인했다.
+- 실태스크 검증은 미완료다. 현재 `hermes-harness-lab#29`는 Todo이나 human-owned #31을 기다리며, dispatcher 로그도 agent-eligible task가 없다고 확인했다. 사람의 선행 판단 없이 이를 실행시키지 않았다.

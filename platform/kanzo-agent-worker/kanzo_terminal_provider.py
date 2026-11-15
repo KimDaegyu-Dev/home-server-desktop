@@ -701,6 +701,7 @@ def register(ctx: Any) -> None:
                 resolved_path == root or resolved_path.startswith(root + os.sep)
                 for root in ("/workspace", "/scratch")
             ):
+                _LOG.warning("file safe-root authorization denied (resolved target outside sandbox roots)")
                 return denial
             if (
                 proof.get("hermes_session_id") == session_id
@@ -709,6 +710,7 @@ def register(ctx: Any) -> None:
                 and proof.get("workspace") == "/workspace"
                 and proof.get("temp_dir") == "/scratch"
             ):
+                _LOG.info("file safe-root authorization allowed for broker sandbox session")
                 return None
             _LOG.warning("file safe-root authorization denied (broker session proof mismatch)")
             return denial

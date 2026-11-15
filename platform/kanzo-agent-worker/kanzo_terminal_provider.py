@@ -6,7 +6,7 @@ Minimal broker contract (all paths are relative to ``KANZO_BROKER_URL``):
   ``{"hermes_session_id": "..."}`` returns HTTP 200 JSON:
   ``{"hermes_session_id": "...", "task_id": "...", "run_id": "...",
   "lease": "opaque-current-lease", "environment_handle": "opaque-handle",
-  "cwd": "/workspace", "temp_dir": "/tmp"}``.
+  "cwd": "/workspace", "temp_dir": "/scratch"}``.
   A missing, stale, or ambiguous mapping MUST be a non-2xx response. The broker
   binds the returned lease to this exact Hermes session, Kanzo task/run, and
   sandbox; the provider rejects incomplete or mismatched responses.
@@ -53,6 +53,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -204,7 +205,7 @@ class KanzoTerminalEnvironment:
         self._lease = mapping["lease"]
         self._environment_handle = mapping["environment_handle"]
         self.cwd = _clean_absolute_path(mapping.get("cwd", cwd), "cwd")
-        self._temp_dir = _clean_absolute_path(mapping.get("temp_dir", "/tmp"), "temp_dir")
+        self._temp_dir = _clean_absolute_path(mapping.get("temp_dir"), "temp_dir")
         self.timeout = timeout
         self._cleaned = False
         self._closing = False

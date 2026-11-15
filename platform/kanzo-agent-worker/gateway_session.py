@@ -23,6 +23,23 @@ from typing import Any
 HERMES_ROOT = Path("/opt/hermes")
 
 
+def _bind_kanzo_session_env(client_env: dict[str, Any], task_id: str, run_id: str) -> None:
+    """Bind Kanzo attribution to this Gateway session, never the process env."""
+    for secret_name in (
+        "KANZO_BROKER_WORKER_TOKEN",
+        "KANZO_BROKER_TOKEN",
+        "KANZO_BROKER_LEASE_KEY",
+    ):
+        client_env.pop(secret_name, None)
+    client_env.update({
+        "KANZO_AUTOMATED_RUN": "1",
+        "KANZO_TASK_ID": task_id,
+        "KANZO_RUN_ID": run_id,
+        "HERMES_KANBAN_TASK": task_id,
+        "HERMES_KANBAN_RUN_ID": run_id,
+    })
+
+
 def _prepare_imports() -> None:
     root = str(HERMES_ROOT)
     if root not in sys.path:
@@ -85,19 +102,7 @@ async def _create_session(
         client_env = policy.get("client_env")
         if not isinstance(client_env, dict):
             raise RuntimeError("gateway_session_client_env_unsupported")
-        for secret_name in (
-            "KANZO_BROKER_WORKER_TOKEN",
-            "KANZO_BROKER_TOKEN",
-            "KANZO_BROKER_LEASE_KEY",
-        ):
-            client_env.pop(secret_name, None)
-        client_env.update({
-            "KANZO_AUTOMATED_RUN": "1",
-            "KANZO_TASK_ID": task_id,
-            "KANZO_RUN_ID": run_id,
-            "HERMES_KANBAN_TASK": task_id,
-            "HERMES_KANBAN_RUN_ID": run_id,
-        })
+        _bind_kanzo_session_env(client_env, task_id, run_id)
         unsupported = sorted(set(policy) - set(parameters))
         if unsupported:
             raise RuntimeError("gateway_session_policy_unsupported:" + ",".join(unsupported))

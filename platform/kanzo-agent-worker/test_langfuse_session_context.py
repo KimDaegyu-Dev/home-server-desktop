@@ -82,6 +82,18 @@ class LangfuseSessionContextTests(unittest.TestCase):
             self.assertEqual(env_helper("HERMES_KANBAN_RUN_ID"), "")
             self.assertEqual(env_helper("LANGFUSE_HOST", "https://langfuse.invalid"), "https://langfuse.invalid")
 
+    def test_unavailable_session_context_does_not_fall_back_to_process_environment(self) -> None:
+        env_helper = load_patched_env_helper()
+        with patch.dict(
+            sys.modules,
+            {"gateway": None, "gateway.session_context": None},
+        ), patch.dict(
+            os.environ,
+            {"HERMES_KANBAN_TASK": "stale-task", "HERMES_KANBAN_RUN_ID": "stale-run"},
+        ):
+            self.assertEqual(env_helper("HERMES_KANBAN_TASK"), "")
+            self.assertEqual(env_helper("HERMES_KANBAN_RUN_ID"), "")
+
 
 if __name__ == "__main__":
     unittest.main()

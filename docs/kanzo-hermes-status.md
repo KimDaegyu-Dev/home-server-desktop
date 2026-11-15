@@ -301,3 +301,11 @@
 - worker 단위 테스트 13개 통과, Python 문법 검사, Kustomize 렌더링, `git diff --check` 통과. Argo `kanzo-agent-worker`는 revision `6ee59540626009acc8c2f06e0f2d5eb95d603c7e`에서 Synced/Healthy이며 Dispatcher 2/2 컨테이너와 Executor 3/3 컨테이너가 Ready다.
 - live ConfigMap에서 drain 코드와 1800초 grace를 확인했다. 같은 롤아웃에서 Executor가 준비되기 전 readiness gate가 Kanzo claim을 건너뛰는 로그도 확인했다.
 - 활성 Kanzo run이 없어 SIGTERM 중 장시간 실행의 실시간 종료 대기는 재현하지 않았다. #31은 기존 두 run이 review 상태이며 최신 ledger에도 active run이 없다. 사용자가 재개하기 전까지 #31을 변경하거나 재실행하지 않는다.
+
+### 2026-11-15 — #31 재실행 결과와 acceptance 불일치
+
+- 사용자가 #31을 Todo로 되돌린 뒤 run `14f312e37d65`가 claim됐다. Ledger 이력은 `claimed → preparing → running → finalizing → waiting`; Gateway researcher session `local-1e2b93ae62fa8029351aa1ccd26e0f70b56783cd7d2dad3d8ee3492ec02f873f`는 최종 assistant 응답까지 도달했다. 138초 terminal probe는 exit 0이었다. Pod 재시작 없이 약 7분간 실행됐다.
+- Langfuse Observations API v2에서 같은 session ID의 trace `2cc7f2fdc6a67cf28481b1b706a3f455`를 확인했다: Hermes turn 1, generation 14, tool 24, 총 observation 39. 따라서 Langfuse 추적도 이 실행에 대해 연결된다.
+- 워커의 최종 outcome은 `review`이며 run ledger는 `waiting`이다. researcher 세션에는 Kubernetes 접근이 없어 작업이 배포 여부를 확인하지 못했다고 판단하고 human-action #33/#34를 만들었다. #31은 현재 `todo (waits on #33, #34)`, #29는 `todo (waits on #31)`, #32는 backlog 제안이다.
+- Codex가 별도로 실제 클러스터를 읽어 #33 핵심 조건을 검증했다: Argo revision `69ee20d142db54996d1123663cde61c6a579079f`, live worker ConfigMap `kanzo-agent-worker-code-67th8f5m6b`, Dispatcher의 `/opt/kanzo-agent/worker.py`에 `_heartbeat_sandbox` 정의와 호출이 존재한다. Hermes `gateway_state.json.code_sha=3b421578...`는 Hermes 바이너리의 SHA이며 GitOps revision `711a1fe`와 비교하는 #31/#34 조건은 서로 다른 artifact identity를 혼동한다.
+- 따라서 워커 실행/heartbeat 생존은 검증됐지만 #31 업무는 자동 완료되지 않았다. 사람 게이트 #33/#34를 확인하고 stale acceptance를 수정/완료해야 #31과 선행 작업 #29가 진행 가능하다. 이 실행에서는 새 중복 분석이나 소스 변경을 하지 않았다.

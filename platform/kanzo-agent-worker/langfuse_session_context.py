@@ -3,9 +3,10 @@
 
 The Langfuse plugin normally reads HERMES_KANBAN_* from the process environment.
 That is shared by every session in the Gateway, so it cannot safely identify
-concurrent Kanzo runs. Resolve the existing per-session KANZO_* values from the
-Gateway ContextVar instead. This is deliberately an exact, guarded patch: if an
-upstream plugin changes the expected helper, fail bootstrap rather than silently
+concurrent Kanzo runs. Resolve the KANZO_* values from the bound session client
+environment instead. The Gateway allowlist is configured so these non-secret
+IDs are session-scoped. Patches are guarded:
+if upstream changes the expected helpers, fail bootstrap rather than silently
 losing run attribution.
 """
 
@@ -16,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path("/opt/data/home")
 PROFILES = ("default", "researcher", "builder", "reviewer")
+KANZO_CLIENT_ENV = ("KANZO_TASK_ID", "KANZO_RUN_ID")
 OLD = '''def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 '''
@@ -26,13 +28,14 @@ NEW = '''def _env(name: str, default: str = "") -> str:
                     "HERMES_KANBAN_RUN_ID": "KANZO_RUN_ID"}.get(name)
     if session_name:
         try:
-            from gateway.session_context import get_session_env
-            value = get_session_env(session_name, "") or get_session_env(name, "")
+            from agent.session_client_env import bound_client_env
+            session_env = bound_client_env()
+            if not isinstance(session_env, dict):
+                return default.strip()
+            value = session_env.get(session_name) or session_env.get(name)
             if value:
                 return str(value).strip()
         except Exception:
-            # A missing session context must not inherit another run's IDs
-            # from the shared Gateway process environment.
             return default.strip()
         return default.strip()
     return os.environ.get(name, default).strip()
@@ -52,6 +55,22 @@ PREVIOUS = '''def _env(name: str, default: str = "") -> str:
             pass
     return os.environ.get(name, default).strip()
 '''
+
+def ensure_kanzo_client_env(config: dict) -> tuple[dict, bool]:
+    """Allow only the two non-secret run identifiers in this session's client env."""
+    updated = dict(config)
+    terminal = updated.setdefault("terminal", {})
+    if not isinstance(terminal, dict):
+        raise SystemExit("invalid Hermes terminal settings; refusing to set Kanzo client env")
+    current = terminal.get("client_env_passthrough", [])
+    if current is None:
+        current = []
+    if not isinstance(current, list) or any(not isinstance(name, str) for name in current):
+        raise SystemExit("invalid terminal.client_env_passthrough; refusing to overwrite it")
+    names = list(dict.fromkeys([*current, *KANZO_CLIENT_ENV]))
+    changed = names != current
+    terminal["client_env_passthrough"] = names
+    return updated, changed
 def patch_plugin_text(text: str) -> tuple[str, bool]:
     """Apply or upgrade the guarded per-session ID lookup in one plugin file."""
     if text.count(NEW) == 1:
@@ -80,13 +99,15 @@ def main() -> None:
         if changed:
             source.write_text(updated, encoding="utf-8")
             patched.append(profile)
+        config_path = ROOT / "config.yaml" if profile == "default" else ROOT / "profiles" / profile / "config.yaml"
+        config = yaml.load(config_path.read_text(encoding="utf-8")) or {}
+        config, client_env_changed = ensure_kanzo_client_env(config)
         if profile != "default":
-            config_path = ROOT / "profiles" / profile / "config.yaml"
-            config = yaml.load(config_path.read_text(encoding="utf-8")) or {}
             settings = config.setdefault("plugins", {}).setdefault("entries", {}).setdefault("langfuse", {}).setdefault("settings", {})
             if not isinstance(settings, dict):
                 raise SystemExit(f"invalid Langfuse settings in {config_path}")
             settings["end_user_attribution"] = False
+        if changed or client_env_changed or profile != "default":
             with config_path.open("w", encoding="utf-8") as stream:
                 yaml.dump(config, stream)
     print("Langfuse per-session Kanzo metadata ready" + (f": {', '.join(patched)}" if patched else " (already current)"))

@@ -38,10 +38,11 @@ class LangfuseSessionContextTests(unittest.TestCase):
     def test_concurrent_sessions_keep_their_own_kanzo_ids(self) -> None:
         env_helper = load_patched_env_helper()
         session_values = contextvars.ContextVar("session_values", default={})
-        gateway = types.ModuleType("gateway")
-        session_context = types.ModuleType("gateway.session_context")
-        session_context.get_session_env = lambda name, default="": session_values.get().get(name, default)
-        gateway.session_context = session_context
+        session_env = types.ModuleType("agent.session_client_env")
+        session_env.bound_client_env = session_values.get
+        agent = types.ModuleType("agent")
+        agent.__path__ = []
+        agent.session_client_env = session_env
 
         context_a = contextvars.copy_context()
         context_a.run(session_values.set, {"KANZO_TASK_ID": "project#11", "KANZO_RUN_ID": "run-a"})
@@ -54,7 +55,7 @@ class LangfuseSessionContextTests(unittest.TestCase):
                 env_helper("HERMES_KANBAN_RUN_ID"),
             )
 
-        with patch.dict(sys.modules, {"gateway": gateway, "gateway.session_context": session_context}):
+        with patch.dict(sys.modules, {"agent": agent, "agent.session_client_env": session_env}):
             with ThreadPoolExecutor(max_workers=2) as pool:
                 future_a = pool.submit(context_a.run, values)
                 future_b = pool.submit(context_b.run, values)
@@ -66,14 +67,16 @@ class LangfuseSessionContextTests(unittest.TestCase):
 
     def test_missing_session_ids_never_fall_back_to_process_environment(self) -> None:
         env_helper = load_patched_env_helper()
-        gateway = types.ModuleType("gateway")
-        session_context = types.ModuleType("gateway.session_context")
-        session_context.get_session_env = lambda _name, default="": default
-        gateway.session_context = session_context
+        session_values = contextvars.ContextVar("session_values_missing", default=None)
+        session_env = types.ModuleType("agent.session_client_env")
+        session_env.bound_client_env = session_values.get
+        agent = types.ModuleType("agent")
+        agent.__path__ = []
+        agent.session_client_env = session_env
 
         with patch.dict(
             sys.modules,
-            {"gateway": gateway, "gateway.session_context": session_context},
+            {"agent": agent, "agent.session_client_env": session_env},
         ), patch.dict(
             os.environ,
             {"HERMES_KANBAN_TASK": "stale-task", "HERMES_KANBAN_RUN_ID": "stale-run"},
@@ -86,13 +89,30 @@ class LangfuseSessionContextTests(unittest.TestCase):
         env_helper = load_patched_env_helper()
         with patch.dict(
             sys.modules,
-            {"gateway": None, "gateway.session_context": None},
+            {"agent": None, "agent.session_client_env": None},
         ), patch.dict(
             os.environ,
             {"HERMES_KANBAN_TASK": "stale-task", "HERMES_KANBAN_RUN_ID": "stale-run"},
         ):
             self.assertEqual(env_helper("HERMES_KANBAN_TASK"), "")
             self.assertEqual(env_helper("HERMES_KANBAN_RUN_ID"), "")
+
+    def test_profile_allowlist_contains_only_non_secret_kanzo_identifiers(self) -> None:
+        config, changed = langfuse_session_context.ensure_kanzo_client_env(
+            {"terminal": {"client_env_passthrough": ["CUSTOM_TOOL_PATH", "KANZO_TASK_ID"]}}
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            config["terminal"]["client_env_passthrough"],
+            ["CUSTOM_TOOL_PATH", "KANZO_TASK_ID", "KANZO_RUN_ID"],
+        )
+
+    def test_malformed_profile_allowlist_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            langfuse_session_context.ensure_kanzo_client_env(
+                {"terminal": {"client_env_passthrough": "KANZO_TASK_ID"}}
+            )
 
 
 if __name__ == "__main__":

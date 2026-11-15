@@ -18,6 +18,7 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,8 @@ from run_ledger import RunLedger
 
 
 LOG = logging.getLogger("kanzo-agent-worker")
+TASK_DURATION_BUCKETS = (30, 60, 120, 300, 600, 1800, 3600)
+RUN_PHASES = {"claimed", "preparing", "running", "finalizing"}
 TASK_ID_RE = re.compile(r"\b([a-zA-Z0-9._-]+#\d+)\b")
 TASK_LINE_RE = re.compile(r"^\s*([^\s]+#\d+)\s+\[([^]]+)\]\s+(.*)$", re.MULTILINE)
 TASK_HEADER_RE = re.compile(r"^\s*([a-zA-Z0-9._-]+#\d+)\s+(.+)$", re.MULTILINE)
@@ -568,6 +571,7 @@ class Worker:
         self.metrics = {
             "cycles": {}, "tasks": {}, "active": 0, "last_success": 0,
             "task_duration": {"count": {}, "sum": {}, "buckets": {}},
+            "phase_duration": {"count": {}, "sum": {}, "buckets": {}},
         }
         self.heartbeat_path = self.state_dir / "worker-heartbeat"
         self.wake_queue: queue.Queue[str] = queue.Queue(maxsize=1)
@@ -707,7 +711,6 @@ class Worker:
                     kind, result = key.split("|", 1)
                     lines.append(f'kanzo_worker_tasks_total{{kind="{kind}",result="{result}"}} {count}')
                 duration = worker.metrics["task_duration"]
-                duration_bounds = (30, 60, 120, 300, 600, 1800, 3600)
                 lines += [
                     "# HELP kanzo_worker_task_duration_seconds Time from task preparation start through worker finalization.",
                     "# TYPE kanzo_worker_task_duration_seconds histogram",
@@ -715,7 +718,7 @@ class Worker:
                 for key, count in duration["count"].items():
                     kind, outcome = key.split("|", 1)
                     observed = duration["buckets"].get(key, {})
-                    for bound in duration_bounds:
+                    for bound in TASK_DURATION_BUCKETS:
                         lines.append(
                             f'kanzo_worker_task_duration_seconds_bucket{{kind="{kind}",outcome="{outcome}",le="{bound}"}} {observed.get(bound, 0)}'
                         )
@@ -728,6 +731,23 @@ class Worker:
                     lines.append(
                         f'kanzo_worker_task_duration_seconds_count{{kind="{kind}",outcome="{outcome}"}} {count}'
                     )
+                phase_duration = worker.metrics["phase_duration"]
+                lines += [
+                    "# HELP kanzo_worker_phase_duration_seconds Duration of each completed worker lifecycle phase.",
+                    "# TYPE kanzo_worker_phase_duration_seconds histogram",
+                ]
+                for key, count in phase_duration["count"].items():
+                    phase, outcome = key.split("|", 1)
+                    observed = phase_duration["buckets"].get(key, {})
+                    for bound in TASK_DURATION_BUCKETS:
+                        lines.append(
+                            f'kanzo_worker_phase_duration_seconds_bucket{{phase="{phase}",outcome="{outcome}",le="{bound}"}} {observed.get(bound, 0)}'
+                        )
+                    lines += [
+                        f'kanzo_worker_phase_duration_seconds_bucket{{phase="{phase}",outcome="{outcome}",le="+Inf"}} {count}',
+                        f'kanzo_worker_phase_duration_seconds_sum{{phase="{phase}",outcome="{outcome}"}} {phase_duration["sum"].get(key, 0.0):.6f}',
+                        f'kanzo_worker_phase_duration_seconds_count{{phase="{phase}",outcome="{outcome}"}} {count}',
+                    ]
                 lines += [
                     "# HELP kanzo_worker_task_active Whether a task is currently being processed.",
                     "# TYPE kanzo_worker_task_active gauge",
@@ -2513,6 +2533,8 @@ class Worker:
                 "cancelled": "cancelled", "orphaned": "failed",
             }.get(final_state, "unknown")
             self._record_task_duration(kind, outcome, elapsed)
+            if final_run:
+                self._record_phase_durations(final_run.get("fields", {}).get("state_history"), outcome)
         return True
 
     def _record_task_duration(self, kind: str, outcome: str, elapsed: float) -> None:
@@ -2522,9 +2544,34 @@ class Worker:
         metric["count"][key] = metric["count"].get(key, 0) + 1
         metric["sum"][key] = metric["sum"].get(key, 0.0) + elapsed
         buckets = metric["buckets"].setdefault(key, {})
-        for bound in (30, 60, 120, 300, 600, 1800, 3600):
+        for bound in TASK_DURATION_BUCKETS:
             if elapsed <= bound:
                 buckets[bound] = buckets.get(bound, 0) + 1
+
+    def _record_phase_durations(self, history: Any, outcome: str) -> None:
+        """Record completed phase intervals from the durable state transition history."""
+        if not isinstance(history, list):
+            return
+        for previous, current in zip(history, history[1:]):
+            phase = previous.get("state") if isinstance(previous, dict) else None
+            if phase not in RUN_PHASES or not isinstance(current, dict):
+                continue
+            try:
+                start = datetime.fromisoformat(str(previous["at"]).replace("Z", "+00:00"))
+                end = datetime.fromisoformat(str(current["at"]).replace("Z", "+00:00"))
+                elapsed = (end - start).total_seconds()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if elapsed < 0:
+                continue
+            key = f"{phase}|{outcome}"
+            metric = self.metrics["phase_duration"]
+            metric["count"][key] = metric["count"].get(key, 0) + 1
+            metric["sum"][key] = metric["sum"].get(key, 0.0) + elapsed
+            buckets = metric["buckets"].setdefault(key, {})
+            for bound in TASK_DURATION_BUCKETS:
+                if elapsed <= bound:
+                    buckets[bound] = buckets.get(bound, 0) + 1
 
     def run(self) -> int:
         if not self.env.get("KANZO_EXECUTOR_API_URL", "").strip():

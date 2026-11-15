@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import time
 import urllib.error
 import urllib.request
@@ -49,8 +50,20 @@ def listen_once() -> None:
                 event_name = ""
 
 
+def _handle_shutdown(signum: int, _frame: object) -> None:
+    LOG.info("Shutdown requested by signal %s; closing Kanzo event stream", signum)
+    raise SystemExit(0)
+
+
+def install_signal_handlers() -> None:
+    # As PID 1 in its container, Python must explicitly handle SIGTERM.
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
+
+
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
+    install_signal_handlers()
     delay = 1
     while True:
         try:

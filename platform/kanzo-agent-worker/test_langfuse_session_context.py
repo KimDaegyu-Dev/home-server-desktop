@@ -35,6 +35,20 @@ class LangfuseSessionContextTests(unittest.TestCase):
         self.assertFalse(changed)
         self.assertEqual(updated, langfuse_session_context.NEW)
 
+    def test_upgrades_variant_helper_signature_without_touching_following_code(self) -> None:
+        source = '''def _env(name, default=""):
+    return os.environ.get(name, default).strip()
+
+def _another_helper():
+    return True
+'''
+
+        updated, changed = langfuse_session_context.patch_plugin_text(source)
+
+        self.assertTrue(changed)
+        self.assertIn(langfuse_session_context.NEW, updated)
+        self.assertIn("def _another_helper():", updated)
+
     def test_concurrent_sessions_keep_their_own_kanzo_ids(self) -> None:
         env_helper = load_patched_env_helper()
         session_values = contextvars.ContextVar("session_values", default={})

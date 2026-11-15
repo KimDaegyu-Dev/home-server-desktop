@@ -12,6 +12,7 @@ losing run attribution.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -72,13 +73,19 @@ def ensure_kanzo_client_env(config: dict) -> tuple[dict, bool]:
     terminal["client_env_passthrough"] = names
     return updated, changed
 def patch_plugin_text(text: str) -> tuple[str, bool]:
-    """Apply or upgrade the guarded per-session ID lookup in one plugin file."""
+    """Apply the guarded per-session lookup across known Hermes plugin revisions."""
     if text.count(NEW) == 1:
         return text, False
-    if text.count(PREVIOUS) == 1:
-        return text.replace(PREVIOUS, NEW, 1), True
-    if text.count(OLD) == 1:
-        return text.replace(OLD, NEW, 1), True
+    matcher = re.compile(r'(?ms)^def _env\([^\n]*\n.*?(?=^def |\Z)')
+    matches = list(matcher.finditer(text))
+    if len(matches) == 1:
+        current = matches[0].group(0)
+        if any(marker in current for marker in (
+            "os.environ.get(name, default)",
+            "get_session_env(",
+            "bound_client_env(",
+        )):
+            return text[:matches[0].start()] + NEW + text[matches[0].end():], True
     raise SystemExit("unexpected Langfuse _env helper; refusing an unsafe patch")
 
 

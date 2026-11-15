@@ -76,7 +76,7 @@ spec:
             - /bin/sh
             - -ec
           args:
-            - "export HERMES_HOME=/opt/data/home HOME=/opt/data/home\npython - <<'PY'\nimport json\nimport shutil\nfrom pathlib\
+            - "export HERMES_HOME=/opt/data/home HOME=/opt/data/home\nif [ -f /opt/data/home/.kanzo-bootstrap-version ] && [ \"$(cat /opt/data/home/.kanzo-bootstrap-version)\" = \"1\" ]; then\n  python /opt/kanzo-agent/sync_hermes_env.py\n  exit 0\nfi\npython - <<'PY'\nimport json\nimport shutil\nfrom pathlib\
               \ import Path\n\nimage_store = Path('/opt/hermes/tools')\nhome_store = Path('/opt/data/home/tools')\nimage_facts\
               \ = json.loads((image_store / 'facts.json').read_text(encoding='utf-8'))\npnpm = image_facts.get('packages',\
               \ {}).get('pnpm')\nif not pnpm:\n    raise SystemExit('image is missing the pinned pnpm package metadata')\n\
@@ -128,7 +128,7 @@ spec:
               \ if path.exists() else []\n    kept = [line for line in existing if line.partition('=')[0] not in values]\n\
               \    path.write_text('\\n'.join([*kept, *(f'{key}={value}' for key, value in values.items())]) + '\\n', encoding='utf-8')\n\
               \    path.chmod(0o600)\nPY\nomh setup --no-interactive --json\nmkdir -p /opt/data/home/.omh/routing\ncp /routing/model-chains.json\
-              \ /opt/data/home/.omh/routing/model-chains.json\nomh model-chains show --json\nomh doctor --json\n"
+              \ /opt/data/home/.omh/routing/model-chains.json\nomh model-chains show --json\nomh doctor --json\nprintf 1 > /opt/data/home/.kanzo-bootstrap-version\nchmod 0600 /opt/data/home/.kanzo-bootstrap-version\n"
           env:
             - name: MCPPROXY_URL
               value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
@@ -164,6 +164,10 @@ spec:
             - name: worker-code
               mountPath: /opt/kanzo-agent/kanzo_terminal_provider.py
               subPath: kanzo_terminal_provider.py
+              readOnly: true
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/sync_hermes_env.py
+              subPath: sync_hermes_env.py
               readOnly: true
             - name: omh-routing
               mountPath: /routing

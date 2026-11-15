@@ -38,6 +38,7 @@ configMapGenerator:
       - workspace_transfer.py=workspace_transfer.py
       - kanzo_terminal_provider.py=kanzo_terminal_provider.py
       - langfuse_session_context.py=langfuse_session_context.py
+      - sync_hermes_env.py=sync_hermes_env.py
   - name: kanzo-agent-omh-routing
     namespace: mcp
     options:

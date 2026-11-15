@@ -251,3 +251,9 @@
 - Kanzo 실행이 없는 단일 시점 `kubectl top` 관측: 노드 CPU 546m(1%), 메모리 15,697Mi(48%, allocatable 약 31.3Gi). MCP namespace는 Dispatcher 4m/36Mi, Executor 23m/618Mi, Sandbox Broker 1m/22Mi였다. 이는 반복 측정한 baseline이 아니라 초기 idle 표본이다.
 - Executor Pod는 01:32:52Z 생성, 01:35:53Z Ready였다. `bootstrap-omh`는 165초 실행됐고, 전체 Pod 준비는 약 181초 걸렸다. 현재 반복 Hermes CLI bootstrap은 향후 시작 시간 개선 후보로 남긴다.
 - 동등한 Todo 작업을 실행해 active peak, completion latency, token/turn usage를 함께 재지 않으면 성능 개선을 판정하지 않는다.
+### 2026-11-15 — Executor persistent bootstrap fast path 검증
+
+- `f3350f0`에서 one-time Hermes persistent-home setup marker와 매 기동 자격 증명 `.env` 동기화를 분리했다. marker가 없거나 버전이 다르면 기존 전체 bootstrap을 수행하고 성공 후 marker를 만든다. marker가 일치하면 프로필/OMH setup과 doctor를 반복하지 않는다. Langfuse session adapter와 automated-profile attribution 보정은 별도 init 단계에서 매번 확인한다.
+- marker 최초 생성은 기존 초기화를 그대로 수행해 `bootstrap-omh` 165초가 걸렸다. 이후 executor Pod를 한 번 재시작해 marker 경로를 실제 검증했다. 세 init 컨테이너가 3초 만에 끝났고 Pod는 생성 `01:53:27Z`부터 Ready `01:53:43Z`까지 16초였다. `/readyz`는 `ready`를 반환했다.
+- 롤아웃 후 Argo `kanzo-agent-worker`는 `Synced/Healthy`, revision `f3350f085fd07abb3aafd282a9fb4f49fdf7bce2`; Executor 3/3, Dispatcher 2/2 Ready다. `bootstrap-omh` 초기화 중 Hermes CLI가 `uv.lock` 동기화 경고를 반복했으나 exit 0으로 완료했고, 빠른 경로에는 그 반복 CLI 호출이 없다. 경고 자체의 정리는 별도 확인이 남았다.
+- 실행 가능한 Todo가 없어 모델 작업은 만들지 않았다. #29는 #31에 대기 중이므로 새 Langfuse trace 검증은 아직 남아 있다.

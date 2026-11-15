@@ -309,3 +309,10 @@
 - 워커의 최종 outcome은 `review`이며 run ledger는 `waiting`이다. researcher 세션에는 Kubernetes 접근이 없어 작업이 배포 여부를 확인하지 못했다고 판단하고 human-action #33/#34를 만들었다. #31은 현재 `todo (waits on #33, #34)`, #29는 `todo (waits on #31)`, #32는 backlog 제안이다.
 - Codex가 별도로 실제 클러스터를 읽어 #33 핵심 조건을 검증했다: Argo revision `69ee20d142db54996d1123663cde61c6a579079f`, live worker ConfigMap `kanzo-agent-worker-code-67th8f5m6b`, Dispatcher의 `/opt/kanzo-agent/worker.py`에 `_heartbeat_sandbox` 정의와 호출이 존재한다. Hermes `gateway_state.json.code_sha=3b421578...`는 Hermes 바이너리의 SHA이며 GitOps revision `711a1fe`와 비교하는 #31/#34 조건은 서로 다른 artifact identity를 혼동한다.
 - 따라서 워커 실행/heartbeat 생존은 검증됐지만 #31 업무는 자동 완료되지 않았다. 사람 게이트 #33/#34를 확인하고 stale acceptance를 수정/완료해야 #31과 선행 작업 #29가 진행 가능하다. 이 실행에서는 새 중복 분석이나 소스 변경을 하지 않았다.
+
+### 2026-11-15 — #31 gates resolved and #29 canary accepted
+
+- With user authorization, Codex updated #31 to distinguish the GitOps Worker ConfigMap from Hermes binary code_sha, recorded live deployment evidence, completed #33 and #34, and marked #31 done. The Dispatcher ConfigMap and heartbeat method/call sites were verified directly in the cluster.
+- Dependency release automatically started #29 as run `aa7d46eea6c0`. It used researcher / iq_3s via openai-api, completed a read-only turn, passed a 45-second in-run wait without interruption, and published its result comment. Langfuse trace `9f7bf9ddae7f66a82b28b7b1a6dae622` has 17 observations: 7 generations, 9 tools, and 1 Hermes turn. The worker routes read-only runs to review/human=true; Codex reviewed the evidence and marked #29 done.
+- The resulting backlog proposal #35 was declined and archived as done with the `declined` tag: default and researcher Hermes configs already specify model.context_length=65536, so repeating that setting would not fix the metadata autodetection warning. #32 remains in backlog for later review because ambiguous submissions still merit investigation.
+- Current Kanzo states: #29, #31, #33, #34 done; #35 declined/done; #32 backlog. No active run remains for these tasks.

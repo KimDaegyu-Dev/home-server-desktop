@@ -270,6 +270,139 @@ async def _interrupt_via_gateway(
     return _outcome(accepted, action, reason, generation, detached, verified_session_id)
 
 
+async def _reconcile_via_gateway(
+    profile_home: Path,
+    session_id: str,
+    admission_id: str,
+    execution_generation: int | None,
+) -> dict[str, Any]:
+    """Cancel one exact queued/running admission and prove its terminal receipt."""
+    from hermes_cli.gateway_runtime import discover_gateway_endpoint
+    from hermes_cli.gateway_client import connect_gateway
+
+    discovery = await asyncio.to_thread(discover_gateway_endpoint, profile_home, timeout=2.0)
+    endpoint = getattr(discovery, "endpoint", None)
+    if endpoint is None or getattr(discovery, "state", None) != "ready":
+        return _outcome(False, "none", "gateway_unavailable")
+    try:
+        if os.path.normcase(str(profile_home.resolve(strict=True))) != os.path.normcase(
+            str(Path(endpoint.profile_id).resolve(strict=True))
+        ):
+            return _outcome(False, "none", "profile_mismatch")
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return _outcome(False, "none", "profile_unverified")
+
+    try:
+        async with connect_gateway(endpoint=endpoint) as client:
+            try:
+                snapshot = await client.rpc("session.resume", session_id=session_id, omit_messages=True)
+            except Exception:
+                return _outcome(False, "none", "session_resume_failed")
+            if (not isinstance(snapshot, dict)
+                    or snapshot.get("stored_session_id") != session_id
+                    or snapshot.get("session_id") != session_id):
+                return _outcome(False, "none", "session_unverified")
+            subscription = snapshot.get("subscription_id")
+            if not isinstance(subscription, str) or not subscription:
+                return _outcome(False, "none", "subscription_unverified")
+            try:
+                pending = snapshot.get("pending")
+                if not isinstance(pending, list):
+                    return _outcome(False, "none", "pending_state_unverified")
+                matches = [item for item in pending if isinstance(item, dict)
+                           and item.get("admission_id") == admission_id]
+                if len(matches) != 1:
+                    return _outcome(False, "none", "admission_not_found_or_ambiguous")
+                item = matches[0]
+                status = item.get("status")
+                action = "already_terminal"
+                if status == "queued":
+                    action = "prompt.cancel"
+                    try:
+                        receipt = await client.rpc("prompt.cancel", session_id=session_id,
+                                                   admission_id=admission_id)
+                    except Exception:
+                        return _outcome(False, action, "prompt_cancel_failed", execution_generation, session_id=session_id)
+                    if (not isinstance(receipt, dict) or receipt.get("admission_id") != admission_id
+                            or receipt.get("status") != "terminal" or receipt.get("outcome") != "cancelled"):
+                        return _outcome(False, action, "prompt_cancel_unconfirmed", execution_generation, session_id=session_id)
+                    return {"accepted": True, "action": action, "terminal": True,
+                            "outcome": "cancelled", "execution_generation": execution_generation,
+                            "session_id": session_id}
+                elif status == "started":
+                    if (execution_generation is None or item.get("execution_generation") != execution_generation
+                            or snapshot.get("running") is not True):
+                        return _outcome(False, "none", "generation_or_running_state_mismatch", execution_generation, session_id=session_id)
+                    action = "session.interrupt"
+                    try:
+                        handle = await client.rpc("session.interrupt", session_id=session_id,
+                                                  execution_generation=execution_generation)
+                    except Exception:
+                        return _outcome(False, action, "session_interrupt_failed", execution_generation, session_id=session_id)
+                    if not isinstance(handle, dict) or handle.get("execution_generation") != execution_generation:
+                        return _outcome(False, action, "session_interrupt_unconfirmed", execution_generation, session_id=session_id)
+                elif status == "terminal":
+                    item_generation = item.get("execution_generation")
+                    if (execution_generation is None or item_generation != execution_generation):
+                        return _outcome(False, "none", "generation_mismatch", execution_generation, session_id=session_id)
+                else:
+                    return _outcome(False, "none", "admission_state_unverified", execution_generation, session_id=session_id)
+
+                deadline = asyncio.get_running_loop().time() + (0 if status == "queued" else 12)
+                while True:
+                    try:
+                        receipt = await client.rpc("prompt.receipt", session_id=session_id,
+                                                   admission_id=admission_id, include_result=False)
+                    except Exception:
+                        receipt = None
+                    if (isinstance(receipt, dict) and receipt.get("admission_id", admission_id) == admission_id
+                            and receipt.get("status") == "terminal"):
+                        return {"accepted": True, "action": action, "terminal": True,
+                                "outcome": receipt.get("outcome", "unknown"),
+                                "execution_generation": execution_generation, "session_id": session_id}
+                    if asyncio.get_running_loop().time() >= deadline:
+                        return _outcome(False, action, "terminal_state_unproven", execution_generation, session_id=session_id)
+                    await asyncio.sleep(0.5)
+            finally:
+                try:
+                    await client.rpc("session.detach", session_id=session_id, subscription_id=subscription)
+                except Exception:
+                    pass
+    except Exception:
+        return _outcome(False, "none", "gateway_unavailable", execution_generation, session_id=session_id)
+
+
+def reconcile_session(
+    profile_home: str | os.PathLike[str], session_id: str, admission_id: str,
+    execution_generation: int | None,
+) -> dict[str, Any]:
+    """Fail-closed startup recovery for one durably identified submit."""
+    for value, maximum in ((session_id, 256), (admission_id, 256)):
+        if not isinstance(value, str) or not value or len(value) > maximum or any(ord(c) < 32 for c in value):
+            return _outcome(False, "none", "identity_invalid")
+    if execution_generation is not None and (type(execution_generation) is not int or execution_generation < 0):
+        return _outcome(False, "none", "generation_invalid")
+    try:
+        home = Path(profile_home).expanduser().resolve(strict=True)
+        if not home.is_dir():
+            return _outcome(False, "none", "profile_invalid")
+        _prepare_hermes()
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            return _outcome(False, "none", "event_loop_active")
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        token = set_hermes_home_override(home)
+        try:
+            return asyncio.run(_reconcile_via_gateway(home, session_id, admission_id, execution_generation))
+        finally:
+            reset_hermes_home_override(token)
+    except Exception:
+        return _outcome(False, "none", "gateway_unavailable")
+
+
 def interrupt_session(
     profile_home: str | os.PathLike[str],
     session_id: str,
@@ -338,14 +471,17 @@ def main(argv: list[str] | None = None) -> int:
     interrupt_parser.add_argument("--session-id", required=True)
     interrupt_parser.add_argument("--generation", type=int)
     interrupt_parser.add_argument("--admission-id")
+    reconcile_parser = subparsers.add_parser("reconcile")
+    reconcile_parser.add_argument("--profile-home", required=True)
+    reconcile_parser.add_argument("--session-id", required=True)
+    reconcile_parser.add_argument("--admission-id", required=True)
+    reconcile_parser.add_argument("--generation", type=int)
     args = parser.parse_args(argv)
 
-    result = interrupt_session(
-        args.profile_home,
-        args.session_id,
-        args.generation,
-        args.admission_id,
-    )
+    if args.command == "reconcile":
+        result = reconcile_session(args.profile_home, args.session_id, args.admission_id, args.generation)
+    else:
+        result = interrupt_session(args.profile_home, args.session_id, args.generation, args.admission_id)
     sys.stdout.write(json.dumps(result, separators=(",", ":"), ensure_ascii=True) + "\n")
     return 0 if result["accepted"] else 2
 

@@ -98,9 +98,11 @@ class GatewaySessionTests(unittest.TestCase):
                     reasoning="high",
                     toolsets=["terminal"],
                     cwd=cwd,
+                    request_id="request-41",
                 ))
 
         self.assertEqual(result["session_id"], "session-1")
+        self.assertEqual(client.created_with["request_id"], "request-41")
         env = client.created_with["client_env"]
         self.assertEqual(env["KANZO_TASK_ID"], "project#41")
         self.assertEqual(env["KANZO_RUN_ID"], "run-41")

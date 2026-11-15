@@ -664,6 +664,7 @@ def register(ctx: Any) -> None:
                 or any(ord(char) < 0x20 for char in session_id)
                 or not base_url or not token
             ):
+                _LOG.warning("file safe-root authorization denied (session or broker credentials unavailable)")
                 return denial
             try:
                 # Match the selected backend to the session, not just the
@@ -677,6 +678,10 @@ def register(ctx: Any) -> None:
                         and getattr(env, "_session_id", "") == session_id
                     ]
                 if len(matches) != 1:
+                    _LOG.warning(
+                        "file safe-root authorization denied (active broker environment count=%d)",
+                        len(matches),
+                    )
                     return denial
                 environment = matches[0]
                 proof = _BrokerClient(

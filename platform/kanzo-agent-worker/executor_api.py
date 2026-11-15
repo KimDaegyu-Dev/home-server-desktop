@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,7 @@ class Store:
             db.execute("""CREATE TABLE IF NOT EXISTS runs (
                 task_id TEXT NOT NULL, run_id TEXT NOT NULL,
                 profile TEXT NOT NULL, request_hash TEXT NOT NULL,
+                create_request_id TEXT, create_payload TEXT,
                 session_id TEXT, create_generation INTEGER, create_state TEXT NOT NULL,
                 submit_state TEXT NOT NULL DEFAULT 'not_started',
                 admission_id TEXT, execution_generation INTEGER,
@@ -122,6 +124,10 @@ class Store:
             columns = {row[1] for row in db.execute("PRAGMA table_info(runs)")}
             if "create_generation" not in columns:
                 db.execute("ALTER TABLE runs ADD COLUMN create_generation INTEGER")
+            if "create_request_id" not in columns:
+                db.execute("ALTER TABLE runs ADD COLUMN create_request_id TEXT")
+            if "create_payload" not in columns:
+                db.execute("ALTER TABLE runs ADD COLUMN create_payload TEXT")
             # A process restart cannot establish whether an in-flight helper crossed
             # the Gateway boundary. Such operations must never be replayed implicitly.
             db.execute("UPDATE runs SET create_state='ambiguous', updated=? WHERE create_state='creating'", (time.time(),))
@@ -141,18 +147,40 @@ class Store:
         with self.lock, self.connect() as db:
             return db.execute("SELECT * FROM runs WHERE task_id=? AND run_id=?", (task, run)).fetchone()
 
-    def begin_create(self, task: str, run: str, profile: str, digest: str) -> bool:
+    def begin_create(self, task: str, run: str, profile: str, digest: str,
+                     payload: dict[str, str]) -> tuple[bool, str]:
         with self.lock, self.connect() as db:
             row = db.execute("SELECT * FROM runs WHERE task_id=? AND run_id=?", (task, run)).fetchone()
             if row:
                 if row["request_hash"] != digest or row["profile"] != profile:
                     raise ApiError(409, "run_identity_conflict")
                 if row["create_state"] == "created" and row["session_id"]:
-                    return False
+                    return False, row["create_request_id"] or ""
+                if (row["create_state"] == "ambiguous" and row["create_request_id"]
+                        and row["create_payload"] == json.dumps(payload, sort_keys=True, separators=(",", ":"))):
+                    db.execute("UPDATE runs SET create_state='creating',updated=? WHERE task_id=? AND run_id=? AND create_state='ambiguous'",
+                               (time.time(), task, run))
+                    return True, row["create_request_id"]
                 raise ApiError(409, "create_non_retryable")
-            db.execute("INSERT INTO runs(task_id,run_id,profile,request_hash,create_state,updated) VALUES(?,?,?,?,?,?)",
-                       (task, run, profile, digest, "creating", time.time()))
-            return True
+            request_id = uuid.uuid4().hex
+            payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            db.execute("INSERT INTO runs(task_id,run_id,profile,request_hash,create_request_id,create_payload,create_state,updated) VALUES(?,?,?,?,?,?,?,?)",
+                       (task, run, profile, digest, request_id, payload_json, "creating", time.time()))
+            return True, request_id
+
+    def ambiguous_creates(self) -> list[sqlite3.Row]:
+        with self.lock, self.connect() as db:
+            return list(db.execute("SELECT * FROM runs WHERE create_state='ambiguous' AND create_request_id IS NOT NULL AND create_payload IS NOT NULL"))
+
+    def retry_create(self, task: str, run: str) -> bool:
+        with self.lock, self.connect() as db:
+            cur = db.execute("UPDATE runs SET create_state='creating',updated=? WHERE task_id=? AND run_id=? AND create_state='ambiguous' AND create_request_id IS NOT NULL AND create_payload IS NOT NULL",
+                             (time.time(), task, run))
+            return cur.rowcount == 1
+
+    def ambiguous_submits(self) -> list[sqlite3.Row]:
+        with self.lock, self.connect() as db:
+            return list(db.execute("SELECT * FROM runs WHERE submit_state='ambiguous'"))
 
     def finish_create(self, task: str, run: str, session: str, generation: int) -> None:
         with self.lock, self.connect() as db:
@@ -546,7 +574,13 @@ class Handler(BaseHTTPRequestHandler):
         safe_body = {key: body[key] for key in ("task_id", "run_id", "profile", "provider", "model", "reasoning")}
         safe_body["tool_policy"] = tool_policy
         digest = hashlib.sha256(json.dumps(safe_body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        should_create = self.store.begin_create(task, run, profile, digest)
+        create_payload = {
+            "provider": body["provider"], "model": body["model"],
+            "reasoning": body["reasoning"], "tool_policy": tool_policy,
+        }
+        should_create, create_request_id = self.store.begin_create(
+            task, run, profile, digest, create_payload
+        )
         if not should_create:
             row = self.store.get(task, run)
             self._send_json(200, {"session_id": row["session_id"],
@@ -555,7 +589,8 @@ class Handler(BaseHTTPRequestHandler):
         args = [HERMES_PYTHON, str(SESSION_HELPER), "--profile-home", str(home),
                 "--task-id", task, "--run-id", run, "--provider", body["provider"],
                 "--model", body["model"], "--reasoning", body["reasoning"],
-                "--toolsets", ",".join(TOOLSET_POLICIES[tool_policy]), "--cwd", "/workspace"]
+                "--toolsets", ",".join(TOOLSET_POLICIES[tool_policy]), "--cwd", "/workspace",
+                "--request-id", create_request_id]
         try:
             code, out, _ = _run_helper(args, timeout=60, output_limit=64 * 1024)
             result = json.loads(out)
@@ -791,6 +826,70 @@ class Handler(BaseHTTPRequestHandler):
                          "reason": result.get("reason", "cancel_rejected")})
 
 
+def _reconcile_startup(store: Store) -> None:
+    """Recover only by exact Gateway identities; never replay a prompt."""
+    for row in store.ambiguous_creates():
+        task, run = row["task_id"], row["run_id"]
+        try:
+            payload = json.loads(row["create_payload"])
+            if (not isinstance(payload, dict)
+                    or set(payload) != {"provider", "model", "reasoning", "tool_policy"}
+                    or payload.get("tool_policy") not in TOOLSET_POLICIES
+                    or not all(isinstance(payload.get(key), str) and payload[key]
+                               for key in ("provider", "model", "reasoning"))
+                    or not row["create_request_id"]):
+                continue
+            if not store.retry_create(task, run):
+                continue
+            args = [HERMES_PYTHON, str(SESSION_HELPER), "--profile-home", str(_profile_home(row["profile"])),
+                    "--task-id", task, "--run-id", run, "--provider", payload["provider"],
+                    "--model", payload["model"], "--reasoning", payload["reasoning"],
+                    "--toolsets", ",".join(TOOLSET_POLICIES[payload["tool_policy"]]),
+                    "--cwd", "/workspace", "--request-id", row["create_request_id"]]
+            code, output, _ = _run_helper(args, timeout=60, output_limit=64 * 1024)
+            result = json.loads(output)
+            session = result.get("session_id") if isinstance(result, dict) else None
+            generation = result.get("execution_generation") if isinstance(result, dict) else None
+            if (code != 0 or not isinstance(result, dict) or result.get("ok") is not True
+                    or not _valid_identity(session, 256)
+                    or type(generation) is not int or generation < 0):
+                store.fail_create(task, run)
+                continue
+            store.finish_create(task, run, session, generation)
+        except Exception:
+            try:
+                store.fail_create(task, run)
+            except Exception:
+                pass
+
+    for row in store.ambiguous_submits():
+        session = row["session_id"]
+        admission = row["admission_id"]
+        generation = row["execution_generation"]
+        # Missing admission or generation means the Gateway operation cannot be
+        # addressed exactly. Preserve ambiguity for human review.
+        if (not _valid_identity(session, 256) or not _valid_identity(admission, 256)
+                or (generation is not None and (type(generation) is not int or generation < 0))):
+            continue
+        try:
+            args = [HERMES_PYTHON, str(CONTROL_HELPER), "reconcile", "--profile-home",
+                    str(_profile_home(row["profile"])), "--session-id", session,
+                    "--admission-id", admission]
+            if generation is not None:
+                args.extend(["--generation", str(generation)])
+            code, output, _ = _run_helper(args, timeout=30, output_limit=64 * 1024)
+            result = json.loads(output)
+            if (code == 0 and isinstance(result, dict) and result.get("accepted") is True
+                    and result.get("terminal") is True and result.get("session_id") == session
+                    and result.get("execution_generation") == generation):
+                outcome = result.get("outcome")
+                state = "cancelled" if outcome in {"cancelled", "interrupted"} else "reconciled_terminal"
+                store.finish_submit(row["task_id"], row["run_id"], state)
+            # Any uncertain Gateway response intentionally leaves this row ambiguous.
+        except Exception:
+            continue
+
+
 def main() -> int:
     token = os.environ.get("KANZO_EXECUTOR_API_TOKEN", "")
     data_dir_value = os.environ.get("KANZO_EXECUTOR_DATA_DIR", "")
@@ -808,6 +907,7 @@ def main() -> int:
         if not 1 <= port <= 65535 or not 1 <= max_threads <= 64:
             raise ValueError("configuration")
         server = BoundedServer((host, port), Handler, max_threads=max_threads)
+        _reconcile_startup(store)
     except Exception:
         print("executor_configuration_invalid", file=sys.stderr)
         return 2

@@ -14,7 +14,6 @@ import asyncio
 import json
 import os
 import sys
-import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -56,6 +55,7 @@ async def _create_session(
     reasoning: str,
     toolsets: list[str],
     cwd: Path,
+    request_id: str,
 ) -> dict[str, Any]:
     _prepare_imports()
     from agent.session_source import create_surface
@@ -109,7 +109,7 @@ async def _create_session(
 
         snapshot = await client.rpc(
             "session.create",
-            request_id=uuid.uuid4().hex,
+            request_id=request_id,
             **policy,
         )
 
@@ -144,6 +144,7 @@ def create_session(
     reasoning: str,
     toolsets: list[str],
     cwd: str | os.PathLike[str],
+    request_id: str,
 ) -> dict[str, Any]:
     """Create a new canonical Gateway session without submitting a prompt."""
     try:
@@ -158,6 +159,10 @@ def create_session(
         raise RuntimeError("gateway_session_path_invalid")
     if not model.strip() or not provider.strip() or not reasoning.strip():
         raise RuntimeError("gateway_session_route_invalid")
+    if not isinstance(request_id, str) or not request_id or len(request_id) > 128 or any(
+        ord(char) < 0x20 for char in request_id
+    ):
+        raise RuntimeError("gateway_session_request_id_invalid")
     if (
         not task_id.strip() or len(task_id) > 256
         or not run_id.strip() or len(run_id) > 128
@@ -181,6 +186,7 @@ def create_session(
                 reasoning=reasoning.strip(),
                 toolsets=[item.strip() for item in toolsets],
                 cwd=working_dir,
+                request_id=request_id,
             )
         )
     finally:
@@ -197,6 +203,7 @@ def main() -> int:
     parser.add_argument("--reasoning", required=True)
     parser.add_argument("--toolsets", required=True)
     parser.add_argument("--cwd", required=True)
+    parser.add_argument("--request-id", required=True)
     args = parser.parse_args()
     try:
         result = create_session(
@@ -208,6 +215,7 @@ def main() -> int:
             reasoning=args.reasoning,
             toolsets=[part.strip() for part in args.toolsets.split(",") if part.strip()],
             cwd=args.cwd,
+            request_id=args.request_id,
         )
     except Exception as exc:
         # Gateway exceptions can include server response details. Emit only

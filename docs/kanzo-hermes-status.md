@@ -4,12 +4,13 @@
 
 ## 현재 상태
 
-- 확인 기준: 2026-11-15. Argo CD의 `kanzo-agent-worker`는 `fe2aa664ad876c0324a5e8ebd31cb122c25ca8fa`에서 Synced/Healthy다. Dispatcher 1/1, Executor 1/1이며, 별도 `kanzo-agent-worker` Deployment는 0 replica다. Dispatcher의 worker metrics에서 현재 실행 중 태스크는 0으로 확인했다.
-- #29 읽기 전용 canary는 완료됐고 #31의 acceptance와 산출물 식별을 바로잡아 완료 처리했다. human 조치 카드 #33/#34도 근거와 함께 정리했다. 중복 제안 #35는 declined 사유를 남기고 완료 처리했으며, #32는 backlog에서 검토 대기 중이다.
-- Langfuse Phase 5 보강: session.create 호출마다 Kanzo task/run ID를 해당 세션에만 전달하고, ContextVar가 없거나 조회 실패 시 프로세스 환경의 오래된 ID를 사용하지 않도록 수정했다. 동시 세션 격리·누락·upgrade/idempotency 회귀 테스트 7개가 통과했다. 아직 이 변경을 담은 새 trace는 만들지 않았으므로 live Langfuse 반영 확인은 남아 있다.
-- Phase 6 보강 중: worker에 태스크 소요시간 Prometheus histogram을 추가했다. label은 code/noncode와 제한된 outcome만 사용하고 task/run ID를 label로 넣지 않는다. worker focused suite 14개, Langfuse suite 5개, Gateway session suite 2개가 통과했다. GitOps 반영 및 Argo rollout 확인은 남아 있다.
-- 다음 검증은 안전한 agent-eligible 태스크로 한 번 실행해 Kanzo task ID/run ID와 Langfuse session/trace metadata를 대조하고, Prometheus histogram 표본이 생기는지 확인하는 것이다. 기존 결과와 새 실행을 혼동하지 않도록 task/run ID를 함께 기록한다.
-- V1 롤백 스냅샷은 커밋 `f11abf6`이며 origin에 push돼 있다. worker 기준 소스 커밋은 `e59a758`이다.
+- 확인 기준: 2026-11-15. Argo CD `kanzo-agent-worker`는 revision `c24c3593fd5988cc02d04e719e438a525bac6593`에서 Synced/Healthy다. Dispatcher와 Executor는 각각 1/1 Ready이고, Dispatcher worker의 `kanzo_worker_task_active=0`이다. 별도 worker Deployment는 0 replicas이며 실제 상주 worker는 Dispatcher Pod 안에서 동작한다.
+- #29 read-only canary와 #31의 정정된 acceptance는 완료됐다. human-action #33/#34도 정리됐고 중복 #35는 declined 이유를 남기고 완료 처리했다. #32는 backlog 검토 대기다.
+- Langfuse Phase 5 코드가 배포됐다. 각 Gateway session.create에 해당 Kanzo task/run ID만 주입하고, session context가 없거나 조회에 실패하면 process-wide 값으로 대체하지 않는다. 동시 세션·누락·helper upgrade/idempotency 회귀 테스트 7개가 통과했다. 변경 이후 실제 run trace의 Langfuse metadata 대조는 아직 남아 있다.
+- Phase 6 worker duration histogram이 배포됐고 live `/metrics`에서 metric family를 확인했다. 현재 표본은 0건이라 첫 완료 run 뒤 count/bucket이 생기는지 확인해야 한다. label은 code/noncode와 제한된 outcome만 사용하며 task/run ID는 넣지 않는다. Worker suite 14개, Langfuse suite 5개, Gateway session suite 2개, event-adapter signal suite 1개가 통과했다.
+- 이번 rollout에서 이전 event-adapter 컨테이너가 PID 1 SIGTERM을 무시해 Pod 종료를 막았다. worker가 drain 후 종료했고 active task가 없음을 확인한 뒤 오래된 Pod만 정리했다. event-adapter가 SIGTERM/SIGINT를 처리하도록 수정한 revision `c24c359`을 배포했고 새 Dispatcher Pod는 정상 Ready다.
+- Live canary: 새 검증용 #36이 read-only route로 실행 중이다. Kanzo run `8657af1c664d`, Langfuse session `local-92115c3ed358acaaa0425c442bcf91539f7a0e3cfa312251cce1a38df283386d`, trace `c606f72ed93732883e424bfc22f431c1`을 ledger/API에서 연결했다. 최근 query에서 94 observations를 봤고 task는 아직 `doing`; 최종 trace metadata와 worker duration sample은 아직 판정하지 않았다.
+- V1 롤백 스냅샷은 `f11abf6`이며 origin에 push돼 있다. worker 기준 소스 커밋은 `e59a758`이다.
 
 ## 단계별 진행
 
@@ -20,8 +21,8 @@
 | 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 프로필 DB와 memory/consolidation 데이터가 PVC에 존재하며 같은 프로필 경로를 가리키는 것도 확인됐다. 브로커 명세 테스트 2개에서 runner `/workspace`의 read-only/writable 전환, read-only root filesystem, service-account token 비활성화를 검증했다. 실제 Pod mount 쓰기 거부와 ReadOnly run에서 만든 memory·skill의 일반 run 회수 및 Pod 교체 후 연속성, Desktop의 동일 Gateway 연결은 아직 입증되지 않았다. |
 | 3. durable run ledger와 이벤트 | claim 복구 구현·배포, 시뮬레이션 검증 보강, live 통합 검증 대기 | Kanzo는 `run_id`별 claim 결과를 DB에 원자적으로 보관하고 같은 요청 재호출 시 같은 task를 돌려준다. Worker는 Kanzo 호출 전에 project/filter/run ID intent를 SQLite에 기록하고, 재시작 후 동일 요청을 복구한다. 해석할 수 없는 응답은 intent를 유지하며 비활성 프로젝트의 pending claim은 Kanzo를 호출하지 않는다. ledger 복구 테스트는 Kanzo가 claim을 커밋한 뒤 응답을 잃는 경우, worker 재시작 후 원래 카드만 복구하고 다음 Todo는 건드리지 않는지 시뮬레이션한다. SSE 테스트는 연결·재연결 조정 wake와 변경 알림 wake를 확인한다. claim/event 테스트 17개가 통과했다. Executor 비가용 상태에서 claim하지 않는 readiness 가드도 구현 중이며, live rollout 경합 재현을 막는지 확인해야 한다. 외부 게시 중 프로세스 종료와 복구는 아직 검증하지 않았다. 다중 dispatcher lease/CAS는 미구현이며 replica 1개를 유지한다. 자동 재시도는 추가하지 않는다. |
 | 4. 상주 executor와 작업 도구 격리 | 배포 완료, 일부 시나리오 검증 대기 | Executor와 Dispatcher는 별도 Deployment 및 영속 run state를 사용한다. 작업별 sandbox/lease, heartbeat, 취소·불확실성 격리 경로가 배포됐다. 동시성·복구·장기 작업 시나리오 검증은 남았다. |
-| 5. 결과·추적·위임 | 일부 완료 | 성공·실패·취소 결과와 artifact/run ledger가 기록되고, Hermes 단일 추적 경로 및 Kanzo session correlation을 확인했다. per-session Langfuse adapter는 PVC의 구버전 패치까지 마이그레이션해 배포했고 자동 프로필 user attribution은 꺼져 있다. 실제 새 trace 대조, 중복 generation 방지 통합 검증, delegate 예산 정의·계측은 남았다. |
-| 6. 성능·학습 보존 검증 | 일부 계측 배포, 실행 기준 수집 전 | Run ledger는 새 run부터 `claimed → preparing → running → finalizing → terminal` 상태의 timestamp를 보존하며 ConfigMap으로 배포됐다. live worker 컨테이너에서 임시 ledger run을 만들어 timestamp 순서를 확인했다. Prometheus worker target은 정상 수집 중이다(유휴 표본: Executor 631MiB, Dispatcher 38MiB, Broker 24MiB). worker에 duration histogram, Langfuse token/turn 수 결합, sandbox Pod run ID label은 없다. 동등 작업으로 실제 시간을 측정하고 실행별 자원 peak를 run ID로 연결하는 경로, 학습 연속성·취소·격리 시나리오가 남았다. |
+| 5. 결과·추적·위임 | 부분 완료, live trace 검증 대기 | Session-scoped Kanzo task/run ID propagation은 Langfuse plugin init race와 PVC helper migration까지 보강해 배포했다. process-wide stale ID fallback과 잘못된 uid attribution은 차단했다. 회귀 테스트 7개 통과. 다음 agent-eligible run에서 새 trace metadata를 대조하고, 중복 generation 및 delegate 추적 기준을 검증한다. |
+| 6. 성능·학습 보존 검증 | 계측 배포, run 표본 대기 | Run ledger state timestamps와 worker duration histogram이 배포됐다. Prometheus /metrics에서 histogram family를 확인했으며 완료 run 전이라 표본은 아직 없다. Histogram labels는 bounded cardinality로 설정했다. 다음 run에서 duration bucket을 검증하고 phase별 timing, per-run 자원 peak, Langfuse token/turn·학습 연속성 및 격리/cancel 시나리오를 측정한다. |
 
 ### 2026-11-15 — Phase 2·3·6 감사와 취소 감시 보강
 

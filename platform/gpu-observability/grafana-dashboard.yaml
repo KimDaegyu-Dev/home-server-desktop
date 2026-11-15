@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wsl-gpu-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  wsl-gpu.json: |
+    {
+      "annotations": {"list": []},
+      "editable": false,
+      "graphTooltip": 1,
+      "panels": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}, "overrides": []},
+          "gridPos": {"h": 7, "w": 12, "x": 0, "y": 0},
+          "id": 1,
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [{"expr": "wsl_gpu_utilization_percent", "legendFormat": "{{name}}", "refId": "A"}],
+          "title": "GPU utilization",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "bytes", "min": 0}, "overrides": []},
+          "gridPos": {"h": 7, "w": 12, "x": 12, "y": 0},
+          "id": 2,
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"expr": "wsl_gpu_memory_used_bytes", "legendFormat": "used · {{name}}", "refId": "A"},
+            {"expr": "wsl_gpu_memory_total_bytes", "legendFormat": "total · {{name}}", "refId": "B"}
+          ],
+          "title": "GPU memory",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 7},
+          "id": 3,
+          "options": {"showHeader": true, "sortBy": [{"displayName": "PID", "desc": false}]},
+          "targets": [{"expr": "wsl_gpu_process_info", "format": "table", "instant": true, "refId": "A"}],
+          "title": "Windows processes with a GPU context",
+          "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}, {"id": "organize", "options": {"excludeByName": {"Time": true, "Value": true, "__name__": true}, "renameByName": {"pid": "PID", "process_name": "Process", "gpu_uuid": "GPU UUID"}}}],
+          "type": "table"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "dateTimeAsIso"}, "overrides": []},
+          "gridPos": {"h": 4, "w": 12, "x": 0, "y": 15},
+          "id": 4,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+          "targets": [{"expr": "wsl_gpu_exporter_last_success_timestamp_seconds * 1000", "refId": "A"}],
+          "title": "Last successful collection",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "bool", "mappings": [{"options": {"0": {"text": "OK", "color": "green"}, "1": {"text": "ERROR", "color": "red"}}, "type": "value"}]}, "overrides": []},
+          "gridPos": {"h": 4, "w": 12, "x": 12, "y": 15},
+          "id": 5,
+          "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+          "targets": [{"expr": "wsl_gpu_exporter_scrape_error", "refId": "A"}],
+          "title": "Collector status",
+          "type": "stat"
+        }
+      ],
+      "refresh": "15s",
+      "schemaVersion": 39,
+      "tags": ["wsl", "gpu", "nvidia"],
+      "time": {"from": "now-6h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "WSL NVIDIA GPU",
+      "uid": "wsl-nvidia-gpu",
+      "version": 1
+    }

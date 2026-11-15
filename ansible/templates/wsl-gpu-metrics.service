@@ -1,0 +1,14 @@
+[Unit]
+Description=Collect read-only NVIDIA GPU telemetry from the Windows WSL host
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/sbin/home-server-export-wsl-gpu-metrics.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/node_exporter/textfile_collector
+TimeoutStartSec=12

@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gpu-observability
+  namespace: argocd
+  labels:
+    sourceType: git
+    serverSideApply: "false"
+    stage: 77-gpu-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/KimDaegyu-Dev/home-server-desktop.git
+    targetRevision: main
+    path: platform/gpu-observability
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring

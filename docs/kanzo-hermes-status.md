@@ -245,3 +245,9 @@
 - Python 문법, Kustomize 렌더링, `git diff --check`를 확인했다. Argo `kanzo-agent-worker`는 revision `8dccff2`에서 Synced/Healthy이며 Executor 3/3, Dispatcher 2/2 Ready다. executor init 로그에 네 프로필 어댑터 적용이 남았고 live config에서 세 자동 프로필 값이 false임을 확인했다.
 - 아직 새 Kanzo 실행의 Langfuse trace에서 task/run ID와 userId 생략을 대조하지 않았다. #29는 #31 human-action 선행 상태라 자동 재개시키지 않았으며, 다음 유효한 Kanzo 실행 후 실제 trace 검증이 남아 있다.
 - Worker의 crash window도 확인했다. 현재 MCP `kanzo:next_task`는 project/filter만 받고 Kanzo에서 먼저 카드를 `doing`으로 바꾸며, 이후 worker가 run ID와 SQLite ledger row를 만든다. `kanzo:update_task` 스키마에는 expected status/version 또는 idempotency key가 없어 worker 단독으로 안전한 CAS 전환을 할 수 없다. Kanzo API 지원을 더 조사하기 전에는 claim 경로를 비원자적 read-then-update로 바꾸지 않는다.
+
+### 2026-11-15 — 롤아웃 후 idle 자원 및 시작 시간 기준점
+
+- Kanzo 실행이 없는 단일 시점 `kubectl top` 관측: 노드 CPU 546m(1%), 메모리 15,697Mi(48%, allocatable 약 31.3Gi). MCP namespace는 Dispatcher 4m/36Mi, Executor 23m/618Mi, Sandbox Broker 1m/22Mi였다. 이는 반복 측정한 baseline이 아니라 초기 idle 표본이다.
+- Executor Pod는 01:32:52Z 생성, 01:35:53Z Ready였다. `bootstrap-omh`는 165초 실행됐고, 전체 Pod 준비는 약 181초 걸렸다. 현재 반복 Hermes CLI bootstrap은 향후 시작 시간 개선 후보로 남긴다.
+- 동등한 Todo 작업을 실행해 active peak, completion latency, token/turn usage를 함께 재지 않으면 성능 개선을 판정하지 않는다.

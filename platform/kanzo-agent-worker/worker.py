@@ -1831,6 +1831,17 @@ class Worker:
         client.bind(lease, session_id, profile)
         active["broker_bound"] = True
 
+    @staticmethod
+    def _heartbeat_sandbox(active: dict[str, Any] | None) -> None:
+        """Renew the run-scoped sandbox lease while Hermes is executing."""
+        if active is None:
+            return
+        client = active.get("broker_client")
+        lease = active.get("broker_lease")
+        if not isinstance(client, BrokerClient) or not isinstance(lease, dict):
+            return
+        client.heartbeat(lease)
+
 
     def _publish_draft_pr(self, task: Task, checkout: Path, summary: str, active: dict[str, Any] | None = None) -> str:
         token = self.env.get("GITHUB_TOKEN", "")

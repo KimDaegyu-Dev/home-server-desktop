@@ -634,31 +634,39 @@ class KanzoTerminalProvider(TerminalEnvironmentProvider):
 def register(ctx: Any) -> None:
     """Hermes user-plugin entry point."""
     ctx.register_terminal_environment_provider(KanzoTerminalProvider())
-    # Hermes applies HERMES_WRITE_SAFE_ROOT before ShellFileOperations asks for
-    # a terminal environment. The shared Gateway's process root is /opt/data,
-    # so a Kanzo path is rejected before it can reach the broker. Extend roots
-    # only after the broker confirms this Gateway session is bound to a live
-    # Kanzo run; the run pod's mount remains the OS-level write authority.
+    # Hermes' ShellFileOperations applies the host safe-root check before it
+    # dispatches a write to the selected terminal environment. Keep the global
+    # HERMES_WRITE_SAFE_ROOT unchanged; bypass only that one denial when the
+    # broker confirms this one-shot session and the target is in its workspace.
     from agent import file_safety
+    from tools import file_operations
 
-    current_safe_roots = file_safety.get_safe_write_roots
-    if not getattr(current_safe_roots, "_kanzo_broker_workspace", False):
-        def _kanzo_safe_write_roots() -> set[str]:
-            roots = current_safe_roots()
+    current_write_denial = file_operations.get_write_denied_error
+    if not getattr(current_write_denial, "_kanzo_broker_workspace", False):
+        def _kanzo_write_denial(path: str, *, verb: str = "Write", entry: bool = False) -> str | None:
+            denial = current_write_denial(path, verb=verb, entry=entry)
+            if denial is None or file_safety._classify_write_denial(path, entry=entry) != "safe_root":
+                return denial
+
+            normalized = os.path.normpath(os.path.abspath(os.path.expanduser(str(path))))
+            if not any(
+                normalized == root or normalized.startswith(root + os.sep)
+                for root in ("/workspace", "/scratch")
+            ):
+                return denial
             source = session_context.get_session_env("HERMES_SESSION_SOURCE", "")
             source = getattr(source, "value", source)
-            if source != "oneshot":
-                return roots
             session_id = session_context.get_session_env("HERMES_SESSION_ID", "")
             base_url = os.getenv("KANZO_BROKER_URL", "").strip()
             token = os.getenv("KANZO_BROKER_TOKEN", "")
             if (
-                not isinstance(session_id, str) or not session_id.strip()
+                source != "oneshot"
+                or not isinstance(session_id, str) or not session_id.strip()
                 or len(session_id) > 256
                 or any(ord(char) < 0x20 for char in session_id)
                 or not base_url or not token
             ):
-                return roots
+                return denial
             try:
                 proof = _BrokerClient(
                     base_url, token, request_timeout=3
@@ -667,9 +675,8 @@ def register(ctx: Any) -> None:
                     {"hermes_session_id": session_id},
                 )
             except Exception:
-                # An unbound session, broker outage, or invalid mapping keeps
-                # the original safe roots; writes remain fail-closed.
-                return roots
+                # Broker outage or an unbound session retains the host denial.
+                return denial
             if (
                 proof.get("hermes_session_id") == session_id
                 and isinstance(proof.get("task_id"), str) and proof["task_id"].strip()
@@ -677,12 +684,11 @@ def register(ctx: Any) -> None:
                 and proof.get("workspace") == "/workspace"
                 and proof.get("temp_dir") == "/scratch"
             ):
-                roots.add(os.path.realpath("/workspace"))
-                roots.add(os.path.realpath("/scratch"))
-            return roots
+                return None
+            return denial
 
-        _kanzo_safe_write_roots._kanzo_broker_workspace = True  # type: ignore[attr-defined]
-        file_safety.get_safe_write_roots = _kanzo_safe_write_roots
+        _kanzo_write_denial._kanzo_broker_workspace = True  # type: ignore[attr-defined]
+        file_operations.get_write_denied_error = _kanzo_write_denial
 
     # Hermes' remote execute_code session kernel is a detached child process.
     # Kanzo's runner deliberately terminates the whole command process group

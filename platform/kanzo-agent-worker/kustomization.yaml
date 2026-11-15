@@ -37,6 +37,7 @@ configMapGenerator:
       - broker_client.py=broker_client.py
       - workspace_transfer.py=workspace_transfer.py
       - kanzo_terminal_provider.py=kanzo_terminal_provider.py
+      - langfuse_session_context.py=langfuse_session_context.py
   - name: kanzo-agent-omh-routing
     namespace: mcp
     options:

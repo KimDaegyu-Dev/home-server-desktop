@@ -286,3 +286,11 @@
 - `67fa31b`를 배포했다. Executor 3/3 컨테이너와 Dispatcher 2/2 컨테이너가 Ready이며 Argo `kanzo-agent-worker`는 `Synced/Healthy`다.
 - 롤아웃 중 Executor가 준비되지 않았던 짧은 구간에 Dispatcher 로그가 `Executor is not ready; leaving Kanzo tasks unclaimed`를 기록했다. Executor 준비를 기다리는 동안 Kanzo task를 claim하지 않는 동작을 live에서 확인했다. 이후 Dispatcher가 재기동되어 정상 Ready 상태가 됐다.
 - 이 롤아웃에서 기존 human-gated 작업을 claim하지 않았다. 현재 자동 실행이 가능한 Todo가 없으므로 end-to-end 신규 run 검증은 보류다. #31 사람 검토 및 #29의 선행 관계가 해결된 뒤 실제 run으로 Kanzo 상태, run ledger, 산출물, Gateway session, Langfuse trace를 다시 대조해야 한다.
+
+### 2026-11-15 — #31 doing→review 전환의 배포 시점 상관관계 확인
+
+- Kanzo `get_task`의 현재 값은 `review, human=true`, 마지막 갱신은 `03:20 UTC`다. task 본문과 댓글을 읽었고 두 실행 시작 댓글도 기록되어 있어, worker가 카드를 못 읽은 문제가 아니다.
+- 첫 run `ec9bc93b6c01`은 `03:18:51 UTC`에 시작했으나 `03:18:53` Executor 요청이 `ConnectionResetError`로 실패했다. Executor ReplicaSet `kanzo-agent-executor-7fd664fcb5` 생성 시각은 `03:18:54 UTC`로, Executor 롤아웃과 요청 실패가 겹쳤다.
+- 두 번째 run `90ca4cd1f3c2`는 세션을 만들고 prompt admission ID `15de9eee02c44c959e850cc2f4ef42dd`까지 발급받았다. Executor ledger에는 submit이 `ambiguous`로 남았다. Dispatcher ReplicaSet `kanzo-agent-dispatcher-7d48974dfb`가 `03:20:12 UTC`에 생성된 직후, `03:20:13` worker 재시작 복구가 미완료 실행을 orphan/review로 격리했다. Hermes 완료 결과는 없다.
+- 따라서 첫 실패는 Executor 롤아웃 중 연결 단절, 두 번째는 활성 실행 도중 Dispatcher 롤아웃으로 실행 스트림이 끊긴 것이 직접 원인이다. 이 기록은 최신 readiness-gate 배포 전의 것이다. 현재 `8ca32c5` 배포는 `Synced/Healthy`이며, readiness 미통과 때 claim을 건너뛰는 live 로그도 확인했다. 배포 뒤 #31에 대한 새 run은 ledger에 없다.
+- 남은 운영 결함은 활성 Hermes 실행 중 Dispatcher 코드/설정 롤아웃을 유예하는 drain 절차가 없다는 점이다. readiness gate는 새 claim을 막지만, 이미 submit된 실행 스트림을 Dispatcher 재시작 후 재부착하지 않는다. 롤아웃 drain/장기 실행 보존을 별도 구현·검증해야 한다.

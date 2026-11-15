@@ -228,3 +228,13 @@
 - 상주 Hermes에 설치된 Langfuse 플러그인 코드를 live 컨테이너에서 확인했다. `HERMES_KANBAN_TASK`와 `HERMES_KANBAN_RUN_ID`를 trace metadata의 `kanban_task_id`/`kanban_run_id`로 읽고 Hermes session ID를 Langfuse session grouping에 사용하는 구현이다. Gateway session 생성 코드가 해당 두 환경 값을 설정한다. 따라서 ID 전달 경로는 코드상 연결됐지만 실제 실행 trace의 metadata/session 값은 아직 대조하지 않았다.
 - 사용자 식별은 플러그인에서 인증된 플랫폼 sender ID가 제공될 때만 `user_id`를 설정한다. Kanzo 자동 실행의 실제 요청자를 확인하지 못한 상태에서 `uid:10000`을 사용자 ID로 쓰지 않는다.
 - 남은 Phase 5 확인: 실제 Kanzo run 한 건으로 task/run/session ID와 Kanzo·run ledger·Langfuse를 대조하고, Hermes에서 generation이 한 번만 보이는지 확인한다. `hermes-harness-lab#29`는 review/human=true라 재실행하지 않았다. Alloy 설정 YAML 파싱과 Prometheus 경로 보존 확인은 완료했으며, 클러스터에서는 Alloy 재기동까지 확인했다.
+
+### 2026-11-15 — Kanzo run과 Langfuse 실제 대조
+
+- 사용자가 요청한 수동 확인을 위해 `hermes-harness-lab#29`를 review에서 Todo로 한 번 재실행했다. run `85502b0b7854`는 researcher / openai-api / `iq_3s`로 실행했고 Gateway session `local-1104258490b4b3f2367873277530b1c756531718cdbd1a1adf478e079b1ebd43`을 실행 장부에 기록했다. 모델은 final 응답을 만들었지만 잘못된 human-action handoff를 생성해 장부와 카드는 `waiting` 상태가 됐다.
+- Langfuse Observations API v2에서 동일 `sessionId`로 trace `74eccc23f500429cc53398a27a7a7223`의 observation 23개(Generation 8, Tool 14, Hermes turn 1)를 확인했다. 따라서 Kanzo task → run ledger → Hermes Gateway session → Langfuse session/trace 연결은 정확히 대조된다. 이 필터 범위에 Langfuse trace는 한 개였으며 LiteLLM/Alloy 중복 trace는 보이지 않았다.
+- Hermes trace metadata에는 Hermes 내부 `task_id`/`turn_id`가 있지만 Kanzo `hermes-harness-lab#29`와 run ID는 없다. 현재 run ledger의 session 매핑이 상관관계의 다리 역할을 한다. terminal 실행에서 `HERMES_KANBAN_TASK`/`HERMES_KANBAN_RUN_ID`도 빈 값으로 관측되어 `gateway_session.py`의 client_env 전달이 Hermes 허용 목록에서 걸러지는 경로를 확인했다. 직접 Kanzo ID metadata 추가는 미완료다.
+- Langfuse observation `userId`는 `uid:10000`이었다. 이는 컨테이너 실행 UID이지 검증된 사람 식별자가 아니다. `end_user_attribution=true`가 researcher/builder/reviewer 프로필에 활성화돼 있어 자동 실행에 잘못된 사용자 귀속이 발생한다. 실제 플랫폼 사용자와 실행 주체는 분리해야 한다.
+- #29 실행 결과는 #31 human-action 카드 `Confirm rollout of heartbeat fix 711a1fe...`를 만들었고 #29를 `todo (waits on #31)`로 남겼다. #31의 근거는 `_heartbeat_sandbox`를 `/opt/hermes`에서 찾았다는 것이지만, 메서드는 Hermes 패키지가 아니라 `/opt/kanzo-agent/worker.py` ConfigMap에 있다. live Dispatcher의 `Worker` 클래스에서 메서드 로드를 확인했고, 이전 40초 terminal 호출은 exit 0으로 30초 heartbeat를 넘겼다. 따라서 #31의 “아직 미배포” 판단은 잘못됐다. 비교 결과와 반증 근거를 #31에 댓글로 남겼다. #31을 human-owned 상태에서 자동으로 완료 처리하지 않았다.
+- Langfuse credential은 이제 executor bootstrap에서 root 및 routed profile `.env`에 동기화되고 파일 권한은 0600이다. 이후 run에서 plugin의 missing-credentials 경고는 없었고 researcher trace가 생성됐다.
+- 남은 Phase 5 작업: per-session `KANZO_TASK_ID`/`KANZO_RUN_ID`를 Gateway allowlist 및 Hermes Langfuse hook으로 안전하게 전달하고, automated profile의 잘못된 `uid:10000` user attribution을 끈 뒤 실제 trace로 재검증한다. #29는 #31을 선행 카드로 기다리고 있어 자동 재개 전 상태 판단이 필요하다.

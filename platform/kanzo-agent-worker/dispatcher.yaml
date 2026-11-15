@@ -21,8 +21,8 @@ spec:
     spec:
       serviceAccountName: kanzo-agent-worker
       automountServiceAccountToken: false
-      # Allow the worker to drain its current Hermes run during a Recreate rollout.
-      terminationGracePeriodSeconds: 1800
+      # Hermes turns can run for 2700s; leave time for result publication and ledger finalization.
+      terminationGracePeriodSeconds: 3300
       securityContext:
         runAsNonRoot: true
         runAsUser: 10000

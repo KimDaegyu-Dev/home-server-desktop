@@ -238,3 +238,10 @@
 - #29 실행 결과는 #31 human-action 카드 `Confirm rollout of heartbeat fix 711a1fe...`를 만들었고 #29를 `todo (waits on #31)`로 남겼다. #31의 근거는 `_heartbeat_sandbox`를 `/opt/hermes`에서 찾았다는 것이지만, 메서드는 Hermes 패키지가 아니라 `/opt/kanzo-agent/worker.py` ConfigMap에 있다. live Dispatcher의 `Worker` 클래스에서 메서드 로드를 확인했고, 이전 40초 terminal 호출은 exit 0으로 30초 heartbeat를 넘겼다. 따라서 #31의 “아직 미배포” 판단은 잘못됐다. 비교 결과와 반증 근거를 #31에 댓글로 남겼다. #31을 human-owned 상태에서 자동으로 완료 처리하지 않았다.
 - Langfuse credential은 이제 executor bootstrap에서 root 및 routed profile `.env`에 동기화되고 파일 권한은 0600이다. 이후 run에서 plugin의 missing-credentials 경고는 없었고 researcher trace가 생성됐다.
 - 남은 Phase 5 작업: per-session `KANZO_TASK_ID`/`KANZO_RUN_ID`를 Gateway allowlist 및 Hermes Langfuse hook으로 안전하게 전달하고, automated profile의 잘못된 `uid:10000` user attribution을 끈 뒤 실제 trace로 재검증한다. #29는 #31을 선행 카드로 기다리고 있어 자동 재개 전 상태 판단이 필요하다.
+
+### 2026-11-15 — Langfuse 세션별 Kanzo 귀속 수정 배포
+
+- `8dccff2`에서 Langfuse 플러그인이 공유 Gateway 프로세스 환경 대신 현재 Hermes 세션 컨텍스트의 `KANZO_TASK_ID`/`KANZO_RUN_ID`를 읽도록 시작 시 적용하는 가드된 어댑터를 추가했다. 세션 환경 변수의 허용 목록은 이미 존재하므로 전역 환경 변수로 우회하지 않는다.
+- 자동 실행 프로필 `researcher`, `builder`, `reviewer`의 `end_user_attribution`을 false로 고정해 컨테이너 UID를 사람 사용자로 기록하지 않게 했다. 기본 프로필 설정은 유지한다.
+- Python 문법, Kustomize 렌더링, `git diff --check`를 확인했다. Argo `kanzo-agent-worker`는 revision `8dccff2`에서 Synced/Healthy이며 Executor 3/3, Dispatcher 2/2 Ready다. executor init 로그에 네 프로필 어댑터 적용이 남았고 live config에서 세 자동 프로필 값이 false임을 확인했다.
+- 아직 새 Kanzo 실행의 Langfuse trace에서 task/run ID와 userId 생략을 대조하지 않았다. #29는 #31 human-action 선행 상태라 자동 재개시키지 않았으며, 다음 유효한 Kanzo 실행 후 실제 trace 검증이 남아 있다.

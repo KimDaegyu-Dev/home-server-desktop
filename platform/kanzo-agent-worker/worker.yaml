@@ -107,6 +107,8 @@ spec:
   rolloutRestartTargets:
   - kind: Deployment
     name: kanzo-agent-executor
+  - kind: Deployment
+    name: kanzo-agent-dispatcher
   mount: kv
   path: mcp/kanzo-agent
   type: kv-v2
@@ -1009,6 +1011,10 @@ spec:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: langfuse
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: langfuse
+          app: web
     ports:
     - protocol: TCP
       port: 3000

@@ -104,6 +104,18 @@ spec:
                   name: kanzo-agent-credentials
                   key: GITHUB_TOKEN
                   optional: true
+            - name: HERMES_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_PUBLIC_KEY
+            - name: HERMES_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_SECRET_KEY
+            - name: HERMES_LANGFUSE_BASE_URL
+              value: http://langfuse-web.langfuse.svc.cluster.local:3000
             - name: HOME
               value: /tmp
             - name: KANZO_WORKER_STATE_DIR
@@ -112,6 +124,10 @@ spec:
             - name: worker-code
               mountPath: /opt/kanzo-agent/worker.py
               subPath: worker.py
+              readOnly: true
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/langfuse_reconcile.py
+              subPath: langfuse_reconcile.py
               readOnly: true
             - name: worker-code
               mountPath: /opt/kanzo-agent/run_ledger.py

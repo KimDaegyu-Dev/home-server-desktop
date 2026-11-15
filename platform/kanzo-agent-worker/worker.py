@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -26,6 +26,7 @@ from typing import Any
 from artifact_store import ArtifactStore
 from broker_client import BrokerClient
 from executor_client import ExecutorClient
+from langfuse_reconcile import reconcile_session
 from run_ledger import RunLedger
 
 
@@ -628,6 +629,10 @@ class Worker:
                 self.ledger.transition(run_id, "orphaned", {
                     "orphan_reason": "worker restarted before a terminal outcome was recorded",
                 })
+            fields = run.get("fields") if isinstance(run.get("fields"), dict) else {}
+            self._record_langfuse_reconciliation(
+                run_id, fields.get("gateway_session_id"), run.get("created_at")
+            )
             details = self._call("get_task", {"id": task_id})
             state = status_from_details(details)
             notice = f"Run `{run_id}` was interrupted by a worker restart. The agent was not rerun; inspect its saved result and artifacts before deciding what to do next."
@@ -701,6 +706,58 @@ class Worker:
             })
         except Exception:
             LOG.exception("Could not persist terminal diagnostic for %s/%s", task_id, run_id)
+
+    def _record_langfuse_reconciliation(
+        self, run_id: str, session_id: str | None, started_at: str | None
+    ) -> None:
+        """Record one read-only Langfuse check and schedule bounded read-only retries."""
+        try:
+            previous_run = self.ledger.get(run_id) or {}
+            previous = (previous_run.get("fields") or {}).get("langfuse_reconciliation")
+            attempt = int(previous.get("attempt", 0)) + 1 if isinstance(previous, dict) else 1
+            reconciliation = reconcile_session(session_id, started_at)
+            reconciliation["attempt"] = attempt
+            retryable = reconciliation.get("state") in {
+                "api_error", "incomplete", "not_found", "root_missing"
+            }
+            if reconciliation.get("http_status") in {401, 403, 404}:
+                retryable = False
+            if retryable and attempt < 6:
+                delay_seconds = (30, 60, 120, 300, 600)[min(attempt - 1, 4)]
+                reconciliation["next_attempt_at"] = (
+                    datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+                ).isoformat(timespec="seconds").replace("+00:00", "Z")
+            else:
+                reconciliation["next_attempt_at"] = None
+            self.ledger.record_fields(run_id, {"langfuse_reconciliation": reconciliation})
+            if reconciliation.get("state") not in {"ended", "unavailable"}:
+                LOG.warning(
+                    "Langfuse reconciliation state=%s attempt=%s for run %s",
+                    reconciliation.get("state"), attempt, run_id,
+                )
+        except Exception:
+            LOG.exception("Could not record Langfuse reconciliation for run %s", run_id)
+
+    def _reconcile_pending_langfuse(self) -> None:
+        now = datetime.now(timezone.utc)
+        try:
+            pending_runs = self.ledger.list_terminal_with_langfuse_reconciliation()
+        except Exception:
+            LOG.exception("Could not scan pending Langfuse reconciliation records")
+            return
+        for run in pending_runs:
+            fields = run.get("fields") if isinstance(run.get("fields"), dict) else {}
+            previous = fields.get("langfuse_reconciliation")
+            if not isinstance(previous, dict) or not previous.get("next_attempt_at"):
+                continue
+            try:
+                due_at = datetime.fromisoformat(previous["next_attempt_at"].replace("Z", "+00:00"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if due_at <= now:
+                self._record_langfuse_reconciliation(
+                    run["run_id"], fields.get("gateway_session_id"), run.get("created_at")
+                )
 
     def _redact_sensitive_output(self, text: str) -> str:
         redacted = SENSITIVE_OUTPUT_RE.sub("[REDACTED]", text)
@@ -2564,6 +2621,11 @@ class Worker:
             elapsed = max(0.0, time.monotonic() - task_started_at)
             kind = "code" if task.is_code else "noncode"
             final_run = self.ledger.get(run_id)
+            self._record_langfuse_reconciliation(
+                run_id, active.get("gateway_session_id"),
+                (final_run or {}).get("created_at"),
+            )
+            final_run = self.ledger.get(run_id)
             final_state = final_run["state"] if final_run else "unknown"
             outcome = {
                 "succeeded": "done", "review": "review", "waiting": "waiting",
@@ -2624,6 +2686,7 @@ class Worker:
         while not self.shutdown_requested.is_set():
             self.heartbeat_path.touch()
             try:
+                self._reconcile_pending_langfuse()
                 self.wake_queue.get(timeout=30)
                 found_any = False
                 while not self.shutdown_requested.is_set() and self.process_one():

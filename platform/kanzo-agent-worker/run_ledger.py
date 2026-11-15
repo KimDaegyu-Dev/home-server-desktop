@@ -496,3 +496,17 @@ class RunLedger:
                 return [self._record(row) for row in rows]
             except sqlite3.DatabaseError as exc:
                 raise LedgerCorruptionError("Unable to read execution ledger") from exc
+
+    def list_terminal_with_langfuse_reconciliation(self) -> list[dict[str, Any]]:
+        """Return terminal runs that have persisted Langfuse reconciliation state."""
+        terminal_states = ("succeeded", "review", "waiting", "cancelled", "failed", "orphaned")
+        with self._lock:
+            try:
+                rows = self._connection.execute(
+                    f"SELECT * FROM runs WHERE state IN ({','.join('?' for _ in terminal_states)}) "
+                    "AND fields_json LIKE '%\"langfuse_reconciliation\"%' ORDER BY updated_at",
+                    terminal_states,
+                ).fetchall()
+                return [self._record(row) for row in rows]
+            except sqlite3.DatabaseError as exc:
+                raise LedgerCorruptionError("Unable to read execution ledger") from exc

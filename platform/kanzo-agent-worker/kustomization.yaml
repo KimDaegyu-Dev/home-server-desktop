@@ -35,6 +35,7 @@ configMapGenerator:
       - executor_client.py=executor_client.py
       - migrate_dispatcher_state.py=migrate_dispatcher_state.py
       - broker_client.py=broker_client.py
+      - langfuse_reconcile.py=langfuse_reconcile.py
       - workspace_transfer.py=workspace_transfer.py
       - kanzo_terminal_provider.py=kanzo_terminal_provider.py
       - langfuse_session_context.py=langfuse_session_context.py

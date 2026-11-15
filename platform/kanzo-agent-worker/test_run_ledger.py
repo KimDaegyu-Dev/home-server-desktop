@@ -112,7 +112,7 @@ class CancellationLookupTests(unittest.TestCase):
 
 
 class CancellationAndClaimRecoveryTests(unittest.TestCase):
-    def test_worker_restart_retries_the_persisted_claim_with_the_same_run_id(self) -> None:
+    def test_worker_restart_recovers_claim_committed_before_response_was_lost(self) -> None:
         with tempfile.TemporaryDirectory() as state_dir:
             env = {
                 "KANZO_ENABLED": "true",
@@ -129,6 +129,9 @@ class CancellationAndClaimRecoveryTests(unittest.TestCase):
             )
             first_worker = Worker(env)
             first_calls = []
+            kanzo_claims = {}
+            task_status = {"hermes-harness-lab#4": "todo", "hermes-harness-lab#5": "todo"}
+            task_line = "hermes-harness-lab#4 [doing] Inspect worker recovery"
 
             def interrupted_call(tool, args):
                 first_calls.append((tool, args))
@@ -137,6 +140,14 @@ class CancellationAndClaimRecoveryTests(unittest.TestCase):
                 if tool == "get_task":
                     return route_details
                 if tool == "next_task":
+                    task_id = kanzo_claims.get(args["run_id"])
+                    if task_id is None:
+                        task_id = next((key for key, status in task_status.items() if status == "todo"), None)
+                        if task_id is None:
+                            return "Nothing ready in todo for hermes-harness-lab"
+                        task_status[task_id] = "doing"
+                        kanzo_claims[args["run_id"]] = task_id
+                    # Kanzo committed the claim, but the response was lost.
                     raise TimeoutError("MCP response lost after Kanzo may have claimed")
                 raise AssertionError(f"Unexpected MCP tool: {tool}")
 
@@ -149,25 +160,37 @@ class CancellationAndClaimRecoveryTests(unittest.TestCase):
             second_worker = Worker(env)
             retry_calls = []
 
+            class StopAfterRecoveredClaim(BaseException):
+                pass
+
             def recovered_call(tool, args):
                 retry_calls.append((tool, args))
                 if tool == "list_tasks":
                     return card_list
                 if tool == "get_task":
+                    if args["id"] == "hermes-harness-lab#4":
+                        raise StopAfterRecoveredClaim()
                     return route_details
                 if tool == "next_task":
-                    return "Nothing ready in todo for hermes-harness-lab"
+                    task_id = kanzo_claims.get(args["run_id"])
+                    self.assertEqual(task_id, "hermes-harness-lab#4")
+                    return task_line
                 raise AssertionError(f"Unexpected MCP tool: {tool}")
 
             second_worker._call = recovered_call
-            with patch("worker.McpClient", fake_client):
-                self.assertFalse(second_worker.process_one())
+            with patch("worker.McpClient", fake_client), self.assertRaises(StopAfterRecoveredClaim):
+                second_worker.process_one()
 
             first_run_id = next(args["run_id"] for tool, args in first_calls if tool == "next_task")
             retry = next(args for tool, args in retry_calls if tool == "next_task")
             self.assertEqual(retry["run_id"], first_run_id)
             self.assertEqual(retry["project"], "hermes-harness-lab")
+            self.assertEqual(kanzo_claims, {first_run_id: "hermes-harness-lab#4"})
+            self.assertEqual(task_status["hermes-harness-lab#4"], "doing")
+            self.assertEqual(task_status["hermes-harness-lab#5"], "todo")
             self.assertEqual(second_worker.ledger.pending_claims(), [])
+            recovered = second_worker.ledger.get(first_run_id)
+            self.assertEqual((recovered["task_id"], recovered["state"]), ("hermes-harness-lab#4", "preparing"))
             second_worker.ledger.close()
 
     def test_watcher_rechecks_cancel_after_transient_lookup_failure(self) -> None:

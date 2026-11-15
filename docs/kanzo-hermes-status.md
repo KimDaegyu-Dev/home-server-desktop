@@ -4,12 +4,12 @@
 
 ## 현재 상태
 
-- 확인 기준: 2026-11-15. Argo `kanzo`와 `kanzo-agent-worker`가 revision `963a165f05ce4e68af393e7e737166b5ad81a56b`에서 `Synced / Healthy`다. Dispatcher 1/1 replica, Executor 1/1 replica(3개 컨테이너)가 Ready다.
+- 확인 기준: 2026-11-15. Argo `kanzo`와 `kanzo-agent-worker`가 revision `84f023529c32b1324ed41a720f7b3f14a60bab3d`에서 `Synced / Healthy`다. Dispatcher 1/1 replica(2/2 컨테이너), Executor 1/1 replica(3개 컨테이너)가 Ready다.
 - 이벤트 어댑터는 Kanzo SSE에 연결되고 재연결 직후 worker wake로 상태를 다시 맞춘다. 현재는 자동화 태스크를 추가하지 않았으며, `hermes-harness-lab#29`는 human-action 선행 카드 #31을 기다린다.
 - Langfuse용 세션별 Kanzo task/run ID 전달과 automated profile의 잘못된 `uid:10000` 귀속은 GitOps에 수정·배포했다. live init 로그와 세 프로필 설정은 확인됐지만, 수정 후 실제 실행 trace는 아직 대조하지 않았다.
 - Kanzo run-ID 멱등 claim과 worker의 durable claim intent 복구를 구현·배포했다. live MCPProxy discovery에서 `kanzo:next_task`가 선택적 `run_id` 인자를 노출하는 것을 확인했고, `hermes-harness-lab#29`는 Todo지만 human-owned #31에 대기 중이다. 실행 가능한 Todo가 없어 실제 모델 실행의 crash/restart 복구는 아직 검증하지 않았다.
-- 최신 로컬 변경: claim ledger와 v1→v2 승격 테스트 5개, Kanzo 조회 일시 실패 뒤 취소 이벤트 재확인 테스트 2개를 추가했다. 취소 조회 오류를 “취소 아님”으로 삼키지 않고 5초 후 다시 조회하도록 수정했다. 기존 워커 테스트 11개와 새 ledger 테스트 7개 모두 통과했지만 이 수정은 아직 GitOps에 반영·배포하지 않았다.
-- 다음 작업: 취소 재확인 수정을 배포한 뒤, 사람의 #31 판단 후 #29가 실행 가능해지면 한 번의 run에서 Kanzo 상태·claim ID·run ledger·artifact·Gateway session·Langfuse metadata를 대조한다. 이후 이벤트 중복/재연결, 외부 게시 멱등성, 다중 dispatcher 소유권, Phase 6 성능·학습 보존을 검증한다.
+- 취소 조회 오류를 보류하고 5초 후 재확인하는 수정을 revision `84f0235`로 GitOps 배포했다. 재기동 후 Dispatcher 로그에서 정상 시작과 idle 상태를 확인했다. 현재 agent-eligible Todo가 없어 실제 취소나 모델 작업은 실행하지 않았다.
+- 다음 작업: 사람의 #31 판단 후 #29가 실행 가능해지면 한 번의 run에서 Kanzo 상태·claim ID·run ledger·artifact·Gateway session·Langfuse metadata를 대조한다. 이후 이벤트 중복/재연결, 외부 게시 멱등성, 다중 dispatcher 소유권, Phase 6 성능·학습 보존을 검증한다.
 - V1 롤백 스냅샷: 커밋 `f11abf6` (`origin`에 push 완료). worker 기준 소스: `e59a758` (`feat(kanzo): persist and recover run artifacts`).
 ## 단계별 진행
 
@@ -18,16 +18,16 @@
 | 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 프로필 DB와 memory/consolidation 데이터가 PVC에 존재하며 같은 프로필 경로를 가리키는 것도 확인됐다. 다만 ReadOnly run에서 생성한 기억·스킬이 다음 일반 실행에서 회수되는지, Pod 교체 뒤 이어지는지, Desktop이 같은 Gateway를 쓰는지는 입증되지 않았다. 현재 read-only sandbox 실행도 없어 실제 쓰기 차단은 미검증이다. |
-| 3. durable run ledger와 이벤트 | claim 복구 구현·배포, 단위 검증 완료, 통합 실행 검증 대기 | Kanzo는 `run_id`별 claim 결과를 DB에 원자적으로 보관하고 같은 요청 재호출 시 같은 task를 돌려준다. Worker는 Kanzo 호출 전에 project/filter/run ID intent를 SQLite에 기록하고, 재시작 후 동일 요청을 복구한다. 해석할 수 없는 응답은 intent를 유지하며 비활성 프로젝트의 pending claim은 Kanzo를 호출하지 않는다. ledger 재요청·충돌·원자 승격·active run 보호·v1→v2 승격 테스트 5개가 통과했다. 취소 상태 조회가 일시 실패하면 취소 이벤트를 보류하고 재확인하도록 수정했으며 관련 테스트 2개가 통과했으나 아직 배포되지 않았다. 실제 task 실행 crash-window/재연결, 다중 dispatcher lease/CAS, 외부 게시 멱등 재개는 남아 있다. 자동 재시도는 추가하지 않는다. |
+| 3. durable run ledger와 이벤트 | claim 복구 구현·배포, 단위 검증 완료, 통합 실행 검증 대기 | Kanzo는 `run_id`별 claim 결과를 DB에 원자적으로 보관하고 같은 요청 재호출 시 같은 task를 돌려준다. Worker는 Kanzo 호출 전에 project/filter/run ID intent를 SQLite에 기록하고, 재시작 후 동일 요청을 복구한다. 해석할 수 없는 응답은 intent를 유지하며 비활성 프로젝트의 pending claim은 Kanzo를 호출하지 않는다. ledger 재요청·충돌·원자 승격·active run 보호·v1→v2 승격 테스트 5개가 통과했다. 취소 상태 조회가 일시 실패하면 취소 이벤트를 보류하고 재확인하도록 수정했고 관련 테스트 2개와 기존 worker 테스트 11개가 통과했다. revision `84f0235`에서 배포·롤아웃을 확인했다. 실제 task 실행 crash-window/재연결, 다중 dispatcher lease/CAS, 외부 게시 멱등 재개는 남아 있다. 자동 재시도는 추가하지 않는다. |
 | 4. 상주 executor와 작업 도구 격리 | 배포 완료, 일부 시나리오 검증 대기 | Executor와 Dispatcher는 별도 Deployment 및 영속 run state를 사용한다. 작업별 sandbox/lease, heartbeat, 취소·불확실성 격리 경로가 배포됐다. 동시성·복구·장기 작업 시나리오 검증은 남았다. |
 | 5. 결과·추적·위임 | 일부 완료 | 성공·실패·취소 결과와 artifact/run ledger가 기록되고, Hermes 단일 추적 경로 및 Kanzo session correlation을 확인했다. 최근 수정의 task/run trace metadata와 최종 상태 대조, delegate 예산 검증은 남았다. |
 | 6. 성능·학습 보존 검증 | 기준 수집 전 | 현재는 유휴 지표만 확인됐다(Executor 약 621MiB, Dispatcher 약 35MiB, Broker 약 24MiB; 활성 task 0). 작업 중 peak, 실행 지연, 토큰·turn 사용량을 같은 run ID로 연결한 비교는 없다. 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
 
 ### 2026-11-15 — Phase 2·3·6 감사와 취소 감시 보강
 
-- 현재 Argo revision은 `963a165f05ce4e68af393e7e737166b5ad81a56b`; Dispatcher와 Executor는 각각 1 replica다. Dispatcher 로그는 활성 프로젝트에서 agent가 가져갈 수 있는 Todo가 없다고 기록한다. #29는 사람 소유 #31을 기다리므로 실제 실행은 시작하지 않았다.
+- 현재 Argo revision은 `84f023529c32b1324ed41a720f7b3f14a60bab3d`; Dispatcher와 Executor는 각각 1 replica다. 취소 재확인 수정이 배포됐고 새 Dispatcher가 정상 기동했다. Recreate 교체 과정에서 구 Pod가 내려간 뒤 새 Pod가 뜨기까지 잠시 dispatcher 비가용 시간이 있었다. Dispatcher 로그는 agent가 가져갈 수 있는 Todo가 없다고 기록한다. #29는 사람 소유 #31을 기다리므로 실제 실행은 시작하지 않았다.
 - Phase 2 감사에서 프로필 DB와 OMH memory 자료가 PVC에 존재하는 것은 확인했으나, ReadOnly 실행에서 만든 memory·skill이 일반 실행에서 다시 사용되는지와 Pod 교체 후 연속성은 검증되지 않았다. Dashboard Ingress는 Gateway 자체 연결을 증명하지 않으며, Desktop이 같은 Gateway를 사용하는 증거도 없다.
-- Phase 3 감사에서 단일 Dispatcher 설정이 확인됐다. 다중 replica는 현재 지원되는 소유권 모델이 아니므로 1 replica로 유지한다. 이벤트 뒤 `get_task`가 일시 실패하면 취소 신호를 놓칠 수 있는 경로를 찾아, 재확인 상태를 보존하도록 worker 코드를 수정했다. ledger·취소 동작 테스트 7개와 기존 worker 테스트 11개가 통과했다. 수정은 아직 배포 전이다.
+- Phase 3 감사에서 단일 Dispatcher 설정이 확인됐다. 다중 replica는 현재 지원되는 소유권 모델이 아니므로 1 replica로 유지한다. 이벤트 뒤 `get_task`가 일시 실패하면 취소 신호를 놓칠 수 있는 경로를 찾아 재확인 상태를 보존하도록 worker 코드를 수정·배포했다. ledger·취소 동작 테스트 7개와 기존 worker 테스트 11개가 통과했다.
 - Phase 6 감사는 idle 시점만 유효하다고 판정했다. 실행별 CPU·메모리 peak, 단계별 지연, Langfuse 사용량과 학습 연속성을 비교할 근거는 실제 성공 run이 생긴 뒤 수집해야 한다.
 
 ## 변경 이력

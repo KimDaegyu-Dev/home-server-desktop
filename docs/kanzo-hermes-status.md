@@ -35,7 +35,7 @@
 - 읽기 전용 코드 검토에서 Hermes 원문 결과, 게시 단계 표식, 최종 run 상태가 별도 영속화 경로를 쓰는 것을 확인했다. 결과 저장 뒤 실패·취소가 발생하면 결과와 실행 상태가 서로 다른 의미를 가질 수 있다. 검토한 코드만으로 실제 run에서 불일치가 발생했다고 단정할 수는 없다.
 - task/run ID는 Gateway session과 Langfuse metadata에 전달되지만, 워커가 최종 trace 상태를 reconcile하는 표식, generation 이벤트 중복 제거, delegate 부모·자식 trace 연결을 기록하는 경로는 확인되지 않았다. 이는 구현 범위의 공백이며 Langfuse 중복 관측이 실제 발생했다는 증거는 아니다.
 - 모델을 재실행하지 않고 최종 결과 상태를 대조하는 #48, generation 중복 여부와 delegate trace 연결을 검증하는 #49를 backlog 제안으로 추가했다. 둘 다 Backlog에 두었으며 구현, 프로필 변경, 추가 모델 실행은 시작하지 않았다.
-- Live sandbox 설정과 실제 쓰기 동작의 차이를 확인하기 위해, source SHA를 보존하며 `/workspace` 쓰기 거부와 `/scratch` 임시 쓰기만 검증하는 #50을 Backlog에 제안했다. 이 카드는 사용자가 Todo로 옮기기 전까지 실행하지 않는다.
+- Live sandbox 설정과 실제 쓰기 동작의 차이를 확인하기 위해 #50을 Backlog에 제안했다. 수락 기준은 source SHA를 보존하면서 terminal, Hermes file 도구, execute_code의 `/workspace` 쓰기를 각각 확인하고 `/scratch` 임시 쓰기를 검증하는 것이다. 이 카드는 사용자가 Todo로 옮기기 전까지 실행하지 않는다.
 
 ### 2026-11-15 — Phase 2·3·6 감사와 취소 감시 보강
 

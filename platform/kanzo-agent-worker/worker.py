@@ -565,7 +565,10 @@ class Worker:
         self.enabled = self.env.get("KANZO_ENABLED", "false").lower() == "true"
         self.client: McpClient | None = None
         self.mcp_lock = threading.Lock()
-        self.metrics = {"cycles": {}, "tasks": {}, "active": 0, "last_success": 0}
+        self.metrics = {
+            "cycles": {}, "tasks": {}, "active": 0, "last_success": 0,
+            "task_duration": {"count": {}, "sum": {}, "buckets": {}},
+        }
         self.heartbeat_path = self.state_dir / "worker-heartbeat"
         self.wake_queue: queue.Queue[str] = queue.Queue(maxsize=1)
         self.executor_retry_lock = threading.Lock()
@@ -703,6 +706,28 @@ class Worker:
                 for key, count in worker.metrics["tasks"].items():
                     kind, result = key.split("|", 1)
                     lines.append(f'kanzo_worker_tasks_total{{kind="{kind}",result="{result}"}} {count}')
+                duration = worker.metrics["task_duration"]
+                duration_bounds = (30, 60, 120, 300, 600, 1800, 3600)
+                lines += [
+                    "# HELP kanzo_worker_task_duration_seconds Time from task preparation start through worker finalization.",
+                    "# TYPE kanzo_worker_task_duration_seconds histogram",
+                ]
+                for key, count in duration["count"].items():
+                    kind, outcome = key.split("|", 1)
+                    observed = duration["buckets"].get(key, {})
+                    for bound in duration_bounds:
+                        lines.append(
+                            f'kanzo_worker_task_duration_seconds_bucket{{kind="{kind}",outcome="{outcome}",le="{bound}"}} {observed.get(bound, 0)}'
+                        )
+                    lines.append(
+                        f'kanzo_worker_task_duration_seconds_bucket{{kind="{kind}",outcome="{outcome}",le="+Inf"}} {count}'
+                    )
+                    lines.append(
+                        f'kanzo_worker_task_duration_seconds_sum{{kind="{kind}",outcome="{outcome}"}} {duration["sum"].get(key, 0.0):.6f}'
+                    )
+                    lines.append(
+                        f'kanzo_worker_task_duration_seconds_count{{kind="{kind}",outcome="{outcome}"}} {count}'
+                    )
                 lines += [
                     "# HELP kanzo_worker_task_active Whether a task is currently being processed.",
                     "# TYPE kanzo_worker_task_active gauge",
@@ -2172,6 +2197,7 @@ class Worker:
             return True
         self.ledger.transition(run_id, "preparing")
         self.metrics["active"] = 1
+        task_started_at = time.monotonic()
         try:
             details = self._call("get_task", {"id": task_id})
             project = task_id.rsplit("#", 1)[0]
@@ -2478,7 +2504,27 @@ class Worker:
                 if active_checkout and Path(active_checkout) != self.workspace and Path(active_checkout).exists():
                     shutil.rmtree(active_checkout, ignore_errors=True)
                 self.metrics["active"] = 0
+            elapsed = max(0.0, time.monotonic() - task_started_at)
+            kind = "code" if task.is_code else "noncode"
+            final_run = self.ledger.get(run_id)
+            final_state = final_run["state"] if final_run else "unknown"
+            outcome = {
+                "succeeded": "done", "review": "review", "waiting": "waiting",
+                "cancelled": "cancelled", "orphaned": "failed",
+            }.get(final_state, "unknown")
+            self._record_task_duration(kind, outcome, elapsed)
         return True
+
+    def _record_task_duration(self, kind: str, outcome: str, elapsed: float) -> None:
+        """Record bounded-cardinality task duration observations for Prometheus."""
+        key = f"{kind}|{outcome}"
+        metric = self.metrics["task_duration"]
+        metric["count"][key] = metric["count"].get(key, 0) + 1
+        metric["sum"][key] = metric["sum"].get(key, 0.0) + elapsed
+        buckets = metric["buckets"].setdefault(key, {})
+        for bound in (30, 60, 120, 300, 600, 1800, 3600):
+            if elapsed <= bound:
+                buckets[bound] = buckets.get(bound, 0) + 1
 
     def run(self) -> int:
         if not self.env.get("KANZO_EXECUTOR_API_URL", "").strip():

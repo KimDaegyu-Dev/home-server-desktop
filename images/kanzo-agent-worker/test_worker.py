@@ -9,6 +9,23 @@ from worker import (McpClient, Task, Worker, extract_waits_on, parse_catalog_car
 
 
 class WorkerParsingTests(unittest.TestCase):
+    def test_task_duration_metrics_use_cumulative_histogram_buckets(self):
+        state_dir = tempfile.TemporaryDirectory()
+        worker = Worker({"KANZO_WORKER_STATE_DIR": state_dir.name})
+
+        worker._record_task_duration("code", "done", 45)
+        worker._record_task_duration("code", "done", 120)
+        worker._record_task_duration("noncode", "review", 3700)
+
+        metric = worker.metrics["task_duration"]
+        self.assertEqual(metric["count"]["code|done"], 2)
+        self.assertEqual(metric["sum"]["code|done"], 165)
+        self.assertEqual(metric["buckets"]["code|done"], {60: 1, 120: 2, 300: 2, 600: 2, 1800: 2, 3600: 2})
+        self.assertEqual(metric["count"]["noncode|review"], 1)
+        self.assertEqual(metric["buckets"]["noncode|review"], {})
+        worker.ledger.close()
+        state_dir.cleanup()
+
     def test_parse_task_line_and_id(self):
         self.assertEqual(parse_task_line("ops#42 [todo] Add dashboard {code, urgent}"), ("ops#42", "todo", "Add dashboard {code, urgent}"))
         self.assertEqual(parse_task_id("Claimed ops#42"), "ops#42")

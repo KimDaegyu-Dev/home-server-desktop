@@ -1,7 +1,11 @@
-"""Draft Hermes 0.23.1 terminal provider backed by an internal Kanzo broker.
+"""Hermes 0.23.1 terminal provider backed by an internal Kanzo broker.
 
 Minimal broker contract (all paths are relative to ``KANZO_BROKER_URL``):
 
+* ``POST /v1/terminal/authorize`` with service Bearer auth and task, run, and
+  Hermes session IDs proves that the broker has a live binding for this exact
+  identity. It does not create an environment handle or authorize execution;
+  the provider must still resolve and authorize every operation normally.
 * ``POST /v1/terminal/resolve`` with service Bearer auth and
   ``{"hermes_session_id": "..."}`` returns HTTP 200 JSON:
   ``{"hermes_session_id": "...", "task_id": "...", "run_id": "...",
@@ -45,7 +49,9 @@ The broker service credential is read only by this in-process provider from
 ``KANZO_BROKER_TOKEN`` and is sent only as an HTTPS/cluster-internal HTTP
 Authorization header. It is never forwarded in execute requests or child
 process environments. Redirects are rejected to prevent credential forwarding.
-This file is an integration draft, not a production-ready sandbox boundary.
+Kanzo-scoped file writes are admitted by Hermes' host-side safe-root check only
+inside a broker-attributed one-shot session. Actual file operations still use
+the terminal provider and are enforced by the run pod's workspace mount.
 """
 
 from __future__ import annotations
@@ -628,6 +634,77 @@ class KanzoTerminalProvider(TerminalEnvironmentProvider):
 def register(ctx: Any) -> None:
     """Hermes user-plugin entry point."""
     ctx.register_terminal_environment_provider(KanzoTerminalProvider())
+    # Hermes applies HERMES_WRITE_SAFE_ROOT before ShellFileOperations asks for
+    # a terminal environment. The shared Gateway's process root is /opt/data,
+    # so a Kanzo path is rejected before it can reach the broker. Extend the
+    # roots only after the broker confirms this exact task/run/session binding;
+    # the run pod's mount remains the OS-level write authority.
+    from agent import file_safety
+
+    current_safe_roots = file_safety.get_safe_write_roots
+    if not getattr(current_safe_roots, "_kanzo_broker_workspace", False):
+        def _kanzo_safe_write_roots() -> set[str]:
+            roots = current_safe_roots()
+            try:
+                from agent.session_client_env import bound_client_env
+
+                client_env = bound_client_env()
+            except (ImportError, RuntimeError):
+                return roots
+            if not isinstance(client_env, dict):
+                return roots
+            source = session_context.get_session_env("HERMES_SESSION_SOURCE", "")
+            source = getattr(source, "value", source)
+            task_id = client_env.get("KANZO_TASK_ID")
+            run_id = client_env.get("KANZO_RUN_ID")
+            if (
+                source == "oneshot"
+                and client_env.get("KANZO_AUTOMATED_RUN") == "1"
+                and isinstance(task_id, str) and task_id.strip()
+                and isinstance(run_id, str) and run_id.strip()
+                and (not client_env.get("HERMES_KANBAN_TASK")
+                     or client_env.get("HERMES_KANBAN_TASK") == task_id)
+                and (not client_env.get("HERMES_KANBAN_RUN_ID")
+                     or client_env.get("HERMES_KANBAN_RUN_ID") == run_id)
+            ):
+                session_id = session_context.get_session_env("HERMES_SESSION_ID", "")
+                base_url = os.getenv("KANZO_BROKER_URL", "").strip()
+                token = os.getenv("KANZO_BROKER_TOKEN", "")
+                if (
+                    isinstance(session_id, str) and session_id.strip()
+                    and len(session_id) <= 256
+                    and not any(ord(char) < 0x20 for char in session_id)
+                    and base_url and token
+                ):
+                    try:
+                        proof = _BrokerClient(
+                            base_url, token, request_timeout=3
+                        ).post(
+                            "/v1/terminal/authorize",
+                            {
+                                "hermes_session_id": session_id,
+                                "task_id": task_id,
+                                "run_id": run_id,
+                            },
+                        )
+                    except Exception:
+                        # A broker outage or mismatch keeps the original safe
+                        # roots; the file operation fails closed before writes.
+                        return roots
+                    if (
+                        proof.get("hermes_session_id") == session_id
+                        and proof.get("task_id") == task_id
+                        and proof.get("run_id") == run_id
+                        and proof.get("workspace") == "/workspace"
+                        and proof.get("temp_dir") == "/scratch"
+                    ):
+                        roots.add(os.path.realpath("/workspace"))
+                        roots.add(os.path.realpath("/scratch"))
+            return roots
+
+        _kanzo_safe_write_roots._kanzo_broker_workspace = True  # type: ignore[attr-defined]
+        file_safety.get_safe_write_roots = _kanzo_safe_write_roots
+
     # Hermes' remote execute_code session kernel is a detached child process.
     # Kanzo's runner deliberately terminates the whole command process group
     # after each request, so that kernel cannot survive between commands. Tell

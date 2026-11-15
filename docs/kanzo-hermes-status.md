@@ -4,11 +4,10 @@
 
 ## 현재 상태
 
-- 확인 기준: 2026-11-15. 사용자가 `KANZO_EXECUTOR_API_TOKEN`을 추가했다. Kubernetes Secret `mcp/kanzo-agent-credentials`에서 디코드 값 64바이트를 확인했다. Vault MCP 읽기는 시간 초과되어 Vault 원본 필드는 직접 읽지 못했다.
-- Argo CD 애플리케이션 `kanzo-agent-worker`는 revision `7d01ee376d8d0c43ea6b4c43fb4083502c3b36e3`에서 `Synced / Healthy`다. Executor `3/3 Ready`, Dispatcher `2/2 Ready`이며 executor API `/readyz`는 `ready`를 반환했다.
-- WSL/K3s 런타임은 복구 후에도 상태가 일치하지 않는다. API는 노드를 `Ready`, 여러 Pod를 `Running`으로 보고하지만 `cni0`는 `NO-CARRIER`/`linkdown`이다. K3s 로그에 kubelet proxy `no route to host`가 남고, `kubectl exec`/`logs`도 `pod does not exist` 또는 `NotFound`로 실패한다. 실제 태스크는 검증하지 못했다.
-- 마지막으로 확보한 dispatcher 로그에서 MCPProxy가 `call_tool_read` 요청의 `kanzo:list_tasks`를 `destructive` 권한이 필요하다는 이유로 거부했다. 워커 토큰은 존재하지만, 실제 도구 분류와 권한 매핑을 확인해 바로잡아야 태스크를 진행할 수 있다.
-- 다음 작업: K3s Pod 네트워크와 kubelet proxy를 안정화하고, Kanzo 읽기 도구의 MCPProxy 경로/annotation을 확인한다. 이후 범위가 제한된 태스크로 claim, Hermes 실행, 결과/comment, 취소, Langfuse 연계를 검증한다.
+- 확인 기준: 2026-11-15. Executor/Dispatcher는 K3s 안에서 확인했다. Argo `kanzo-agent-worker` revision `8dccff206e3b9a23ed1aefe6f5c8b5583233055c`가 `Synced / Healthy`이며 Executor 3/3, Dispatcher 2/2 Ready다.
+- 이벤트 어댑터는 Kanzo SSE에 연결되고 재연결 직후 worker wake로 상태를 다시 맞춘다. 현재는 자동화 태스크를 추가하지 않았으며, `hermes-harness-lab#29`는 human-action 선행 카드 #31을 기다린다.
+- Langfuse용 세션별 Kanzo task/run ID 전달과 automated profile의 잘못된 `uid:10000` 귀속은 GitOps에 수정·배포했다. live init 로그와 세 프로필 설정은 확인됐지만, 수정 후 실제 실행 trace는 아직 대조하지 않았다.
+- 다음 작업: #29의 human-owned 선행 판단을 보존한 채, 승인된 Todo 실행 한 건에서 Kanzo 상태·run ledger·artifact·Gateway session·Langfuse metadata를 대조한다. 동시에 Kanzo API의 run-keyed claim/CAS 지원을 확인해 claim 후 ledger 기록 사이의 crash gap을 닫고, 이후 재연결/게시 멱등성과 Phase 6 성능·학습 보존을 검증한다.
 - V1 롤백 스냅샷: 커밋 `f11abf6` (`origin`에 push 완료). worker 기준 소스: `e59a758` (`feat(kanzo): persist and recover run artifacts`).
 ## 단계별 진행
 
@@ -18,8 +17,8 @@
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 다른 경로는 아직 기존 ReadOnly executor를 쓴다. plugin 복사·활성화 및 memory/reflection의 연속성은 클러스터에서 검증하지 않았다. |
 | 3. durable run ledger와 이벤트 | 일부 구현 | Hermes HOME PVC의 SQLite 장부에 run 상태·설정·소스 SHA·결과와 게시 체크포인트를 기록한다. 재시작 시 미종료 run을 자동 실행하지 않고, 저장 응답과 댓글의 run별 marker를 이용해 누락된 결과 댓글만 복구한 뒤 사람 검토로 보낸다. 이벤트 중복·재연결 구간, 다중 dispatcher lease/CAS, PR 및 다른 외부 게시의 멱등 재개, 실태스크 검증은 남아 있다. 자동 재시도는 추가하지 않는다. |
-| 4. 상주 executor와 작업 도구 격리 | 클러스터 cutover 진행 중, executor 준비 대기 | GitOps revision `e00fa29` 적용 중. 기존 worker는 0이며 migration은 검증 완료. executor init과 Vault token 주입이 미완료이고 dispatcher 및 실제 작업 검증은 시작하지 않았다. |
-| 5. 결과·추적·위임 | 시작 전 | 구조화된 완료 근거, run/session tracing, 자식 작업 예산과 결과 게시의 일관성을 구현·확인해야 한다. |
+| 4. 상주 executor와 작업 도구 격리 | 배포 완료, 일부 시나리오 검증 대기 | Executor와 Dispatcher는 별도 Deployment 및 영속 run state를 사용한다. 작업별 sandbox/lease, heartbeat, 취소·불확실성 격리 경로가 배포됐다. 동시성·복구·장기 작업 시나리오 검증은 남았다. |
+| 5. 결과·추적·위임 | 일부 완료 | 성공·실패·취소 결과와 artifact/run ledger가 기록되고, Hermes 단일 추적 경로 및 Kanzo session correlation을 확인했다. 최근 수정의 task/run trace metadata와 최종 상태 대조, delegate 예산 검증은 남았다. |
 | 6. 성능·학습 보존 검증 | 시작 전 | 동등 작업 비교와 학습 연속성·취소·격리 시나리오를 실행해야 한다. |
 
 ## 변경 이력
@@ -245,3 +244,4 @@
 - 자동 실행 프로필 `researcher`, `builder`, `reviewer`의 `end_user_attribution`을 false로 고정해 컨테이너 UID를 사람 사용자로 기록하지 않게 했다. 기본 프로필 설정은 유지한다.
 - Python 문법, Kustomize 렌더링, `git diff --check`를 확인했다. Argo `kanzo-agent-worker`는 revision `8dccff2`에서 Synced/Healthy이며 Executor 3/3, Dispatcher 2/2 Ready다. executor init 로그에 네 프로필 어댑터 적용이 남았고 live config에서 세 자동 프로필 값이 false임을 확인했다.
 - 아직 새 Kanzo 실행의 Langfuse trace에서 task/run ID와 userId 생략을 대조하지 않았다. #29는 #31 human-action 선행 상태라 자동 재개시키지 않았으며, 다음 유효한 Kanzo 실행 후 실제 trace 검증이 남아 있다.
+- Worker의 crash window도 확인했다. 현재 MCP `kanzo:next_task`는 project/filter만 받고 Kanzo에서 먼저 카드를 `doing`으로 바꾸며, 이후 worker가 run ID와 SQLite ledger row를 만든다. `kanzo:update_task` 스키마에는 expected status/version 또는 idempotency key가 없어 worker 단독으로 안전한 CAS 전환을 할 수 없다. Kanzo API 지원을 더 조사하기 전에는 claim 경로를 비원자적 read-then-update로 바꾸지 않는다.

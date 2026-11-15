@@ -30,6 +30,7 @@
 - 현재 live Argo Application `kanzo-agent-worker`는 revision `fb676c1356a04fee52fec8369609ce1c0a71ef36`에서 Synced/Healthy다. `mcp` namespace의 Dispatcher와 Executor는 각각 1/1 Ready다.
 - Live runner Pod `kanzo-run-6812471543ec06998002`는 broker 코드의 결정적 이름 규칙 `kanzo-run-<sha256(task_id:run_id)[0:20]>`에 `hermes-harness-lab#47` / `db69643f27a1`을 대입한 값과 일치한다. Pod는 08:47:27 UTC에 시작했고 Running이다. 설정은 `readOnlyRootFilesystem=true`, `/workspace` read-only, `/scratch` writable, `automountServiceAccountToken=false`다. namespace의 NetworkPolicy는 기본 ingress/egress deny이며 runner의 egress는 broker와 cluster DNS로 제한된다. 이는 run에 귀속된 설정 증거다. 실제 파일 쓰기 거부, 취소 시 자식 프로세스 회수, memory/skill 연속성은 여전히 별도 런타임 검증이 필요하다.
 - After user delegated roadmap execution, #50 was moved from Backlog to Todo at 09:02 UTC. It is queued behind the still-active #47 run and checks the terminal, file-tool, and execute_code write paths separately; no second run has started yet.
+- Executor의 live `hermes-home` volume은 PVC `kanzo-agent-hermes-home`이며, 현재 `/opt/data/home/.kanzo-bootstrap-version` 값은 `1`이다. 해당 버전 marker 이후 bootstrap 경로는 Hermes setup/profile 복사를 다시 하지 않고 `sync_hermes_env.py`로 루트와 세 프로필의 관리 대상 `.env` 값만 갱신한다. 이는 재시작 시 학습 파일을 초기화하는 경로가 없음을 뒷받침하지만, ReadOnly run에서 memory/skill을 쓰고 일반 run에서 재조회하거나 Pod 교체 뒤 실제로 이어지는 동작은 아직 검증되지 않았다.
 
 ### 2026-11-15 — Phase 5 정적 감사와 후속 제안
 

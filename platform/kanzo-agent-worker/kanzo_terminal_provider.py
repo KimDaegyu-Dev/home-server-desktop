@@ -51,6 +51,7 @@ This file is an integration draft, not a production-ready sandbox boundary.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -72,6 +73,8 @@ _DEFAULT_TIMEOUT_SECONDS = 120
 _MAX_TIMEOUT_SECONDS = 3600
 _POLL_INTERVAL_SECONDS = 0.25
 _MAX_EXEC_OUTPUT_BYTES = 2 * 1024 * 1024
+_LOG = logging.getLogger("kanzo-broker-terminal")
+_LOCAL_INTERACTIVE_SOURCES = frozenset({"acp", "cli", "desktop", "gui", "tui"})
 _SECRET_ENV_KEYS = frozenset(
     {
         "KANZO_BROKER_TOKEN",
@@ -504,13 +507,29 @@ class KanzoTerminalProvider(TerminalEnvironmentProvider):
         del kwargs  # Hermes may add provider options; they do not grant broker authority.
         source = session_context.get_session_env("HERMES_SESSION_SOURCE", "")
         source_value = getattr(source, "value", source)
-        automated = session_context.get_session_env("KANZO_AUTOMATED_RUN", "") == "1"
-        if source_value != "oneshot" and not automated:
-            # Keep the existing human Desktop/CLI experience on this shared
-            # profile. Automated one-shot sessions must have a broker mapping;
-            # they never reach this fallback when provisioning is incomplete.
+        try:
+            from agent.session_client_env import bound_client_env
+
+            raw_client_env = bound_client_env()
+        except (ImportError, RuntimeError):
+            raw_client_env = None
+        client_env = raw_client_env if isinstance(raw_client_env, dict) else {}
+        automated = client_env.get("KANZO_AUTOMATED_RUN") == "1"
+        task_marker = client_env.get("KANZO_TASK_ID", "")
+        run_marker = client_env.get("KANZO_RUN_ID", "")
+        kanban_task_marker = client_env.get("HERMES_KANBAN_TASK", "")
+        kanban_run_marker = client_env.get("HERMES_KANBAN_RUN_ID", "")
+        has_automation_marker = bool(
+            automated or source_value == "oneshot" or task_marker or run_marker
+            or kanban_task_marker or kanban_run_marker
+        )
+
+        if not has_automation_marker and source_value in _LOCAL_INTERACTIVE_SOURCES:
+            # Preserve local terminal use for explicitly identified human-facing
+            # surfaces. Unknown or missing sources fail closed below.
             from tools.terminal_tool_backends import _create_environment
 
+            _LOG.info("terminal backend resolved backend=local source=%s", source_value)
             return _create_environment(
                 "local",
                 image or "",
@@ -519,14 +538,28 @@ class KanzoTerminalProvider(TerminalEnvironmentProvider):
                 container_config=container_config,
                 task_id=task_id,
             )
-        expected_task_id = session_context.get_session_env("KANZO_TASK_ID", "")
-        expected_run_id = session_context.get_session_env("KANZO_RUN_ID", "")
+
+        if not has_automation_marker:
+            _LOG.error("terminal backend refused backend=none source=%s", source_value)
+            raise KanzoBrokerError("refusing terminal environment for unknown Hermes session source")
+
+        expected_task_id = task_marker
+        expected_run_id = run_marker
         if (
             not automated
             or not isinstance(expected_task_id, str) or not expected_task_id.strip()
             or not isinstance(expected_run_id, str) or not expected_run_id.strip()
         ):
+            _LOG.error("terminal backend refused backend=none source=%s task_id=%s run_id=%s",
+                       source_value, task_marker or "-", run_marker or "-")
             raise KanzoBrokerError("refusing automated session without its Kanzo task/run identity")
+        if (
+            (kanban_task_marker and kanban_task_marker != expected_task_id)
+            or (kanban_run_marker and kanban_run_marker != expected_run_id)
+        ):
+            _LOG.error("terminal backend refused backend=none source=%s task_id=%s run_id=%s reason=identity_alias_mismatch",
+                       source_value, expected_task_id, expected_run_id)
+            raise KanzoBrokerError("Kanzo session identity aliases do not match")
         session_id = session_context.get_session_env("HERMES_SESSION_ID", "")
         if (
             not isinstance(session_id, str)
@@ -534,6 +567,8 @@ class KanzoTerminalProvider(TerminalEnvironmentProvider):
             or len(session_id) > 256
             or any(ord(char) < 0x20 for char in session_id)
         ):
+            _LOG.error("terminal backend refused backend=none task_id=%s run_id=%s reason=missing_session_id",
+                       expected_task_id, expected_run_id)
             raise KanzoBrokerError("refusing terminal environment without an active Hermes session id")
         base_url = os.getenv("KANZO_BROKER_URL", "").strip()
         token = os.getenv("KANZO_BROKER_TOKEN", "")
@@ -557,6 +592,8 @@ class KanzoTerminalProvider(TerminalEnvironmentProvider):
         # Never trust a caller-provided cwd over the broker's leased workspace.
         mapped_cwd = _clean_absolute_path(mapping.get("cwd"), "cwd")
         _clean_absolute_path(mapping.get("temp_dir"), "temp_dir")
+        _LOG.info("terminal backend resolved backend=kanzo_broker task_id=%s run_id=%s",
+                  expected_task_id, expected_run_id)
         return KanzoTerminalEnvironment(
             broker=client,
             session_id=session_id,

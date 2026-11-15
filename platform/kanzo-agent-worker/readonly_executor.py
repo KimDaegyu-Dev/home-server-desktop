@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import queue
 import re
@@ -22,6 +24,7 @@ ACTIVE_LOCK = threading.Lock()
 ACTIVE_RUNS: dict[tuple[str, str], dict[str, object]] = {}
 PENDING_CANCELS: dict[tuple[str, str], float] = {}
 SESSION_LINE_RE = re.compile(r"^\s*(?:Session|session_id):\s*([A-Za-z0-9._:-]{8,128})\s*$", re.IGNORECASE)
+LOG = logging.getLogger("kanzo-readonly-executor")
 
 
 def terminate_process_group(process: subprocess.Popen[str]) -> None:
@@ -120,7 +123,7 @@ def sync_profile(profile: str) -> Path:
         raise ValueError(f"Hermes profile {profile!r} is not initialized")
     destination.mkdir(parents=True, exist_ok=True)
     for name in (
-        "config.yaml", ".env", "SOUL.md", "USER.md", "MEMORY.md",
+        "config.yaml", ".env", "SOUL.md", "USER.md",
         "system_prompt.md", "AGENTS.md", "CLAUDE.md", ".cursorrules", "auth.json",
     ):
         src, dst = source / name, destination / name
@@ -150,13 +153,119 @@ def sync_profile(profile: str) -> Path:
             encoding="utf-8",
         )
         dotenv.chmod(0o600)
-    for name in ("skills", "plugins", "scripts", ".omh"):
-        src, dst = source / name, destination / name
-        if src.is_dir():
-            if dst.exists():
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+    _sync_profile_state(source, destination)
     return destination
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sync_profile_state(source: Path, destination: Path) -> None:
+    """Three-way-sync mutable Hermes profile files without erasing local learning.
+
+    The source profile remains authoritative for ordinary settings files. For
+    skills, plugins, scripts, .omh data, and MEMORY.md, this records the last
+    source hash. Source updates flow into an unchanged destination; a local
+    destination edit wins on conflict and is logged for later review.
+    """
+    state_path = destination / ".kanzo-profile-sync.json"
+    if state_path.is_symlink():
+        LOG.error("Refusing to follow ReadOnly profile sync manifest symlink at %s", state_path)
+        return
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        LOG.warning("Ignoring invalid ReadOnly profile sync manifest at %s", state_path)
+        state = {}
+    previous = state.get("source_hashes", {}) if isinstance(state, dict) else {}
+    if not isinstance(previous, dict):
+        previous = {}
+
+    sources: dict[str, Path] = {}
+    for tree_name in ("skills", "plugins", "scripts", ".omh"):
+        source_root = source / tree_name
+        if not source_root.is_dir():
+            continue
+        for src in sorted(source_root.rglob("*")):
+            if src.is_symlink() or not src.is_file():
+                continue
+            relative = src.relative_to(source).as_posix()
+            sources[relative] = src
+    memory_source = source / "MEMORY.md"
+    if memory_source.is_file() and not memory_source.is_symlink():
+        sources["MEMORY.md"] = memory_source
+
+    current: dict[str, str] = {}
+    destination_root = destination.resolve()
+
+    def destination_path(relative: str) -> Path | None:
+        if relative != "MEMORY.md" and not relative.startswith(("skills/", "plugins/", "scripts/", ".omh/")):
+            return None
+        candidate = destination / relative
+        try:
+            candidate.resolve(strict=False).relative_to(destination_root)
+        except (OSError, ValueError):
+            LOG.warning("Refusing ReadOnly profile path outside its home: %s", relative)
+            return None
+        return candidate
+
+    for relative, src in sources.items():
+        source_hash = _file_sha256(src)
+        dst = destination_path(relative)
+        if dst is None:
+            continue
+        old_source_hash = previous.get(relative)
+        if dst.is_symlink():
+            LOG.warning("Preserving symlink in ReadOnly profile state: %s", dst)
+            current[relative] = source_hash
+            continue
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        elif not dst.is_file():
+            LOG.warning("Preserving non-file ReadOnly profile state at %s", dst)
+        else:
+            destination_hash = _file_sha256(dst)
+            if old_source_hash is None:
+                # First sync after upgrading from the old destructive copier:
+                # keep the already-persistent destination and establish a base.
+                if destination_hash != source_hash:
+                    LOG.info("Preserving existing ReadOnly profile file on initial sync: %s", relative)
+            elif destination_hash == old_source_hash:
+                if source_hash != old_source_hash:
+                    shutil.copy2(src, dst)
+            elif source_hash != old_source_hash and destination_hash != source_hash:
+                LOG.warning("ReadOnly profile sync conflict; keeping local file: %s", relative)
+        current[relative] = source_hash
+
+    for relative, old_source_hash in previous.items():
+        if relative in sources or not isinstance(relative, str) or not isinstance(old_source_hash, str):
+            continue
+        dst = destination_path(relative)
+        if dst is None:
+            continue
+        if dst.is_symlink() or not dst.is_file():
+            continue
+        if _file_sha256(dst) == old_source_hash:
+            dst.unlink()
+        else:
+            LOG.warning("Preserving locally changed file removed from source profile: %s", relative)
+
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = state_path.with_suffix(".json.tmp")
+    if temporary.is_symlink():
+        LOG.error("Refusing to follow ReadOnly profile sync temporary symlink at %s", temporary)
+        return
+    temporary.write_text(
+        json.dumps({"version": 1, "source_hashes": current}, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(state_path)
 
 
 class Handler(BaseHTTPRequestHandler):

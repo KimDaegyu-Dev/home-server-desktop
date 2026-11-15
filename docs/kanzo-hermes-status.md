@@ -343,3 +343,10 @@
 - `29cf385`의 Kanzo 전용 프로세스 fallback은 배포돼 있다. 현재 #37/#39 trace만으로 이 fallback 경로 자체가 호출됐다고 증명할 수는 없으며, session-scoped lookup이 정상 동작한다는 것을 증명한다. fallback 유지 여부는 실제 필요성을 확인한 뒤 판단한다.
 - #39는 `done`; #31과 #29도 기존 acceptance에 따라 `done`이다. #32와 #40은 backlog 검토 대기다. 현재 hermes-harness-lab에 실행 가능한 Todo가 없다.
 - 다음은 roadmap Phase 6의 대조 가능한 성공 작업 표본과 보존·복구 시나리오다. #37을 일반 성능 baseline으로 재사용하지 않는다.
+## 2026-11-15 — Phase 4 report audit
+
+- Kanzo `hermes-harness-lab#21` run `a21ea5e26930` reached a final Hermes response at 08:26 UTC (20 API calls, 18,085 response characters; Executor ledger `submit_state=completed`). The Kanzo card remains in Review while the report is corrected; no profile, skill, MCP or cluster settings changed.
+- Independent live checks found two stale report facts: installed Hermes is v0.23.1, not v0.17.0; and the current shared 18-entry `platform_toolsets.cli` list is `clarify, code_execution, connections, cronjob, delegation, file, image_gen, kanban, memory, omh, omh-lsp, session_search, skills, terminal, todo, tts, vision, web`. The report had incorrectly substituted disabled `browser`/`computer_use` and an unavailable `search` entry.
+- Fresh default CLI `hermes prompt-size --json` baseline: 191 skill index entries / 15,892 bytes; 30 tool schemas / 56,908 bytes. This is a CLI/default snapshot, not a profile-specific Gateway measurement; it supersedes the earlier 189/192 counts for this current baseline.
+- Backlog proposals #42–#46 remain in Backlog. #43’s toolset evidence and #45’s skill-index baseline were corrected. The Hermes Kanban still has #17-A Running and #17-C Todo while Kanzo parent #17 is Review; #46 records that reconciliation proposal.
+- Next: correct the remaining #21 report inventory and reconcile the outstanding #17 board state before accepting Phase 4. Then continue Phase 6 with comparable completed-run performance and recovery measurements; do not treat #21 as a performance baseline.

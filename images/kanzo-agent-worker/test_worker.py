@@ -124,6 +124,29 @@ read_only: true"""
         worker.ledger.close()
         state_dir.cleanup()
 
+    def test_worker_leaves_tasks_unclaimed_when_executor_is_restarting(self):
+        state_dir = tempfile.TemporaryDirectory()
+        worker = Worker({
+            "KANZO_ENABLED": "true",
+            "MCPPROXY_KANZO_AGENT_TOKEN": "token",
+            "KANZO_EXECUTOR_API_URL": "http://kanzo-agent-executor.mcp.svc.cluster.local:8766",
+            "KANZO_WORKER_STATE_DIR": state_dir.name,
+        })
+        calls = []
+        worker._call = lambda tool, args: calls.append((tool, args)) or ""
+        fake_client = type("MockClient", (), {"__init__": lambda self, *args: None, "connect": lambda self: None})
+
+        with patch("worker.McpClient", fake_client), patch.object(worker, "_schedule_executor_retry") as retry, patch(
+            "worker.urllib.request.urlopen", side_effect=ConnectionResetError("executor is restarting")
+        ):
+            self.assertFalse(worker.process_one())
+
+        self.assertEqual(calls, [])
+        self.assertEqual(worker.ledger.pending_claims(), [])
+        retry.assert_called_once_with()
+        worker.ledger.close()
+        state_dir.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()

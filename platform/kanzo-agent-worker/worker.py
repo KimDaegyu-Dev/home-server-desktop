@@ -568,6 +568,9 @@ class Worker:
         self.metrics = {"cycles": {}, "tasks": {}, "active": 0, "last_success": 0}
         self.heartbeat_path = self.state_dir / "worker-heartbeat"
         self.wake_queue: queue.Queue[str] = queue.Queue(maxsize=1)
+        self.executor_retry_lock = threading.Lock()
+        self.executor_retry_timer: threading.Timer | None = None
+        self.executor_retry_delay = 5
         self.active_change = threading.Event()
         self.active_lock = threading.Lock()
         self.active_run: dict[str, Any] | None = None
@@ -747,6 +750,57 @@ class Worker:
                 self.client = McpClient(self.mcp_url, self.token)
                 self.client.connect()
             return self.client.call(suffix, args)
+
+    def _schedule_executor_retry(self) -> None:
+        """Retry readiness with bounded backoff without polling Kanzo."""
+        with self.executor_retry_lock:
+            if self.executor_retry_timer and self.executor_retry_timer.is_alive():
+                return
+            delay = self.executor_retry_delay
+            self.executor_retry_delay = min(delay * 2, 30)
+
+            def wake() -> None:
+                with self.executor_retry_lock:
+                    self.executor_retry_timer = None
+                try:
+                    self.wake_queue.put_nowait("executor-readiness")
+                except queue.Full:
+                    pass
+
+            self.executor_retry_timer = threading.Timer(delay, wake)
+            self.executor_retry_timer.daemon = True
+            self.executor_retry_timer.start()
+
+    def _executor_ready_for_claim(self) -> bool:
+        """Do not claim Kanzo work while the resident executor is unavailable."""
+        base_url = self.env.get("KANZO_EXECUTOR_API_URL", "").strip().rstrip("/")
+        if not base_url:
+            return True
+        request = urllib.request.Request(
+            base_url + "/readyz",
+            headers={"Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"executor readiness returned HTTP {response.status}")
+                payload = json.loads(response.read().decode("utf-8"))
+            if isinstance(payload, dict) and payload.get("status") == "ready":
+                with self.executor_retry_lock:
+                    self.executor_retry_delay = 5
+                    timer = self.executor_retry_timer
+                    self.executor_retry_timer = None
+                if timer:
+                    timer.cancel()
+                return True
+            raise RuntimeError("executor readiness response was not ready")
+        except Exception as exc:
+            LOG.warning(
+                "Executor is not ready; leaving Kanzo tasks unclaimed (%s)",
+                type(exc).__name__,
+            )
+            self._schedule_executor_retry()
+            return False
 
     def _active_task_cancel_requested(self, active: dict[str, Any]) -> bool | None:
         try:
@@ -2000,6 +2054,8 @@ class Worker:
         self.client = McpClient(self.mcp_url, self.token)
         self.client.connect()
         self._reconcile_ledger()
+        if not self._executor_ready_for_claim():
+            return False
         # Doing catalog cards are the sole project activation switch.
         catalog = self.env.get("KANZO_CATALOG_PROJECT", "").strip()
         route_by_slug: dict[str, ProjectRoute] = {}

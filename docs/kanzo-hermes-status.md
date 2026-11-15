@@ -5,7 +5,7 @@
 ## 현재 상태
 
 - 확인 기준: 2026-11-15. Argo CD `kanzo-agent-worker`는 revision `fb676c1356a04fee52fec8369609ce1c0a71ef36`에서 Synced/Healthy다. Dispatcher와 Executor는 각각 1/1 Ready이며, 별도 worker Deployment는 0 replicas다.
-- #29, #31, #39는 Done이다. #33/#34도 Done, #35는 `declined` 이유를 남기고 Done 처리됐다. #32, #40, #43, #44, #46, #48, #49는 Backlog다. #47은 Phase 6 동일 조건 기준선 작업으로 Todo에 올린 뒤 run `db69643f27a1`이 08:47 UTC에 시작되어 현재 실행 중이다.
+- #29, #31, #39는 Done이다. #33/#34도 Done, #35는 `declined` 이유를 남기고 Done 처리됐다. #32, #40, #43, #44, #46, #48, #49, #50은 Backlog다. #47은 Phase 6 동일 조건 기준선 작업으로 Todo에 올린 뒤 run `db69643f27a1`이 08:47 UTC에 시작되어 현재 실행 중이다.
 - tool-free 정책은 Hermes에 `no_mcp` toolset sentinel을 전달해 프로필 MCP까지 포함한 도구 호출을 차단한다. #39 run `ac261e85586d`는 기대한 응답을 반환했고, researcher session DB의 `tool_call_count=0`, executor ledger의 completed 상태 및 Langfuse의 도구 없는 trace를 확인했다.
 - Langfuse task/run 귀속이 live canary로 확인됐다. #39 executor ledger task/run/session 매핑은 trace `975c391d227442973fa4338d29136e94`의 session ID와 일치한다. Observations API v2를 `fields=core,basic,metadata`로 조회했을 때 root `CHAIN`과 `GENERATION` 모두 `kanban_task_id=hermes-harness-lab#39`, `kanban_run_id=ac261e85586d`를 가진다. metadata가 `null`로 보였던 이전 조회는 기본 field set에서 metadata group을 요청하지 않아 생긴 관측 오류였다.
 - 기존 #37 trace `c68e83bdc95fa51675b53ffd53201e34`도 metadata field group을 지정해 재조회했다. 27개 observation에 task/run ID가 모두 있으며, 이전 Phase 6 표본 설명은 유지한다. #37의 상충 지시는 정상 one-turn latency baseline으로 쓰지 않는다.
@@ -18,7 +18,7 @@
 |---|---|---|
 | 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
-| 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 프로필 DB와 memory/consolidation 데이터가 PVC에 존재하며 같은 프로필 경로를 가리키는 것도 확인됐다. 브로커 명세 테스트 2개와 live sandbox Pod 설정에서 runner `/workspace` read-only, root filesystem read-only, service-account token 자동 마운트 비활성화를 확인했다. 이는 설정 증거이며 실제 파일 쓰기 거부 동작은 아직 확인하지 않았다. ReadOnly run에서 만든 memory·skill의 일반 run 회수 및 Pod 교체 후 연속성, Desktop의 동일 Gateway 연결도 아직 입증되지 않았다. |
+| 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 프로필 DB와 memory/consolidation 데이터가 PVC에 존재하며 같은 프로필 경로를 가리키는 것도 확인됐다. 브로커 명세 테스트 2개와 live sandbox Pod 설정에서 runner `/workspace` read-only, root filesystem read-only, service-account token 자동 마운트 비활성화를 확인했다. 이는 설정 증거이며 실제 파일 쓰기 거부 동작은 아직 확인하지 않았다(#50 제안). ReadOnly run에서 만든 memory·skill의 일반 run 회수 및 Pod 교체 후 연속성, Desktop의 동일 Gateway 연결도 아직 입증되지 않았다. |
 | 3. durable run ledger와 이벤트 | claim 복구 구현·배포, 주요 live 경로 확인, 종료·복구 검증 일부 대기 | Kanzo `run_id` claim, SQLite intent 복구, SSE wake 및 readiness gate가 배포됐다. 활성 worker drain도 반영됐다. 외부 댓글 게시 중 종료와 restart 복구, 경합 조건은 남아 있다. 다중 dispatcher lease/CAS는 미구현이며 replica 1개를 유지한다. 자동 재시도는 추가하지 않는다. |
 | 4. 상주 executor와 작업 도구 격리 | 배포 완료, 일부 시나리오 검증 대기 | Executor와 Dispatcher는 별도 Deployment 및 영속 run state를 사용한다. 작업별 sandbox/lease, heartbeat, 취소·불확실성 격리 경로가 배포됐다. Live sandbox runner는 `readOnlyRootFilesystem=true`, `/workspace` read-only, `/scratch` writable, service-account token 자동 마운트 비활성이며, namespace에는 default-deny ingress/egress와 broker·DNS 예외가 있다. 이는 배포 설정 증거다. 실제 쓰기 차단, 취소 뒤 자식 프로세스 회수, 동시성·복구·장기 작업은 아직 검증이 남았다. |
 | 5. 결과·추적·위임 | task/run metadata live canary 통과, terminal outcome·generation/delegation 검증 대기 | #39 run `ac261e85586d`에서 executor ledger→Gateway session→Langfuse trace를 같은 ID로 대조했다. `fields=metadata`를 명시한 Observations API v2 응답에서 root와 generation 모두 task/run ID가 일치한다. 정적 코드 검토에서는 결과 저장과 최종 ledger/Kanzo 상태 전이가 별도 경로이고, Langfuse terminal 상태 reconcile 기록, generation 중복 판별, delegate 부모·자식 식별 연결은 확인되지 않았다. 이는 실제 trace 중복이나 불일치가 발생했다는 증거가 아니며 각각 #48, #49에서 검증한다. |
@@ -35,6 +35,7 @@
 - 읽기 전용 코드 검토에서 Hermes 원문 결과, 게시 단계 표식, 최종 run 상태가 별도 영속화 경로를 쓰는 것을 확인했다. 결과 저장 뒤 실패·취소가 발생하면 결과와 실행 상태가 서로 다른 의미를 가질 수 있다. 검토한 코드만으로 실제 run에서 불일치가 발생했다고 단정할 수는 없다.
 - task/run ID는 Gateway session과 Langfuse metadata에 전달되지만, 워커가 최종 trace 상태를 reconcile하는 표식, generation 이벤트 중복 제거, delegate 부모·자식 trace 연결을 기록하는 경로는 확인되지 않았다. 이는 구현 범위의 공백이며 Langfuse 중복 관측이 실제 발생했다는 증거는 아니다.
 - 모델을 재실행하지 않고 최종 결과 상태를 대조하는 #48, generation 중복 여부와 delegate trace 연결을 검증하는 #49를 backlog 제안으로 추가했다. 둘 다 Backlog에 두었으며 구현, 프로필 변경, 추가 모델 실행은 시작하지 않았다.
+- Live sandbox 설정과 실제 쓰기 동작의 차이를 확인하기 위해, source SHA를 보존하며 `/workspace` 쓰기 거부와 `/scratch` 임시 쓰기만 검증하는 #50을 Backlog에 제안했다. 이 카드는 사용자가 Todo로 옮기기 전까지 실행하지 않는다.
 
 ### 2026-11-15 — Phase 2·3·6 감사와 취소 감시 보강
 

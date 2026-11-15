@@ -212,3 +212,11 @@
 - 대형 worker 코드 ConfigMap의 client-side apply 주석 크기 초과를 해당 ConfigMap의 Server-Side Apply로 바꿨다. Hermes broker plugin manifest의 개행 escaping 오류도 수정해 새 executor Pod에서 재확인 중이다.
 - 현재 Argo는 `734afc7` 롤아웃 중이며 새 executor Pod의 Hermes 초기화 단계다. Kubernetes Secret에는 `KANZO_EXECUTOR_API_TOKEN` 항목이 있지만 디코드 값 길이는 0이다. Executor API는 32자 미만 토큰이면 시작을 거부한다. dispatcher는 아직 실행되지 않았고 Kanzo 작업도 처리하지 않았다.
 - 필요한 Vault 항목은 mount `kv`, path `mcp/kanzo-agent`, field `KANZO_EXECUTOR_API_TOKEN`에 비어 있지 않은 실제 토큰이다. MCP Vault 도구 세션도 아직 Vault 인증 토큰을 받지 못해 직접 확인할 수 없다.
+
+### 2026-11-15 — Executor 토큰 반영, heartbeat 수정 롤아웃
+
+- 사용자가 `KANZO_EXECUTOR_API_TOKEN`을 추가한 뒤 live Kubernetes Secret의 항목을 확인했다. 디코드 값은 64바이트이며 실제 값은 출력하거나 문서화하지 않았다.
+- 복구 후 생성한 읽기 전용 카나리 `hermes-harness-lab#29`는 run `70e4105000c1` 실행 30초 무렵 `AttributeError: 'Worker' object has no attribute '_heartbeat_sandbox'`로 종료됐다. heartbeat 호출 경로는 있었지만 구현 메서드가 누락된 것이 원인이다. 워커는 이를 실패로 처리해 카드를 review/human=true로 보냈고, 자동 재시도는 하지 않았다.
+- `711a1fe`에서 run-scoped sandbox lease heartbeat 메서드를 추가하고 GitHub `main`에 반영했다. Argo가 새 revision을 감지한 뒤 상태 migration hook을 완료하고 Executor와 Dispatcher를 순차 재시작했다. 최종 상태는 Argo `Synced/Healthy`, revision `711a1fe901f4e64b9056bcaf5eabd58d21193d8e`, Executor 1/1 Ready, Dispatcher 1/1 Ready다.
+- live Dispatcher ConfigMap에 `_heartbeat_sandbox` 정의가 있고 실행 중인 모듈에서 `Worker` 클래스 메서드로 로드되는 것을 확인했다. Executor API `http://127.0.0.1:8766/readyz`는 `200 {"status":"ready"}`를 반환한다.
+- Canary #29는 review/human=true 상태 그대로 두었고 다시 실행하지 않았다. 수정된 heartbeat의 실제 작업 경로 검증은 새 명시적 Todo 실행이 필요하다. 그 전까지 이 수정은 배포 및 모듈 로드까지 확인된 상태로 기록한다.

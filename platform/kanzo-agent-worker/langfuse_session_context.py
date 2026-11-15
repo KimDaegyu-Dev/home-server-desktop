@@ -23,21 +23,28 @@ OLD = '''def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 '''
 NEW = '''def _env(name: str, default: str = "") -> str:
-    # Kanzo IDs are bound to the active Gateway session, never to the shared
-    # Gateway process environment (which may serve multiple sessions at once).
+    # Prefer the active Gateway session. A dispatcher-owned Kanzo worker has a
+    # dedicated process with its own HERMES_KANBAN_* values, so use those only
+    # when that process is explicitly marked as a Kanzo worker. Never read
+    # these identifiers from an unmarked, shared Gateway process environment.
     session_name = {"HERMES_KANBAN_TASK": "KANZO_TASK_ID",
                     "HERMES_KANBAN_RUN_ID": "KANZO_RUN_ID"}.get(name)
     if session_name:
         try:
             from agent.session_client_env import bound_client_env
             session_env = bound_client_env()
-            if not isinstance(session_env, dict):
-                return default.strip()
-            value = session_env.get(session_name) or session_env.get(name)
+            value = (session_env.get(session_name) or session_env.get(name)
+                     if isinstance(session_env, dict) else None)
             if value:
                 return str(value).strip()
         except Exception:
-            return default.strip()
+            pass
+        # Kanzo's managed executor binds these variables to a dedicated worker
+        # process, not Gateway's session_client_env context. This guarded
+        # fallback preserves per-run isolation while allowing its traces to be
+        # joined to the Kanzo card and execution.
+        if os.environ.get("HERMES_KANBAN_TASK", "").strip():
+            return os.environ.get(name, default).strip()
         return default.strip()
     return os.environ.get(name, default).strip()
 '''

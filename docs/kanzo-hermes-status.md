@@ -350,3 +350,9 @@
 - Fresh default CLI `hermes prompt-size --json` baseline: 191 skill index entries / 15,892 bytes; 30 tool schemas / 56,908 bytes. This is a CLI/default snapshot, not a profile-specific Gateway measurement; it supersedes the earlier 189/192 counts for this current baseline.
 - Backlog proposals #42–#46 remain in Backlog. #43’s toolset evidence and #45’s skill-index baseline were corrected. The Hermes Kanban still has #17-A Running and #17-C Todo while Kanzo parent #17 is Review; #46 records that reconciliation proposal.
 - Phase 4 is accepted with the corrections recorded on #21. The outstanding #17 Hermes Kanban state remains a separate follow-up tracked by backlog #46. Phase 6 inspection found the worker duration histogram has only kind/outcome labels and cannot attribute resource peaks to individual runs; a bounded comparable-run measurement proposal is backlog #47. No Todo task was promoted. Do not treat #21 as a performance baseline.
+## 2026-11-15 — Phase 6 historical canary sample
+
+- Read-only Grafana queries matched logged session windows to executor pod `kanzo-agent-executor-76f997cfc6-rh5q4`; Prometheus itself exposes only low-cardinality `kind`/`outcome` histogram labels, not run IDs.
+- #31 run `14f312e37d65` (researcher/iq_3s): session 05:21:42–05:28:21 UTC, 138.03s terminal probe, 14 API calls. Window peak gateway CPU ~0.564 cores and gateway working set ~1.306 GB; whole-pod CPU ~0.606 cores and working set ~1.725 GB.
+- #29 run `aa7d46eea6c0` (researcher/iq_3s): session 05:50:39–05:52:35 UTC, 45.95s terminal probe, 7 API calls. Window peak gateway CPU ~0.130 cores and gateway working set ~1.339 GB; whole-pod CPU ~0.130 cores and working set ~1.803 GB.
+- These timestamp-correlated pod peaks are approximate and include the full session window; the probe scopes differ, so they are preliminary observations rather than a comparable baseline. Added them to backlog #47; #47 remains Backlog and no task was promoted.

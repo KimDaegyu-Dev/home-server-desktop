@@ -206,6 +206,8 @@ class KanzoTerminalEnvironment:
         self._environment_handle = mapping["environment_handle"]
         self.cwd = _clean_absolute_path(mapping.get("cwd", cwd), "cwd")
         self._temp_dir = _clean_absolute_path(mapping.get("temp_dir"), "temp_dir")
+        if self.cwd != "/workspace" or self._temp_dir != "/scratch":
+            raise KanzoBrokerError("broker returned an unsupported sandbox workspace or temp directory")
         self.timeout = timeout
         self._cleaned = False
         self._closing = False
@@ -269,6 +271,13 @@ class KanzoTerminalEnvironment:
         if stdin_data is not None and len(stdin_data.encode("utf-8")) > _MAX_STDIN_BYTES:
             raise ValueError("stdin_data exceeds the size limit")
         effective_cwd = _clean_absolute_path(cwd or self.cwd, "cwd")
+        # Hermes execute_code's staging and cleanup helpers deliberately run
+        # absolute-path operations with cwd="/". The per-run runner accepts
+        # only /workspace and /scratch as initial working directories, so map
+        # that root cwd request to the broker-provided writable scratch area.
+        # Commands still operate on their explicit absolute paths.
+        if effective_cwd == "/":
+            effective_cwd = self._temp_dir
         try:
             effective_timeout = int(timeout or self.timeout or _DEFAULT_TIMEOUT_SECONDS)
         except (TypeError, ValueError):

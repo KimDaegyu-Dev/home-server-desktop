@@ -220,3 +220,11 @@
 - `711a1fe`에서 run-scoped sandbox lease heartbeat 메서드를 추가하고 GitHub `main`에 반영했다. Argo가 새 revision을 감지한 뒤 상태 migration hook을 완료하고 Executor와 Dispatcher를 순차 재시작했다. 최종 상태는 Argo `Synced/Healthy`, revision `711a1fe901f4e64b9056bcaf5eabd58d21193d8e`, Executor 1/1 Ready, Dispatcher 1/1 Ready다.
 - live Dispatcher ConfigMap에 `_heartbeat_sandbox` 정의가 있고 실행 중인 모듈에서 `Worker` 클래스 메서드로 로드되는 것을 확인했다. Executor API `http://127.0.0.1:8766/readyz`는 `200 {"status":"ready"}`를 반환한다.
 - Canary #29는 review/human=true 상태 그대로 두었고 다시 실행하지 않았다. 수정된 heartbeat의 실제 작업 경로 검증은 새 명시적 Todo 실행이 필요하다. 그 전까지 이 수정은 배포 및 모듈 로드까지 확인된 상태로 기록한다.
+
+### 2026-11-15 — Langfuse 중복 trace 경로 정리
+
+- LiteLLM OTLP trace가 Alloy를 통해 Langfuse로 재전송되던 경로를 제거했다. Alloy의 Langfuse exporter/identity transform/전용 키 주입을 삭제하고, OTLP metrics → Prometheus remote write 경로는 유지했다. LiteLLM의 OTLP endpoint와 ServiceMonitor 설정도 유지했다.
+- `2eec578`을 GitHub `main`에 반영했다. 상위 Argo Application을 새로고침한 뒤 `home-server-wsl` 및 `monitoring-alloy`가 Synced/Healthy가 됐고, Alloy Pod가 새 ReplicaSet으로 교체됐다. live Alloy ConfigMap에는 `metrics` output과 Prometheus remote write만 남았으며 trace output과 Langfuse exporter는 없다. 실행 중인 Alloy 컨테이너 환경에도 Langfuse 키가 주입되지 않는다. Alloy는 정상 기동 로그를 남겼다.
+- 상주 Hermes에 설치된 Langfuse 플러그인 코드를 live 컨테이너에서 확인했다. `HERMES_KANBAN_TASK`와 `HERMES_KANBAN_RUN_ID`를 trace metadata의 `kanban_task_id`/`kanban_run_id`로 읽고 Hermes session ID를 Langfuse session grouping에 사용하는 구현이다. Gateway session 생성 코드가 해당 두 환경 값을 설정한다. 따라서 ID 전달 경로는 코드상 연결됐지만 실제 실행 trace의 metadata/session 값은 아직 대조하지 않았다.
+- 사용자 식별은 플러그인에서 인증된 플랫폼 sender ID가 제공될 때만 `user_id`를 설정한다. Kanzo 자동 실행의 실제 요청자를 확인하지 못한 상태에서 `uid:10000`을 사용자 ID로 쓰지 않는다.
+- 남은 Phase 5 확인: 실제 Kanzo run 한 건으로 task/run/session ID와 Kanzo·run ledger·Langfuse를 대조하고, Hermes에서 generation이 한 번만 보이는지 확인한다. `hermes-harness-lab#29`는 review/human=true라 재실행하지 않았다. Alloy 설정 YAML 파싱과 Prometheus 경로 보존 확인은 완료했으며, 클러스터에서는 Alloy 재기동까지 확인했다.

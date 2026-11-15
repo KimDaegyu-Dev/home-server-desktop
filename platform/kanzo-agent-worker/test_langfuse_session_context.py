@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import contextvars
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -12,24 +11,30 @@ import types
 import unittest
 from unittest.mock import patch
 
-
-SOURCE = Path(__file__).with_name("langfuse_session_context.py")
+import langfuse_session_context
 
 
 def load_patched_env_helper():
-    tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
-    value = next(
-        ast.literal_eval(node.value)
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "NEW" for target in node.targets)
-    )
     namespace = {"os": os}
-    exec(compile(value, str(SOURCE), "exec"), namespace)
+    exec(compile(langfuse_session_context.NEW, str(Path(langfuse_session_context.__file__)), "exec"), namespace)
     return namespace["_env"]
 
 
 class LangfuseSessionContextTests(unittest.TestCase):
+    def test_existing_session_patch_is_upgraded_to_no_global_id_fallback(self) -> None:
+        updated, changed = langfuse_session_context.patch_plugin_text(langfuse_session_context.PREVIOUS)
+
+        self.assertTrue(changed)
+        self.assertEqual(updated, langfuse_session_context.NEW)
+        self.assertIn("return default.strip()", updated)
+        self.assertNotIn("            pass\n    return os.environ.get(name, default).strip()", updated)
+
+    def test_current_patch_is_idempotent(self) -> None:
+        updated, changed = langfuse_session_context.patch_plugin_text(langfuse_session_context.NEW)
+
+        self.assertFalse(changed)
+        self.assertEqual(updated, langfuse_session_context.NEW)
+
     def test_concurrent_sessions_keep_their_own_kanzo_ids(self) -> None:
         env_helper = load_patched_env_helper()
         session_values = contextvars.ContextVar("session_values", default={})

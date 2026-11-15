@@ -637,11 +637,15 @@ def register(ctx: Any) -> None:
 
     current = code_kernel_remote.execute_in_remote_kernel
     if not getattr(current, "_kanzo_broker_oneshot", False):
-        def _execute_in_remote_kernel(env: Any, *args: Any, **kwargs: Any) -> Any:
+        def _execute_in_remote_kernel(*args: Any, **kwargs: Any) -> Any:
+            # Hermes' caller passes `code` positionally and `env` by keyword.
+            # Accept the original call shape unchanged; a fixed first parameter
+            # here binds `code` as env and then raises on the env keyword.
+            env = kwargs.get("env")
             backend = getattr(env, "_hermes_backend_name", "")
             if isinstance(backend, str) and backend.strip().lower() == "kanzo_broker":
                 return None
-            return current(env, *args, **kwargs)
+            return current(*args, **kwargs)
 
         _execute_in_remote_kernel._kanzo_broker_oneshot = True  # type: ignore[attr-defined]
         code_kernel_remote.execute_in_remote_kernel = _execute_in_remote_kernel

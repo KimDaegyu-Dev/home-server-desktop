@@ -7,9 +7,10 @@
 - 확인 기준: 2026-11-15. Argo CD `kanzo-agent-worker`는 revision `c24c3593fd5988cc02d04e719e438a525bac6593`에서 Synced/Healthy다. Dispatcher와 Executor는 각각 1/1 Ready이고, Dispatcher worker의 `kanzo_worker_task_active=0`이다. 별도 worker Deployment는 0 replicas이며 실제 상주 worker는 Dispatcher Pod 안에서 동작한다.
 - #29 read-only canary와 #31의 정정된 acceptance는 완료됐다. human-action #33/#34도 정리됐고 중복 #35는 declined 이유를 남기고 완료 처리했다. #32는 backlog 검토 대기다.
 - Langfuse Phase 5 코드가 배포됐다. 각 Gateway session.create에 해당 Kanzo task/run ID만 주입하고, session context가 없거나 조회에 실패하면 process-wide 값으로 대체하지 않는다. 동시 세션·누락·helper upgrade/idempotency 회귀 테스트 7개가 통과했다. 변경 이후 실제 run trace의 Langfuse metadata 대조는 아직 남아 있다.
-- Phase 6 worker duration histogram이 배포됐고 live `/metrics`에서 metric family를 확인했다. 현재 표본은 0건이라 첫 완료 run 뒤 count/bucket이 생기는지 확인해야 한다. label은 code/noncode와 제한된 outcome만 사용하며 task/run ID는 넣지 않는다. Worker suite 14개, Langfuse suite 5개, Gateway session suite 2개, event-adapter signal suite 1개가 통과했다.
+- Phase 6 worker duration histogram이 배포됐고 #36 종료 뒤 live `/metrics`에서 `noncode/review count=1`을 확인했다. Prometheus target `kanzo-agent-worker`는 `up=1`이며 직접 API query에서 같은 histogram count와 tasks_total을 확인했다. Worker suite 14개, Langfuse suite 5개, Gateway session suite 2개, event-adapter signal suite 1개가 통과했다.
+- Canary worker는 Grafana MCP schema 인자 오류를 여러 번 냈고, task result의 “histogram 없음” 판정은 독립 Prometheus query와 달랐다. direct query로 scrape 완료를 확인했다. 다음 검증 절차는 agent에게 PromQL 인자를 직접 맡기지 않고 API/UI를 이용해 수동 대조한다.
 - 이번 rollout에서 이전 event-adapter 컨테이너가 PID 1 SIGTERM을 무시해 Pod 종료를 막았다. worker가 drain 후 종료했고 active task가 없음을 확인한 뒤 오래된 Pod만 정리했다. event-adapter가 SIGTERM/SIGINT를 처리하도록 수정한 revision `c24c359`을 배포했고 새 Dispatcher Pod는 정상 Ready다.
-- Live canary: 새 검증용 #36이 read-only route로 실행 중이다. Kanzo run `8657af1c664d`, Langfuse session `local-92115c3ed358acaaa0425c442bcf91539f7a0e3cfa312251cce1a38df283386d`, trace `c606f72ed93732883e424bfc22f431c1`을 ledger/API에서 연결했다. 최근 query에서 94 observations를 봤고 task는 아직 `doing`; 최종 trace metadata와 worker duration sample은 아직 판정하지 않았다.
+- Live canary #36은 read-only route 특성에 따라 `review, human=true`로 끝났다. Run `8657af1c664d`, Langfuse session `local-92115c3ed358acaaa0425c442bcf91539f7a0e3cfa312251cce1a38df283386d`, trace `c606f72ed93732883e424bfc22f431c1`의 session join을 확인했다. Langfuse v4 events_only의 공개 Observations API는 session/trace ID는 주지만 trace-level metadata 조회 경로는 제공하지 않아 task/run metadata 직접 검증은 미완료다. 잘못된 UID 귀속은 없고 userId는 빈 값이다.
 - V1 롤백 스냅샷은 `f11abf6`이며 origin에 push돼 있다. worker 기준 소스 커밋은 `e59a758`이다.
 
 ## 단계별 진행

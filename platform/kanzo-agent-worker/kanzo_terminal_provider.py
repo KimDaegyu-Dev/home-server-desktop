@@ -628,3 +628,20 @@ class KanzoTerminalProvider(TerminalEnvironmentProvider):
 def register(ctx: Any) -> None:
     """Hermes user-plugin entry point."""
     ctx.register_terminal_environment_provider(KanzoTerminalProvider())
+    # Hermes' remote execute_code session kernel is a detached child process.
+    # Kanzo's runner deliberately terminates the whole command process group
+    # after each request, so that kernel cannot survive between commands. Tell
+    # Hermes to use its bounded per-call script path for this backend; that
+    # path still routes every command through the same run lease and sandbox.
+    from tools import code_kernel_remote
+
+    current = code_kernel_remote.execute_in_remote_kernel
+    if not getattr(current, "_kanzo_broker_oneshot", False):
+        def _execute_in_remote_kernel(env: Any, *args: Any, **kwargs: Any) -> Any:
+            backend = getattr(env, "_hermes_backend_name", "")
+            if isinstance(backend, str) and backend.strip().lower() == "kanzo_broker":
+                return None
+            return current(env, *args, **kwargs)
+
+        _execute_in_remote_kernel._kanzo_broker_oneshot = True  # type: ignore[attr-defined]
+        code_kernel_remote.execute_in_remote_kernel = _execute_in_remote_kernel

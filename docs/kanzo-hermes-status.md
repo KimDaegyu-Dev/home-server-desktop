@@ -387,3 +387,8 @@
 - `/scratch` did not exist and could not be created because the reachable root filesystem was read-only. `/workspace` had a read-write ext4 mount. The workspace was empty and had no Git metadata, so no checkout SHA could be recorded; the marker was removed and cleanup was confirmed. No persistent Hermes home, memory, skill, or deployment was changed.
 - This is a confirmed automated-session broker-routing/isolation defect: the `read_only` flag does not currently guarantee broker sandbox execution. Do not use read-only Kanzo runs for untrusted repository content until fixed. Backlog #51 tracks routing automated sessions to the broker sandbox; #52 tracks recording the resolved backend so future fallback is visible. #47 and #50 are both in Review, and no active run was reported at 09:47 UTC.
 - Corrective implementation and rollout are still pending. Current Windows and WSL environments have no kubeconfig/current context; Kanzo and Grafana MCP can read board/metrics but cannot provide direct `kubectl` pod operations or perform/verify the rollout here.
+
+## 2026-11-15 K3s access correction
+
+- Follow-up confirmed the cluster is directly accessible from WSL with `wsl.exe -u root -- k3s kubectl`; the K3s server's embedded admin kubeconfig is present but unreadable by the default WSL user. No separate user kubeconfig is required when invoking the installed `k3s kubectl` as root.
+- Live check: node `home-server-wsl` Ready on K3s `v1.37.2+k3s1`; executor, dispatcher and sandbox broker each 1/1 Ready. Argo `kanzo-agent-worker` is Synced/Healthy at `a5096ecb4c8dafd68c58cb024e41841de26d3741`. The earlier statement that rollout could not be verified due to missing kubeconfig was too broad and is superseded.

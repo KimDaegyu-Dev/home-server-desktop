@@ -294,3 +294,10 @@
 - 두 번째 run `90ca4cd1f3c2`는 세션을 만들고 prompt admission ID `15de9eee02c44c959e850cc2f4ef42dd`까지 발급받았다. Executor ledger에는 submit이 `ambiguous`로 남았다. Dispatcher ReplicaSet `kanzo-agent-dispatcher-7d48974dfb`가 `03:20:12 UTC`에 생성된 직후, `03:20:13` worker 재시작 복구가 미완료 실행을 orphan/review로 격리했다. Hermes 완료 결과는 없다.
 - 따라서 첫 실패는 Executor 롤아웃 중 연결 단절, 두 번째는 활성 실행 도중 Dispatcher 롤아웃으로 실행 스트림이 끊긴 것이 직접 원인이다. 이 기록은 최신 readiness-gate 배포 전의 것이다. 현재 `8ca32c5` 배포는 `Synced/Healthy`이며, readiness 미통과 때 claim을 건너뛰는 live 로그도 확인했다. 배포 뒤 #31에 대한 새 run은 ledger에 없다.
 - 남은 운영 결함은 활성 Hermes 실행 중 Dispatcher 코드/설정 롤아웃을 유예하는 drain 절차가 없다는 점이다. readiness gate는 새 claim을 막지만, 이미 submit된 실행 스트림을 Dispatcher 재시작 후 재부착하지 않는다. 롤아웃 drain/장기 실행 보존을 별도 구현·검증해야 한다.
+
+### 2026-11-15 — Dispatcher 롤아웃 drain 적용
+
+- `6ee5954`에서 SIGTERM 시 새 claim 중단, `/readyz` 비정상 응답, 현재 `process_one()` 실행이 끝난 뒤 정상 종료하는 drain을 추가했다. 활성 작업 중에는 heartbeat 나이만으로 liveness가 재시작되지 않도록 했다. Dispatcher 종료 유예는 60초에서 1800초로 늘렸다.
+- worker 단위 테스트 13개 통과, Python 문법 검사, Kustomize 렌더링, `git diff --check` 통과. Argo `kanzo-agent-worker`는 revision `6ee59540626009acc8c2f06e0f2d5eb95d603c7e`에서 Synced/Healthy이며 Dispatcher 2/2 컨테이너와 Executor 3/3 컨테이너가 Ready다.
+- live ConfigMap에서 drain 코드와 1800초 grace를 확인했다. 같은 롤아웃에서 Executor가 준비되기 전 readiness gate가 Kanzo claim을 건너뛰는 로그도 확인했다.
+- 활성 Kanzo run이 없어 SIGTERM 중 장시간 실행의 실시간 종료 대기는 재현하지 않았다. #31은 기존 두 run이 review 상태이며 최신 ledger에도 active run이 없다. 사용자가 재개하기 전까지 #31을 변경하거나 재실행하지 않는다.

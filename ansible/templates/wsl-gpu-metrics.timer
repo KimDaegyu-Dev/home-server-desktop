@@ -1,9 +1,9 @@
 [Unit]
-Description=Refresh WSL NVIDIA GPU metrics every 15 seconds
+Description=Refresh WSL NVIDIA GPU metrics every 5 seconds
 
 [Timer]
 OnBootSec=20s
-OnUnitActiveSec=15s
+OnUnitActiveSec=5s
 AccuracySec=1s
 Unit=home-server-wsl-gpu-metrics.service
 

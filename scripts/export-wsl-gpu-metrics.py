@@ -48,13 +48,15 @@ def collect() -> list[str]:
         f"wsl_gpu_exporter_last_success_timestamp_seconds {time.time():.3f}",
     ]
     gpu_rows = csv.reader(io.StringIO(run_smi(
-        "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
+        "--query-gpu=index,name,uuid,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
         "--format=csv,noheader,nounits",
     )))
+    gpu_uuid_by_index: dict[str, str] = {}
     for row in gpu_rows:
-        if len(row) != 7:
+        if len(row) != 8:
             continue
-        index, name, utilization, memory_used, memory_total, temperature, power = [item.strip() for item in row]
+        index, name, gpu_uuid, utilization, memory_used, memory_total, temperature, power = [item.strip() for item in row]
+        gpu_uuid_by_index[index] = gpu_uuid
         labels = f'gpu="{label(index)}",name="{label(name)}"'
         metrics = (
             ("wsl_gpu_utilization_percent", utilization, "GPU utilization percentage."),
@@ -81,16 +83,43 @@ def collect() -> list[str]:
         "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
         "--format=csv,noheader,nounits",
     )))
+    process_names: dict[tuple[str, str], str] = {}
     for row in process_rows:
         if len(row) != 4:
             continue
         gpu_uuid, pid, process_name, used_memory = [item.strip() for item in row]
         process_name = process_name.replace("\\", "/").rsplit("/", 1)[-1]
+        process_names[(gpu_uuid, pid)] = process_name
         labels = f'gpu_uuid="{label(gpu_uuid)}",pid="{label(pid)}",process_name="{label(process_name)}"'
         lines.append(f"wsl_gpu_process_info{{{labels}}} 1")
         memory_mib = number(used_memory)
         if memory_mib is not None:
             lines.append(f"wsl_gpu_process_memory_bytes{{{labels}}} {memory_mib * 1024 * 1024:g}")
+
+    lines.extend((
+        "# HELP wsl_gpu_process_sm_utilization_percent Per-process SM utilization when supported by the Windows driver.",
+        "# TYPE wsl_gpu_process_sm_utilization_percent gauge",
+        "# HELP wsl_gpu_process_memory_controller_utilization_percent Per-process memory-controller utilization when supported by the Windows driver.",
+        "# TYPE wsl_gpu_process_memory_controller_utilization_percent gauge",
+    ))
+    for line in run_smi("pmon", "-s", "um", "-c", "1").splitlines():
+        parts = line.split(None, 5)
+        if len(parts) < 5 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        gpu_index, pid, _process_type, sm_raw, mem_raw = parts[:5]
+        gpu_uuid = gpu_uuid_by_index.get(gpu_index)
+        if not gpu_uuid:
+            continue
+        process_name = process_names.get((gpu_uuid, pid))
+        if process_name is None:
+            continue
+        labels = f'gpu_uuid="{label(gpu_uuid)}",pid="{label(pid)}",process_name="{label(process_name)}"'
+        sm = number(sm_raw)
+        mem_util = number(mem_raw)
+        if sm is not None:
+            lines.append(f"wsl_gpu_process_sm_utilization_percent{{{labels}}} {sm:g}")
+        if mem_util is not None:
+            lines.append(f"wsl_gpu_process_memory_controller_utilization_percent{{{labels}}} {mem_util:g}")
     return lines
 
 

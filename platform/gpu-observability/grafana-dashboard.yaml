@@ -10,6 +10,7 @@ data:
     {
       "annotations": {"list": []},
       "editable": false,
+      "description": "Per-process VRAM and SM/MEM utilization appear only when the Windows driver reports them; WDDM may return N/A.",
       "graphTooltip": 1,
       "panels": [
         {
@@ -49,8 +50,31 @@ data:
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "fieldConfig": {"defaults": {"unit": "dateTimeAsIso"}, "overrides": []},
-          "gridPos": {"h": 4, "w": 12, "x": 0, "y": 15},
+          "gridPos": {"h": 7, "w": 12, "x": 0, "y": 15},
           "id": 4,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+          "targets": [{"expr": "wsl_gpu_process_memory_bytes", "legendFormat": "{{process_name}} · PID {{pid}}", "refId": "A"}],
+          "title": "VRAM per process (when available)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}, "overrides": []},
+          "gridPos": {"h": 7, "w": 12, "x": 12, "y": 15},
+          "id": 5,
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "targets": [
+            {"expr": "wsl_gpu_process_sm_utilization_percent", "legendFormat": "SM · {{process_name}} · PID {{pid}}", "refId": "A"},
+            {"expr": "wsl_gpu_process_memory_controller_utilization_percent", "legendFormat": "MEM · {{process_name}} · PID {{pid}}", "refId": "B"}
+          ],
+          "title": "SM and memory-controller use per process (when available)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "dateTimeAsIso"}, "overrides": []},
+          "gridPos": {"h": 4, "w": 12, "x": 0, "y": 22},
+          "id": 6,
           "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
           "targets": [{"expr": "wsl_gpu_exporter_last_success_timestamp_seconds * 1000", "refId": "A"}],
           "title": "Last successful collection",
@@ -59,15 +83,15 @@ data:
         {
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "fieldConfig": {"defaults": {"unit": "bool", "mappings": [{"options": {"0": {"text": "OK", "color": "green"}, "1": {"text": "ERROR", "color": "red"}}, "type": "value"}]}, "overrides": []},
-          "gridPos": {"h": 4, "w": 12, "x": 12, "y": 15},
-          "id": 5,
+          "gridPos": {"h": 4, "w": 12, "x": 12, "y": 22},
+          "id": 7,
           "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
           "targets": [{"expr": "wsl_gpu_exporter_scrape_error", "refId": "A"}],
           "title": "Collector status",
           "type": "stat"
         }
       ],
-      "refresh": "15s",
+      "refresh": "5s",
       "schemaVersion": 39,
       "tags": ["wsl", "gpu", "nvidia"],
       "time": {"from": "now-6h", "to": "now"},

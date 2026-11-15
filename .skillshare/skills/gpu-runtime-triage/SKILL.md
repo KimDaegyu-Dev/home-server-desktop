@@ -13,6 +13,7 @@ Use this when a task mentions GPU saturation, unexpectedly high GPU memory, a lo
 - Current GPU load: `wsl_gpu_utilization_percent`.
 - Current and total memory: `wsl_gpu_memory_used_bytes` and `wsl_gpu_memory_total_bytes`.
 - Windows PIDs with a GPU context: `wsl_gpu_process_info` (labels include `pid`, `process_name`, and `gpu_uuid`).
+- Per-process VRAM, SM, and memory-controller metrics: `wsl_gpu_process_memory_bytes`, `wsl_gpu_process_sm_utilization_percent`, and `wsl_gpu_process_memory_controller_utilization_percent` when the Windows driver reports them.
 - Collector health: `wsl_gpu_exporter_scrape_error` and `wsl_gpu_exporter_last_success_timestamp_seconds`.
 - The Grafana dashboard is titled **WSL NVIDIA GPU**.
 
@@ -28,4 +29,5 @@ Use this when a task mentions GPU saturation, unexpectedly high GPU memory, a lo
 
 - WSL exposes Windows-host GPU telemetry; this is not DCGM and does not make the GPU a Kubernetes schedulable resource.
 - Per-process VRAM is often unavailable under WDDM. Total GPU memory cannot be attributed to one PID reliably.
+- Per-process SM/MEM utilization may also be unavailable under WDDM; confirm the metric exists before interpreting a blank panel as zero.
 - The collector is read-only. It does not stop processes or change model/server state.

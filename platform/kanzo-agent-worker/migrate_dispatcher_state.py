@@ -17,7 +17,7 @@ import stat
 import sys
 import tempfile
 
-from run_ledger import SCHEMA_VERSION, STATES, UNFINISHED_STATES
+from run_ledger import STATES, UNFINISHED_STATES
 
 
 class MigrationError(Exception):
@@ -25,6 +25,7 @@ class MigrationError(Exception):
 
 
 MIGRATION_MARKER = ".kanzo-dispatcher-state-migrated-v1"
+SUPPORTED_LEDGER_SCHEMAS = {1: {"runs"}, 2: {"runs", "claim_intents"}}
 
 
 def require(condition: bool, message: str) -> None:
@@ -65,19 +66,24 @@ def inventory(root: Path) -> dict[str, tuple[str, int, str]]:
     return entries
 
 
+def verify_schema(connection: sqlite3.Connection) -> int:
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    tables = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    )}
+    require(
+        version in SUPPORTED_LEDGER_SCHEMAS and tables == SUPPORTED_LEDGER_SCHEMAS[version],
+        "Unsupported ledger schema version.",
+    )
+    return version
+
+
 def verify_database(connection: sqlite3.Connection) -> dict[str, int]:
     require(
         connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)],
         "Ledger integrity check failed.",
     )
-    require(
-        connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION,
-        "Unsupported ledger schema version.",
-    )
-    tables = {row[0] for row in connection.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-    )}
-    require(tables == {"runs"}, "Unexpected ledger tables.")
+    verify_schema(connection)
     counts = dict(connection.execute("SELECT state, COUNT(*) FROM runs GROUP BY state"))
     require(set(counts) <= STATES, "Ledger contains unknown run states.")
     require(not any(counts.get(state, 0) for state in UNFINISHED_STATES),
@@ -110,10 +116,7 @@ def migrate(source_arg: str, destination_arg: str) -> tuple[int, int, bool]:
                 check.execute("PRAGMA integrity_check").fetchall() == [("ok",)],
                 "Previously migrated ledger integrity check failed.",
             )
-            require(
-                check.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION,
-                "Previously migrated ledger schema version is unsupported.",
-            )
+            verify_schema(check)
         return 0, 0, True
     if destination.exists():
         real_entry(destination, True)

@@ -392,3 +392,11 @@
 
 - Follow-up confirmed the cluster is directly accessible from WSL with `wsl.exe -u root -- k3s kubectl`; the K3s server's embedded admin kubeconfig is present but unreadable by the default WSL user. No separate user kubeconfig is required when invoking the installed `k3s kubectl` as root.
 - Live check: node `home-server-wsl` Ready on K3s `v1.37.2+k3s1`; executor, dispatcher and sandbox broker each 1/1 Ready. Argo `kanzo-agent-worker` is Synced/Healthy at `a5096ecb4c8dafd68c58cb024e41841de26d3741`. The earlier statement that rollout could not be verified due to missing kubeconfig was too broad and is superseded.
+
+## 2026-11-15 sandbox execute_code follow-up
+
+- K3s management is available without a separate kubeconfig through `wsl.exe -u root -- k3s kubectl`. The node is Ready; Argo applications `kanzo-agent-worker` and `kanzo-sandbox` are Synced/Healthy at `04a1299449a70d8d38b45d13f1ac61e0af1e0cda`; executor, dispatcher, and broker Deployments are 1/1 available.
+- `6455f7a` changes the broker's advertised `temp_dir` from `/tmp` to the sandbox's writable `/scratch`, which is an accepted execute cwd. The broker rollout alone did not clear the `execute_code` HTTP 400.
+- `20adf40` and `04a1299` make Hermes retain only a fixed, validated broker error code in its logs and reject a missing temp-dir mapping instead of silently defaulting it. These changes are deployed. No response body, task content, or credential is logged.
+- Canary `hermes-harness-lab#56` run `60ef79967673` created a separate sandbox pod, then `execute_code` still returned `{"status":"error","error":"broker returned HTTP 400","tool_calls_made":0,"duration_seconds":0.01}`. The snippet did not run; no marker or workspace change occurred; the run pod was cleaned up. The task is Todo waiting on human-action card #57. Its acceptance requires a broker `execute_code` call to write/read/delete a marker in `/scratch` and confirm no `/workspace` write.
+- Therefore the broker terminal is available for a basic terminal probe, but `execute_code` remains unverified and broken. The exact 400 code is not yet observed through the newly deployed diagnostic; do not mark sandbox-tool isolation complete or run untrusted repository tasks.

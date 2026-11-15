@@ -27,7 +27,7 @@
 ### 2026-11-15 — Phase 2·3·6 감사와 취소 감시 보강
 
 - 현재 Argo revision은 `d21ccb23ddea971c8cc24ab098ba892720348005`; Dispatcher와 Executor는 각각 1 replica다. 취소 재확인과 race 보강 수정이 배포됐다. Recreate 교체 과정에서 60초 종료 유예가 지나 새 Dispatcher가 뜰 때까지 약 1분간 dispatcher 비가용 시간이 있었다. 새 Pod는 정상 기동했고 로그는 agent가 가져갈 수 있는 Todo가 없다고 기록한다. #29는 사람 소유 #31을 기다리므로 실제 실행은 시작하지 않았다.
-- Phase 2 감사에서 프로필 DB와 OMH memory 자료가 PVC에 존재하는 것은 확인했으나, ReadOnly 실행에서 만든 memory·skill이 일반 실행에서 다시 사용되는지와 Pod 교체 후 연속성은 검증되지 않았다. Dashboard Ingress는 Gateway 자체 연결을 증명하지 않으며, Desktop이 같은 Gateway를 사용하는 증거도 없다.
+- Phase 2 감사에서 프로필 DB와 OMH memory 자료가 PVC에 존재하는 것은 확인했으나, ReadOnly 실행에서 만든 memory·skill이 일반 실행에서 다시 사용되는지와 Pod 교체 후 연속성은 검증되지 않았다. Desktop은 내부 raw Gateway 포트가 아니라 Hermes remote backend(`/dashboard`, 9119)에 연결해야 한다([Hermes Desktop docs](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/desktop.md)). 현재 Tailscale Ingress는 `hermes.tail5389e9.ts.net`을 가리키며 Basic Auth 값은 Vault에서 dashboard로 전달된다. 이 Windows 장치의 Tailscale MagicDNS suffix는 `taila2b363.ts.net`이고 Hermes 주소 DNS 조회도 실패했다. 현재 장치는 다른 tailnet에 있으므로 Desktop 원격 연결은 아직 검증할 수 없다. 장치의 tailnet을 임의 변경하지 않는다.
 - Phase 3 감사에서 단일 Dispatcher 설정이 확인됐다. 다중 replica는 현재 지원되는 소유권 모델이 아니므로 1 replica로 유지한다. 이벤트 뒤 `get_task`가 일시 실패하면 취소 신호를 놓칠 수 있는 경로를 찾아 재확인 상태를 보존하도록 수정·배포했다. 독립 검토에서 완료 경로 이후 취소 오인, `_refresh_cancel_state` 중복 전송, 취소 철회 뒤 오분류 경합을 찾아 lock 기반 소유권 검사, watcher 단일 전송, 취소 해결 상태 통지 및 경합 테스트를 추가했다. 취소 철회·원격 불확실 경로까지 포함한 새 worker/ledger 테스트 15개와 기존 worker 테스트 11개가 통과했고, 최종 코드가 revision `d21ccb2`에 배포됐다.
 - Phase 6 감사는 idle 시점만 유효하다고 판정했다. 실행별 CPU·메모리 peak, 단계별 지연, Langfuse 사용량과 학습 연속성을 비교할 근거는 실제 성공 run이 생긴 뒤 수집해야 한다.
 

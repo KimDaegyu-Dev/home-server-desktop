@@ -495,8 +495,8 @@ class BrokerStore:
         token = self._derive_runner_token(run["task_id"], run["run_id"], run["lease_nonce"])
         return ip, token
 
-    def authorize_session(self, task_id: str, run_id: str, session_id: str) -> dict[str, Any]:
-        """Verify a Gateway session is bound to this live Kanzo run without creating a handle."""
+    def authorize_session(self, session_id: str) -> dict[str, Any]:
+        """Resolve a live Gateway session to its bound Kanzo run without creating a handle."""
         with self.session() as db:
             rows = db.execute(
                 "SELECT * FROM runs WHERE hermes_session_id=? AND state='bound' AND expires_at>?",
@@ -505,15 +505,13 @@ class BrokerStore:
             if len(rows) != 1:
                 raise BrokerError(404, "session_mapping_not_found_or_ambiguous")
             run = rows[0]
-            if run["task_id"] != task_id or run["run_id"] != run_id:
-                raise BrokerError(409, "session_run_mismatch")
             lease = self._derive_lease(run["task_id"], run["run_id"], run["lease_nonce"])
             if not hmac.compare_digest(run["lease_hash"], _digest(lease)):
                 raise BrokerError(503, "run_lease_integrity_error")
             return {
                 "hermes_session_id": session_id,
-                "task_id": task_id,
-                "run_id": run_id,
+                "task_id": run["task_id"],
+                "run_id": run["run_id"],
                 "workspace": "/workspace",
                 "temp_dir": "/scratch",
             }
@@ -806,10 +804,8 @@ class BrokerHandler(BaseHTTPRequestHandler):
             elif path == "/v1/terminal/authorize":
                 self._gateway_auth()
                 payload = self._json_body()
-                task = _valid_id(payload.get("task_id"), "task_id")
-                run = _valid_id(payload.get("run_id"), "run_id")
                 sid = _valid_id(payload.get("hermes_session_id"), "hermes_session_id")
-                self._json(200, self.store.authorize_session(task, run, sid))
+                self._json(200, self.store.authorize_session(sid))
             elif path in (
                 "/v1/terminal/exec/start", "/v1/terminal/exec/poll",
                 "/v1/terminal/exec/cancel", "/v1/terminal/environment/cleanup",

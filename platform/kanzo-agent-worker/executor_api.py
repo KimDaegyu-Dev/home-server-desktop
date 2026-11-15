@@ -40,6 +40,12 @@ TOOLSETS = [
     "search", "memory", "skills", "todo", "terminal", "file",
     "delegation", "code_execution", "clarify", "kanban", "mcp-home_server",
 ]
+TOOLSET_POLICIES = {
+    "standard": tuple(TOOLSETS),
+    # A genuinely tool-free run still uses the resident Gateway, profile, HOME,
+    # Langfuse hook, and normal session lifecycle. It has no agent tool calls.
+    "response_only": (),
+}
 PROFILES = {"default", "researcher", "builder", "reviewer"}
 REASONING = {"low", "medium", "high", "xhigh", "extra_high"}
 
@@ -519,8 +525,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _create(self) -> None:
         body = self._body()
-        if set(body) != {"task_id", "run_id", "profile", "provider", "model", "reasoning"}:
+        required = {"task_id", "run_id", "profile", "provider", "model", "reasoning"}
+        if not required.issubset(body) or set(body) - required - {"tool_policy"}:
             raise ApiError(400, "invalid_create_fields")
+        tool_policy = body.get("tool_policy", "standard")
+        if not isinstance(tool_policy, str) or tool_policy not in TOOLSET_POLICIES:
+            raise ApiError(400, "tool_policy_invalid")
         task, run, profile = body["task_id"], body["run_id"], body["profile"]
         if not _valid_identity(task, 256) or not _valid_identity(run, 128):
             raise ApiError(400, "run_identity_invalid")
@@ -534,6 +544,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, "reasoning_invalid")
         home = _profile_home(profile)
         safe_body = {key: body[key] for key in ("task_id", "run_id", "profile", "provider", "model", "reasoning")}
+        safe_body["tool_policy"] = tool_policy
         digest = hashlib.sha256(json.dumps(safe_body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         should_create = self.store.begin_create(task, run, profile, digest)
         if not should_create:
@@ -544,7 +555,7 @@ class Handler(BaseHTTPRequestHandler):
         args = [HERMES_PYTHON, str(SESSION_HELPER), "--profile-home", str(home),
                 "--task-id", task, "--run-id", run, "--provider", body["provider"],
                 "--model", body["model"], "--reasoning", body["reasoning"],
-                "--toolsets", ",".join(TOOLSETS), "--cwd", "/workspace"]
+                "--toolsets", ",".join(TOOLSET_POLICIES[tool_policy]), "--cwd", "/workspace"]
         try:
             code, out, _ = _run_helper(args, timeout=60, output_limit=64 * 1024)
             result = json.loads(out)

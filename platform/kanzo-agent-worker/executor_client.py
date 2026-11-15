@@ -118,8 +118,11 @@ class ExecutorClient:
         provider: str,
         model: str,
         reasoning: str,
+        tool_policy: str = "standard",
     ) -> dict[str, Any]:
         """Create one session and require a valid session_id in the JSON reply."""
+        if tool_policy not in {"standard", "response_only"}:
+            raise ValueError("tool_policy must be standard or response_only")
         payload = {
             "task_id": _validate_identifier(task_id, "task_id"),
             "run_id": _validate_identifier(run_id, "run_id"),
@@ -127,6 +130,7 @@ class ExecutorClient:
             "provider": _validate_identifier(provider, "provider"),
             "model": _validate_identifier(model, "model"),
             "reasoning": _validate_identifier(reasoning, "reasoning"),
+            "tool_policy": tool_policy,
         }
         response = self._post_json("/v1/sessions", payload, self.request_timeout)
         session_id = response.get("session_id")

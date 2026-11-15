@@ -32,6 +32,10 @@ from run_ledger import RunLedger
 LOG = logging.getLogger("kanzo-agent-worker")
 TASK_DURATION_BUCKETS = (30, 60, 120, 300, 600, 1800, 3600)
 RUN_PHASES = {"claimed", "preparing", "running", "finalizing"}
+STANDARD_HERMES_TOOLSETS = (
+    "search", "memory", "skills", "todo", "terminal", "file",
+    "delegation", "code_execution", "clarify", "kanban", "mcp-home_server",
+)
 TASK_ID_RE = re.compile(r"\b([a-zA-Z0-9._-]+#\d+)\b")
 TASK_LINE_RE = re.compile(r"^\s*([^\s]+#\d+)\s+\[([^]]+)\]\s+(.*)$", re.MULTILINE)
 TASK_HEADER_RE = re.compile(r"^\s*([a-zA-Z0-9._-]+#\d+)\s+(.+)$", re.MULTILINE)
@@ -209,6 +213,19 @@ class Task:
         tag_text = " ".join(self.tags).lower()
         title_text = f"{self.title}\n{self.details}".lower()
         return "code" in tag_text.split() or "code task" in title_text or "implementation" in title_text
+
+    @property
+    def is_tool_free(self) -> bool:
+        """Explicit `tool-free` tag opts a one-off task out of all Hermes toolsets."""
+        return any(tag.strip().casefold() == "tool-free" for tag in self.tags)
+
+    @property
+    def hermes_tool_policy(self) -> str:
+        return "response_only" if self.is_tool_free else "standard"
+
+    @property
+    def hermes_toolsets(self) -> list[str]:
+        return [] if self.is_tool_free else list(STANDARD_HERMES_TOOLSETS)
 
 
 @dataclass(frozen=True)
@@ -444,6 +461,17 @@ def select_task_prompt_context(details: str, *, max_comments: int = 8, max_comme
 
 
 def task_prompt(task: Task, code: bool, source_sha: str | None = None) -> str:
+    if task.is_tool_free:
+        return f"""You are handling one bounded Kanzo task with no tools enabled.
+
+Task: {task.task_id} — {task.title}
+Project: {task.project}
+Task details:
+<kanzo-task>
+{select_task_prompt_context(task.details)}
+</kanzo-task>
+
+Use only the supplied task text. Do not request tools, research, delegate, create subtasks, propose backlog work, update memory, or claim external checks. Give the shortest answer that satisfies the task. End with exactly one `KANZO_WORKER_OUTCOME: done` or `KANZO_WORKER_OUTCOME: review` line, then one concise `KANZO_WORKER_SUMMARY: ...` line."""
     scope = (
         "Work only in the current repository. Make the requested changes and run relevant checks. "
         "Do not push, create a PR, merge, deploy, modify cluster state, or access credentials; the worker handles GitHub operations."
@@ -1708,7 +1736,7 @@ class Worker:
                 "--format", "stream-json", "--provider", provider, "--model", model,
                 "--reasoning", reasoning,
                 "--toolsets",
-                "search,memory,skills,todo,terminal,file,delegation,code_execution,clarify,kanban,mcp-home_server",
+                ",".join(task.hermes_toolsets),
             ]
         self._raise_if_cancelled(active)
         if route and route.read_only and not (active and active.get("broker_lease")):
@@ -1991,6 +2019,7 @@ class Worker:
         prepared = executor.create_session(
             task_id=active["task_id"], run_id=active["run_id"], profile=profile,
             provider=provider, model=model, reasoning=reasoning,
+            tool_policy=task.hermes_tool_policy,
         )
         session_id = prepared.get("session_id")
         generation = prepared.get("execution_generation")
@@ -2370,7 +2399,12 @@ class Worker:
             })
             human_actions = parse_marked_tasks(result, HUMAN_ACTION_RE, default_human=True)
             backlog_proposals = parse_marked_tasks(result, BACKLOG_PROPOSAL_RE)
-            backlog_notes = self._create_backlog_proposals(task, backlog_proposals)
+            backlog_notes = (
+                self._create_backlog_proposals(task, backlog_proposals)
+                if not task.is_tool_free else []
+            )
+            if task.is_tool_free and backlog_proposals:
+                LOG.warning("Ignoring backlog markers from tool-free run %s", run_id)
             if backlog_proposals:
                 self.ledger.mark_publication(run_id, "backlog_proposals")
             outcome_note = ""

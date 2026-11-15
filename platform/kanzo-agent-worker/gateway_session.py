@@ -164,7 +164,7 @@ def create_session(
         or any(ord(char) < 0x20 for char in task_id + run_id)
     ):
         raise RuntimeError("gateway_session_run_identity_invalid")
-    if not toolsets or any(not isinstance(item, str) or not item.strip() for item in toolsets):
+    if not isinstance(toolsets, list) or any(not isinstance(item, str) or not item.strip() for item in toolsets):
         raise RuntimeError("gateway_session_toolsets_invalid")
     _prepare_imports()
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override

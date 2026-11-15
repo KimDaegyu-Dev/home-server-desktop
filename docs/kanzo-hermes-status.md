@@ -4,14 +4,13 @@
 
 ## 현재 상태
 
-- 확인 기준: 2026-11-15. Argo CD `kanzo-agent-worker`는 revision `c24c3593fd5988cc02d04e719e438a525bac6593`에서 Synced/Healthy다. Dispatcher와 Executor는 각각 1/1 Ready이고, Dispatcher worker의 `kanzo_worker_task_active=0`이다. 별도 worker Deployment는 0 replicas이며 실제 상주 worker는 Dispatcher Pod 안에서 동작한다.
-- #29 read-only canary와 #31의 정정된 acceptance는 완료됐다. human-action #33/#34도 정리됐고 중복 #35는 declined 이유를 남기고 완료 처리했다. #32는 backlog 검토 대기다.
-- Langfuse Phase 5 코드가 배포됐다. 각 Gateway session.create에 해당 Kanzo task/run ID만 주입하고, session context가 없거나 조회에 실패하면 process-wide 값으로 대체하지 않는다. 동시 세션·누락·helper upgrade/idempotency 회귀 테스트 7개가 통과했다. 변경 이후 실제 run trace의 Langfuse metadata 대조는 아직 남아 있다.
-- Phase 6 worker duration histogram이 배포됐고 #36 종료 뒤 live `/metrics`에서 `noncode/review count=1`을 확인했다. Prometheus target `kanzo-agent-worker`는 `up=1`이며 직접 API query에서 같은 histogram count와 tasks_total을 확인했다. Worker suite 14개, Langfuse suite 5개, Gateway session suite 2개, event-adapter signal suite 1개가 통과했다.
-- Canary worker는 Grafana MCP schema 인자 오류를 여러 번 냈고, task result의 “histogram 없음” 판정은 독립 Prometheus query와 달랐다. direct query로 scrape 완료를 확인했다. 다음 검증 절차는 agent에게 PromQL 인자를 직접 맡기지 않고 API/UI를 이용해 수동 대조한다.
-- 이번 rollout에서 이전 event-adapter 컨테이너가 PID 1 SIGTERM을 무시해 Pod 종료를 막았다. worker가 drain 후 종료했고 active task가 없음을 확인한 뒤 오래된 Pod만 정리했다. event-adapter가 SIGTERM/SIGINT를 처리하도록 수정한 revision `c24c359`을 배포했고 새 Dispatcher Pod는 정상 Ready다.
-- Live canary #36은 read-only route 특성에 따라 `review, human=true`로 끝났다. Run `8657af1c664d`, Langfuse session `local-92115c3ed358acaaa0425c442bcf91539f7a0e3cfa312251cce1a38df283386d`, trace `c606f72ed93732883e424bfc22f431c1`의 session join을 확인했다. Langfuse v4 events_only의 공개 Observations API는 session/trace ID는 주지만 trace-level metadata 조회 경로는 제공하지 않아 task/run metadata 직접 검증은 미완료다. 잘못된 UID 귀속은 없고 userId는 빈 값이다.
-- V1 롤백 스냅샷은 `f11abf6`이며 origin에 push돼 있다. worker 기준 소스 커밋은 `e59a758`이다.
+- 확인 기준: 2026-11-15. Argo CD `kanzo-agent-worker`는 revision `29cf385851953a9a01d5bfee94fa8327e00a93d1`에서 Synced/Healthy다. Dispatcher와 Executor는 각각 1/1 Ready이며, 별도 worker Deployment는 0 replicas다.
+- #29, #31, #39는 Done이다. #33/#34도 Done, #35는 `declined` 이유를 남기고 Done 처리됐다. #32와 #40은 Backlog 검토 대기다. 현재 `hermes-harness-lab`에는 실행 가능한 Todo가 없다.
+- tool-free 정책은 Hermes에 `no_mcp` toolset sentinel을 전달해 프로필 MCP까지 포함한 도구 호출을 차단한다. #39 run `ac261e85586d`는 기대한 응답을 반환했고, researcher session DB의 `tool_call_count=0`, executor ledger의 completed 상태 및 Langfuse의 도구 없는 trace를 확인했다.
+- Langfuse task/run 귀속이 live canary로 확인됐다. #39 executor ledger task/run/session 매핑은 trace `975c391d227442973fa4338d29136e94`의 session ID와 일치한다. Observations API v2를 `fields=core,basic,metadata`로 조회했을 때 root `CHAIN`과 `GENERATION` 모두 `kanban_task_id=hermes-harness-lab#39`, `kanban_run_id=ac261e85586d`를 가진다. metadata가 `null`로 보였던 이전 조회는 기본 field set에서 metadata group을 요청하지 않아 생긴 관측 오류였다.
+- 기존 #37 trace `c68e83bdc95fa51675b53ffd53201e34`도 metadata field group을 지정해 재조회했다. 27개 observation에 task/run ID가 모두 있으며, 이전 Phase 6 표본 설명은 유지한다. #37의 상충 지시는 정상 one-turn latency baseline으로 쓰지 않는다.
+- Phase 6 worker duration histogram과 Prometheus scrape가 배포·확인됐다. 범위가 맞는 작업의 비교 표본, per-run 자원 peak, 학습 연속성 및 격리/cancel 시나리오 측정은 남아 있다.
+- 다음 작업은 roadmap Phase 6의 대조 가능한 성공 작업 표본과 보존·복구 시나리오를 검증하는 것이다. 변경 전에 같은 입력/도구/결과 기준과 허용 가능한 비용·지연을 정하고, 완료 시에만 추가 상태를 기록한다.
 
 ## 단계별 진행
 
@@ -20,10 +19,10 @@
 | 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
 | 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
 | 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 프로필 DB와 memory/consolidation 데이터가 PVC에 존재하며 같은 프로필 경로를 가리키는 것도 확인됐다. 브로커 명세 테스트 2개에서 runner `/workspace`의 read-only/writable 전환, read-only root filesystem, service-account token 비활성화를 검증했다. 실제 Pod mount 쓰기 거부와 ReadOnly run에서 만든 memory·skill의 일반 run 회수 및 Pod 교체 후 연속성, Desktop의 동일 Gateway 연결은 아직 입증되지 않았다. |
-| 3. durable run ledger와 이벤트 | claim 복구 구현·배포, 시뮬레이션 검증 보강, live 통합 검증 대기 | Kanzo는 `run_id`별 claim 결과를 DB에 원자적으로 보관하고 같은 요청 재호출 시 같은 task를 돌려준다. Worker는 Kanzo 호출 전에 project/filter/run ID intent를 SQLite에 기록하고, 재시작 후 동일 요청을 복구한다. 해석할 수 없는 응답은 intent를 유지하며 비활성 프로젝트의 pending claim은 Kanzo를 호출하지 않는다. ledger 복구 테스트는 Kanzo가 claim을 커밋한 뒤 응답을 잃는 경우, worker 재시작 후 원래 카드만 복구하고 다음 Todo는 건드리지 않는지 시뮬레이션한다. SSE 테스트는 연결·재연결 조정 wake와 변경 알림 wake를 확인한다. claim/event 테스트 17개가 통과했다. Executor 비가용 상태에서 claim하지 않는 readiness 가드도 구현 중이며, live rollout 경합 재현을 막는지 확인해야 한다. 외부 게시 중 프로세스 종료와 복구는 아직 검증하지 않았다. 다중 dispatcher lease/CAS는 미구현이며 replica 1개를 유지한다. 자동 재시도는 추가하지 않는다. |
+| 3. durable run ledger와 이벤트 | claim 복구 구현·배포, 주요 live 경로 확인, 종료·복구 검증 일부 대기 | Kanzo `run_id` claim, SQLite intent 복구, SSE wake 및 readiness gate가 배포됐다. 활성 worker drain도 반영됐다. 외부 댓글 게시 중 종료와 restart 복구, 경합 조건은 남아 있다. 다중 dispatcher lease/CAS는 미구현이며 replica 1개를 유지한다. 자동 재시도는 추가하지 않는다. |
 | 4. 상주 executor와 작업 도구 격리 | 배포 완료, 일부 시나리오 검증 대기 | Executor와 Dispatcher는 별도 Deployment 및 영속 run state를 사용한다. 작업별 sandbox/lease, heartbeat, 취소·불확실성 격리 경로가 배포됐다. 동시성·복구·장기 작업 시나리오 검증은 남았다. |
-| 5. 결과·추적·위임 | 부분 완료, live trace 검증 대기 | Session-scoped Kanzo task/run ID propagation은 Langfuse plugin init race와 PVC helper migration까지 보강해 배포했다. process-wide stale ID fallback과 잘못된 uid attribution은 차단했다. 회귀 테스트 7개 통과. 다음 agent-eligible run에서 새 trace metadata를 대조하고, 중복 generation 및 delegate 추적 기준을 검증한다. |
-| 6. 성능·학습 보존 검증 | 계측 배포, run 표본 대기 | Run ledger state timestamps와 worker duration histogram이 배포됐다. Prometheus /metrics에서 histogram family를 확인했으며 완료 run 전이라 표본은 아직 없다. Histogram labels는 bounded cardinality로 설정했다. 다음 run에서 duration bucket을 검증하고 phase별 timing, per-run 자원 peak, Langfuse token/turn·학습 연속성 및 격리/cancel 시나리오를 측정한다. |
+| 5. 결과·추적·위임 | task/run metadata live canary 통과, 나머지 검증 대기 | #39 run `ac261e85586d`에서 executor ledger→Gateway session→Langfuse trace를 같은 ID로 대조했다. `fields=metadata`를 명시한 Observations API v2 응답에서 root와 generation 모두 task/run ID가 일치한다. 중복 generation, delegate 추적, 실패·취소·timeout 결과 일치 기준은 더 검증한다. |
+| 6. 성능·학습 보존 검증 | 기본 계측과 일부 live 표본 완료, 비교·연속성 시나리오 대기 | Run ledger timestamp와 bounded-label worker duration histogram이 배포됐다. #37 표본과 Prometheus scrape는 확인했으나, #37은 상충 지시로 정상 작업 baseline으로 쓰지 않는다. 같은 범위의 성공 작업끼리 처리 시간·토큰·자원·학습 연속성을 비교하고 격리/cancel 시나리오를 측정한다. |
 
 ### 2026-11-15 — Phase 2·3·6 감사와 취소 감시 보강
 
@@ -333,3 +332,14 @@
 
 - Explicit `tool-free` Kanzo tag now selects a response-only Hermes session: empty Gateway toolset policy, compact prompt, and ignored backlog markers. Untagged work retains all standard tools and memory/skills behavior. This does not disable the profile or Langfuse lifecycle.
 - Rolled out GitOps commit `0d69a6a07440bd2dc026f53e1763f85c9e971d65`; Argo `kanzo-agent-worker` is Synced/Healthy, dispatcher and executor are Ready, and the worker deployment remains scaled to zero as configured for the resident-executor architecture. `py_compile`, `git diff --check`, and Kustomize rendering passed before rollout. A tagged end-to-end canary is still needed to measure token/time savings against #37; no new Kanzo card was created in this change.
+
+
+### 2026-11-15 — #39 Langfuse 귀속 검증 통과와 API 조회 오류 정정
+
+- GitOps commit `29cf385`는 Argo에서 Synced/Healthy이며 Dispatcher/Executor는 각각 1/1 Ready다. #39 run `ac261e85586d`는 기대한 응답으로 정상 종료했다. Executor DB는 `create_state=created`, `submit_state=completed`; researcher Gateway session DB의 `tool_call_count=0`이다.
+- Executor ledger는 task `hermes-harness-lab#39`, run `ac261e85586d`, session `local-0c72db46ad431fe88db2266bbc864e9a1f1ad5cec3c3b00911ccb45fff71841b`를 연결한다. Langfuse trace `975c391d227442973fa4338d29136e94`의 session ID가 일치한다. Observations API v2를 `fields=core,basic,metadata`로 조회해 root `CHAIN`과 `GENERATION` 두 개 모두 `kanban_task_id=hermes-harness-lab#39`, `kanban_run_id=ac261e85586d`임을 확인했다. trace에는 `TOOL` observation이 없고 정확한 응답도 기록돼 있어 #39 acceptance를 통과 처리했다.
+- `metadata=null`로 보였던 앞선 조회는 요청의 기본 field set에 metadata group을 포함하지 않은 결과였다. Langfuse API의 metadata field group을 추가해 다시 조회하자 값이 반환됐다. 따라서 이전에 적은 “전달 경계 추가 계측 필요” 판단은 철회한다. 공식 API 문서에 따르면 metadata 조회는 `fields=metadata`를 명시해야 한다.
+- 과거 #37 trace `c68e83bdc95fa51675b53ffd53201e34`도 `fields=core,basic,metadata`로 조회했다. 27개 observation에서 task `hermes-harness-lab#37`, run `f239fceaf654`가 확인돼 기존 상관관계 기록과 일치했다.
+- `29cf385`의 Kanzo 전용 프로세스 fallback은 배포돼 있다. 현재 #37/#39 trace만으로 이 fallback 경로 자체가 호출됐다고 증명할 수는 없으며, session-scoped lookup이 정상 동작한다는 것을 증명한다. fallback 유지 여부는 실제 필요성을 확인한 뒤 판단한다.
+- #39는 `done`; #31과 #29도 기존 acceptance에 따라 `done`이다. #32와 #40은 backlog 검토 대기다. 현재 hermes-harness-lab에 실행 가능한 Todo가 없다.
+- 다음은 roadmap Phase 6의 대조 가능한 성공 작업 표본과 보존·복구 시나리오다. #37을 일반 성능 baseline으로 재사용하지 않는다.

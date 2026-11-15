@@ -292,6 +292,7 @@ class RunLedger:
             raise ValueError("run_id must be a non-empty string")
         metadata_json = _json_dump(_require_mapping(metadata, "metadata"))
         now = _now()
+        fields_json = _json_dump({"state_history": [{"state": "claimed", "at": now}]})
         with self._transaction() as connection:
             active = connection.execute(
                 f"SELECT run_id FROM runs WHERE state IN ({','.join('?' for _ in UNFINISHED_STATES)}) LIMIT 1",
@@ -305,8 +306,8 @@ class RunLedger:
                 """INSERT INTO runs (
                     run_id, task_id, state, created_at, updated_at,
                     metadata_json, fields_json, result_json, publication_json
-                ) VALUES (?, ?, 'claimed', ?, ?, ?, '{}', NULL, '{}')""",
-                (run_id, task_id, now, now, metadata_json),
+                ) VALUES (?, ?, 'claimed', ?, ?, ?, ?, NULL, '{}')""",
+                (run_id, task_id, now, now, metadata_json, fields_json),
             )
             return self._record(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
 
@@ -366,12 +367,16 @@ class RunLedger:
             if active is not None:
                 raise ActiveRunError("An unfinished run already exists")
             now = _now()
+            fields_json = _json_dump({
+                "claim_request_started_at": intent["created_at"],
+                "state_history": [{"state": "claimed", "at": now}],
+            })
             connection.execute(
                 """INSERT INTO runs (
                     run_id, task_id, state, created_at, updated_at,
                     metadata_json, fields_json, result_json, publication_json
-                ) VALUES (?, ?, 'claimed', ?, ?, ?, '{}', NULL, '{}')""",
-                (run_id, task_id, now, now, intent["metadata_json"]),
+                ) VALUES (?, ?, 'claimed', ?, ?, ?, ?, NULL, '{}')""",
+                (run_id, task_id, now, now, intent["metadata_json"], fields_json),
             )
             connection.execute("DELETE FROM claim_intents WHERE run_id = ?", (run_id,))
             return self._record(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
@@ -389,10 +394,18 @@ class RunLedger:
             if state not in TRANSITIONS[current]:
                 raise InvalidTransitionError(f"Transition {current!r} -> {state!r} is not allowed")
             stored_fields = _json_load(row["fields_json"])
+            state_history = stored_fields.get("state_history")
+            if not isinstance(state_history, list) or not state_history:
+                state_history = [{"state": current, "at": row["updated_at"]}]
+            else:
+                state_history = list(state_history)
+            now = _now()
+            state_history.append({"state": state, "at": now})
             stored_fields.update(field_updates)
+            stored_fields["state_history"] = state_history
             connection.execute(
                 "UPDATE runs SET state = ?, updated_at = ?, fields_json = ? WHERE run_id = ?",
-                (state, _now(), _json_dump(stored_fields), run_id),
+                (state, now, _json_dump(stored_fields), run_id),
             )
             return self._record(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
 

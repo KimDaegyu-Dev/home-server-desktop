@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -44,7 +45,24 @@ class RunLedgerClaimTests(unittest.TestCase):
 
         self.assertEqual((run["run_id"], run["task_id"], run["state"]), ("run-1", "project-a#7", "claimed"))
         self.assertEqual(run["metadata"], {"lane": "analysis"})
+        self.assertIn("claim_request_started_at", run["fields"])
+        self.assertEqual([item["state"] for item in run["fields"]["state_history"]], ["claimed"])
         self.assertEqual(self.ledger.pending_claims(), [])
+
+    def test_run_ledger_persists_ordered_state_timestamps_for_phase_timing(self) -> None:
+        self.ledger.start("project-a#7", "run-1")
+        for state in ("preparing", "running", "finalizing", "succeeded"):
+            self.ledger.transition("run-1", state)
+
+        run = self.ledger.get("run-1")
+        history = run["fields"]["state_history"]
+        self.assertEqual(
+            [item["state"] for item in history],
+            ["claimed", "preparing", "running", "finalizing", "succeeded"],
+        )
+        timestamps = [datetime.fromisoformat(item["at"].replace("Z", "+00:00")) for item in history]
+        self.assertEqual(timestamps, sorted(timestamps))
+        self.assertEqual(history[-1]["at"], run["updated_at"])
 
     def test_active_run_leaves_claim_intent_pending(self) -> None:
         self.ledger.prepare_claim("run-1", "project-a", "-is:human")

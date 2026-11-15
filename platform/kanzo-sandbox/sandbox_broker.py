@@ -472,7 +472,11 @@ class BrokerStore:
                 "lease": lease,
                 "environment_handle": handle,
                 "cwd": "/workspace",
-                "temp_dir": "/tmp",
+                # Hermes execute_code uses the broker-provided temp_dir as its
+                # remote working directory. The runner only accepts cwd under
+                # /workspace or /scratch; /scratch is writable even when the
+                # workspace is mounted read-only.
+                "temp_dir": "/scratch",
             }
 
     def runner_address(self, payload: dict[str, Any], *, require_handle: bool = True) -> tuple[str, str]:

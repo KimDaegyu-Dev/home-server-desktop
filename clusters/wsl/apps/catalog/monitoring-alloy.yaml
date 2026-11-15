@@ -20,17 +20,6 @@ spec:
       values: |
         alloy:
           enableReporting: false
-          extraEnv:
-            - name: LANGFUSE_PUBLIC_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: langfuse-exporter
-                  key: publicKey
-            - name: LANGFUSE_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: langfuse-exporter
-                  key: secretKey
           configMap:
             content: |
               otelcol.receiver.otlp "default" {
@@ -42,30 +31,6 @@ spec:
                 }
                 output {
                   metrics = [otelcol.exporter.prometheus.default.input]
-                  traces = [otelcol.processor.transform.langfuse_identity.input]
-                }
-              }
-
-              otelcol.processor.transform "langfuse_identity" {
-                error_mode = "ignore"
-                trace_statements {
-                  context = "span"
-                  statements = [
-                    `set(attributes["user.id"], attributes["litellm.metadata.trace_user_id"]) where attributes["litellm.metadata.trace_user_id"] != nil`,
-                    `set(attributes["session.id"], attributes["litellm.metadata.session_id"]) where attributes["litellm.metadata.session_id"] != nil`,
-                  ]
-                }
-                output {
-                  traces = [otelcol.exporter.otlphttp.langfuse.input]
-                }
-              }
-
-              otelcol.exporter.otlphttp "langfuse" {
-                client {
-                  endpoint = "http://langfuse-web.langfuse.svc.cluster.local:3000/api/public/otel"
-                  headers = {
-                    Authorization = "Basic " + encoding.to_base64(sys.env("LANGFUSE_PUBLIC_KEY") + ":" + sys.env("LANGFUSE_SECRET_KEY")),
-                  }
                 }
               }
 

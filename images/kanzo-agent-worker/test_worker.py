@@ -62,7 +62,8 @@ read_only: true"""
             parse_catalog_cards(duplicate)
 
     def test_catalog_worker_never_claims_catalog_or_all_projects(self):
-        worker = Worker({"KANZO_ENABLED": "true", "MCPPROXY_KANZO_AGENT_TOKEN": "token", "KANZO_CATALOG_PROJECT": "kanzo-project-catalog"})
+        state_dir = tempfile.TemporaryDirectory()
+        worker = Worker({"KANZO_ENABLED": "true", "MCPPROXY_KANZO_AGENT_TOKEN": "token", "KANZO_CATALOG_PROJECT": "kanzo-project-catalog", "KANZO_WORKER_STATE_DIR": state_dir.name})
         calls = []
 
         def fake_call(tool, args):
@@ -71,14 +72,19 @@ read_only: true"""
                 return "kanzo-project-catalog#22 [doing] Project: Hermes Harness Lab {project-catalog}"
             if tool == "get_task":
                 return "status: doing\nslug: hermes-harness-lab\nrepo: none\nmodel_lane: analysis\nread_only: true"
-            return "No task available"
+            return "Nothing ready in todo for hermes-harness-lab"
 
         worker._call = fake_call
         fake_client = type("MockClient", (), {"__init__": lambda self, *args: None, "connect": lambda self: None})
         with patch("worker.McpClient", fake_client):
             self.assertFalse(worker.process_one())
-        self.assertEqual(calls[-1], ("next_task", {"project": "hermes-harness-lab", "filter": "-is:human -is:waiting"}))
+        self.assertEqual(calls[-1][0], "next_task")
+        self.assertEqual(calls[-1][1]["project"], "hermes-harness-lab")
+        self.assertEqual(calls[-1][1]["filter"], "-is:human -is:waiting")
+        self.assertTrue(calls[-1][1]["run_id"])
         self.assertTrue(all(call[1].get("project") not in ("all", "kanzo-project-catalog") for call in calls if call[0] == "next_task"))
+        worker.ledger.close()
+        state_dir.cleanup()
 
     def test_readonly_executor_uses_an_isolated_profile_home(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -111,9 +117,12 @@ read_only: true"""
             client.tool_name("add_comment")
 
     def test_disabled_worker_does_not_claim_tasks(self):
-        worker = Worker({"KANZO_ENABLED": "false", "HERMES_HOME": str(Path(".").resolve())})
+        state_dir = tempfile.TemporaryDirectory()
+        worker = Worker({"KANZO_ENABLED": "false", "HERMES_HOME": str(Path(".").resolve()), "KANZO_WORKER_STATE_DIR": state_dir.name})
         worker._call = lambda *_: self.fail("disabled worker must not call MCP")
         self.assertFalse(worker.process_one())
+        worker.ledger.close()
+        state_dir.cleanup()
 
 
 if __name__ == "__main__":

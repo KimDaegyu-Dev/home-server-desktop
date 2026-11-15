@@ -748,12 +748,12 @@ class Worker:
                 self.client.connect()
             return self.client.call(suffix, args)
 
-    def _active_task_cancel_requested(self, active: dict[str, Any]) -> bool:
+    def _active_task_cancel_requested(self, active: dict[str, Any]) -> bool | None:
         try:
             details = self._call("get_task", {"id": active["task_id"]})
         except Exception:
             LOG.exception("Could not inspect active task %s after a Kanzo event", active["task_id"])
-            return False
+            return None
         return (
             status_from_details(details) == "review"
             and human_from_details(details)
@@ -1023,7 +1023,13 @@ class Worker:
                         LOG.exception("Could not renew quarantined sandbox lease for %s", active["run_id"])
                     last_uncertain_heartbeat = now
             if active.get("cancel_pending"):
-                if not self._active_task_cancel_requested(active):
+                cancellation = self._active_task_cancel_requested(active)
+                if cancellation is None:
+                    # A transient Kanzo failure must not consume the only cancel
+                    # event. Keep the run active and retry this read shortly.
+                    active["stop_monitor"].wait(timeout=5)
+                    continue
+                if not cancellation:
                     active["cancel_pending"] = False
                     continue
                 active.setdefault("cancel_signal_at", time.monotonic())
@@ -1039,6 +1045,19 @@ class Worker:
                 else:
                     active["stop_monitor"].wait(timeout=5)
                 continue
+            if active.get("cancel_check_pending"):
+                if active["stop_monitor"].wait(timeout=5):
+                    return
+                cancellation = self._active_task_cancel_requested(active)
+                if cancellation is None:
+                    continue
+                active["cancel_check_pending"] = False
+                if not cancellation:
+                    continue
+                active["cancel_pending"] = True
+                active["cancel_signal_at"] = time.monotonic()
+                active["cancel_attempts"] = 1
+                continue
             if not self.active_change.wait(timeout=1):
                 continue
             self.active_change.clear()
@@ -1050,7 +1069,11 @@ class Worker:
                     return
                 if not active["accept_cancel"]:
                     continue
-            if self._active_task_cancel_requested(active):
+            cancellation = self._active_task_cancel_requested(active)
+            if cancellation is None:
+                active["cancel_check_pending"] = True
+                continue
+            if cancellation:
                 active["cancel_pending"] = True
                 active["cancel_signal_at"] = time.monotonic()
                 active["cancel_attempts"] = 1

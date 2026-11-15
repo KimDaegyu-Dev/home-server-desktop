@@ -752,12 +752,59 @@ class Worker:
         try:
             details = self._call("get_task", {"id": active["task_id"]})
         except Exception:
-            LOG.exception("Could not inspect active task %s after a Kanzo event", active["task_id"])
+            failures = active.get("cancel_check_failures", 0) + 1
+            active["cancel_check_failures"] = failures
+            if failures == 1 or failures % 12 == 0:
+                LOG.warning(
+                    "Could not inspect active task %s after a Kanzo event; will retry (consecutive failures: %d)",
+                    active["task_id"], failures,
+                )
             return None
+        active["cancel_check_failures"] = 0
         return (
             status_from_details(details) == "review"
             and human_from_details(details)
         )
+
+    def _active_cancel_allowed(self, active: dict[str, Any]) -> bool:
+        with self.active_lock:
+            current = self.active_run
+            return (
+                current is active
+                and current.get("task_id") == active.get("task_id")
+                and current.get("run_id") == active.get("run_id")
+                and active.get("accept_cancel", False)
+            )
+
+    def _disable_active_cancel(self, active: dict[str, Any]) -> None:
+        with self.active_lock:
+            if self.active_run is active:
+                active["accept_cancel"] = False
+
+    def _queue_active_cancel(self, active: dict[str, Any]) -> bool:
+        with self.active_lock:
+            current = self.active_run
+            if (
+                current is not active
+                or current.get("task_id") != active.get("task_id")
+                or current.get("run_id") != active.get("run_id")
+                or not active.get("accept_cancel", False)
+                or active.get("cancel_pending", False)
+            ):
+                return False
+            active["cancel_pending"] = True
+            active["cancel_signal_at"] = time.monotonic()
+            active["cancel_attempts"] = 1
+            active["cancel_resolution"].clear()
+            return True
+
+    @staticmethod
+    def _resolve_cancel_pending(active: dict[str, Any], *, confirmed: bool = False) -> None:
+        if confirmed:
+            active["cancelled"].set()
+        else:
+            active["cancel_pending"] = False
+        active["cancel_resolution"].set()
 
     def _record_hermes_session(self, active: dict[str, Any], session_id: str) -> None:
         """Keep the resident Gateway session identity beside its Kanzo run."""
@@ -985,6 +1032,7 @@ class Worker:
         except Exception:
             LOG.exception("Could not publish uncertain remote cancellation for run %s", active["run_id"])
         LOG.error("Remote cancellation is unconfirmed for %s/%s; quarantining worker run", active["task_id"], active["run_id"])
+        active["cancel_resolution"].set()
 
     def _quarantine_uncertain_cancel(self, active: dict[str, Any]) -> None:
         """Hold the worker and renew its sandbox lease until a human resolves ambiguity."""
@@ -1023,20 +1071,28 @@ class Worker:
                         LOG.exception("Could not renew quarantined sandbox lease for %s", active["run_id"])
                     last_uncertain_heartbeat = now
             if active.get("cancel_pending"):
+                if not self._active_cancel_allowed(active):
+                    self._resolve_cancel_pending(active)
+                    active["cancel_check_pending"] = False
+                    continue
                 cancellation = self._active_task_cancel_requested(active)
                 if cancellation is None:
                     # A transient Kanzo failure must not consume the only cancel
                     # event. Keep the run active and retry this read shortly.
                     active["stop_monitor"].wait(timeout=5)
                     continue
+                if not self._active_cancel_allowed(active):
+                    self._resolve_cancel_pending(active)
+                    active["cancel_check_pending"] = False
+                    continue
                 if not cancellation:
-                    active["cancel_pending"] = False
+                    self._resolve_cancel_pending(active)
                     continue
                 active.setdefault("cancel_signal_at", time.monotonic())
                 active["cancel_attempts"] = active.get("cancel_attempts", 0) + 1
                 if self._cancel_active_executor(active):
                     active["remote_execution_uncertain"] = False
-                    active["cancelled"].set()
+                    self._resolve_cancel_pending(active, confirmed=True)
                     return
                 elapsed = time.monotonic() - active["cancel_signal_at"]
                 if elapsed >= 120:
@@ -1046,40 +1102,38 @@ class Worker:
                     active["stop_monitor"].wait(timeout=5)
                 continue
             if active.get("cancel_check_pending"):
+                if not self._active_cancel_allowed(active):
+                    active["cancel_check_pending"] = False
+                    continue
                 if active["stop_monitor"].wait(timeout=5):
                     return
+                if not self._active_cancel_allowed(active):
+                    active["cancel_check_pending"] = False
+                    continue
                 cancellation = self._active_task_cancel_requested(active)
                 if cancellation is None:
                     continue
                 active["cancel_check_pending"] = False
-                if not cancellation:
+                if not cancellation or not self._queue_active_cancel(active):
                     continue
-                active["cancel_pending"] = True
-                active["cancel_signal_at"] = time.monotonic()
-                active["cancel_attempts"] = 1
                 continue
             if not self.active_change.wait(timeout=1):
                 continue
             self.active_change.clear()
             if active["stop_monitor"].is_set():
                 return
-            with self.active_lock:
-                current = self.active_run
-                if current is None or current["task_id"] != active["task_id"] or current["run_id"] != active["run_id"]:
-                    return
-                if not active["accept_cancel"]:
-                    continue
+            if not self._active_cancel_allowed(active):
+                continue
             cancellation = self._active_task_cancel_requested(active)
             if cancellation is None:
                 active["cancel_check_pending"] = True
                 continue
             if cancellation:
-                active["cancel_pending"] = True
-                active["cancel_signal_at"] = time.monotonic()
-                active["cancel_attempts"] = 1
+                if not self._queue_active_cancel(active):
+                    continue
                 if self._cancel_active_executor(active):
                     active["remote_execution_uncertain"] = False
-                    active["cancelled"].set()
+                    self._resolve_cancel_pending(active, confirmed=True)
                     return
                 if time.monotonic() - active["cancel_signal_at"] >= 120:
                     self._mark_cancel_unconfirmed(active)
@@ -1139,16 +1193,17 @@ class Worker:
         if active is None:
             return
         self._raise_if_cancelled(active)
-        if self._active_task_cancel_requested(active):
-            active["cancel_pending"] = True
-            active.setdefault("cancel_signal_at", time.monotonic())
-            active["cancel_attempts"] = active.get("cancel_attempts", 0) + 1
-            if self._cancel_active_executor(active):
-                active["remote_execution_uncertain"] = False
-                active["cancelled"].set()
-            elif time.monotonic() - active["cancel_signal_at"] >= 120:
-                self._mark_cancel_unconfirmed(active)
-            self._raise_if_cancelled(active)
+        cancellation = self._active_task_cancel_requested(active)
+        if cancellation and self._queue_active_cancel(active):
+            # The watcher owns remote cancellation so a refresh checkpoint and
+            # an SSE wake cannot issue competing executor cancel requests.
+            self.active_change.set()
+        while active.get("cancel_pending") and not active["cancelled"].is_set():
+            if active.get("remote_execution_uncertain"):
+                break
+            active["cancel_resolution"].wait(timeout=1)
+            active["cancel_resolution"].clear()
+        self._raise_if_cancelled(active)
 
     def _record_cancelled_run(self, task_id: str, run_id: str) -> None:
         # The user's review/human state is already the durable cancellation signal.
@@ -2123,6 +2178,7 @@ class Worker:
             "cancel_pending": False,
             "process": None,
             "cancelled": threading.Event(),
+            "cancel_resolution": threading.Event(),
             "stop_monitor": threading.Event(),
             "accept_cancel": True,
         }
@@ -2217,7 +2273,7 @@ class Worker:
                 if backlog_notes:
                     handoff_summary += "\n\n" + "\n".join(backlog_notes)
                 self._refresh_cancel_state(active)
-                active["accept_cancel"] = False
+                self._disable_active_cancel(active)
                 self._create_human_handoff(task, human_actions, handoff_summary)
                 self.ledger.mark_publication(run_id, "human_handoff")
                 outcome = "waiting"
@@ -2245,7 +2301,7 @@ class Worker:
                 self._comment_result(task_id, published_body, run_id=run_id)
                 self.ledger.mark_publication(run_id, "result_comment")
                 self._refresh_cancel_state(active)
-                active["accept_cancel"] = False
+                self._disable_active_cancel(active)
                 self._call("update_task", {"id": task_id, "status": "review", "url": pr_url})
                 self.ledger.mark_publication(run_id, "task_status")
                 outcome = "review"
@@ -2263,7 +2319,7 @@ class Worker:
                 self._comment_result(task_id, published_body, run_id=run_id)
                 self.ledger.mark_publication(run_id, "result_comment")
                 self._refresh_cancel_state(active)
-                active["accept_cancel"] = False
+                self._disable_active_cancel(active)
                 if (task.route and task.route.read_only) or outcome == "review":
                     outcome = "review"
                     self._call("update_task", {"id": task_id, "status": "review", "human": True})
@@ -2300,7 +2356,7 @@ class Worker:
                 self.ledger.mark_publication(run_id, "cancel_notice")
                 self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|cancelled"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|cancelled", 0) + 1
                 return True
-            active["accept_cancel"] = False
+            self._disable_active_cancel(active)
             LOG.exception("Task execution failed for %s", task_id)
             self._persist_run_diagnostic(
                 task_id, run_id, "failed",
@@ -2333,7 +2389,7 @@ class Worker:
             unresolved_remote = bool(active.get("remote_execution_uncertain"))
             if not unresolved_remote:
                 active["stop_monitor"].set()
-            active["accept_cancel"] = False
+            self._disable_active_cancel(active)
             broker_client = active.get("broker_client")
             broker_lease = active.get("broker_lease")
             if (

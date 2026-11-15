@@ -123,7 +123,7 @@ spec:
               values = {\n    'MCPPROXY_URL': os.environ['MCPPROXY_URL'],\n    'MCPPROXY_AGENT_READ_TOKEN': os.environ.get('MCPPROXY_AGENT_READ_TOKEN',\
               \ ''),\n    'LITELLM_API_KEY': os.environ.get('LITELLM_API_KEY', ''),\n    'LITELLM_BASE_URL': os.environ['LITELLM_BASE_URL'],\n\
               \    'OPENAI_API_KEY': os.environ.get('LITELLM_API_KEY', ''),\n    'OPENAI_BASE_URL': os.environ['LITELLM_BASE_URL'],\n\
-              \    'KANZO_ANALYSIS_MODEL': 'iq_3s',\n}\nhomes = [root, *(root / 'profiles' / name for name in ('researcher',\
+              \    'KANZO_ANALYSIS_MODEL': 'iq_3s',\n    'HERMES_LANGFUSE_PUBLIC_KEY': os.environ.get('HERMES_LANGFUSE_PUBLIC_KEY', ''),\n    'HERMES_LANGFUSE_SECRET_KEY': os.environ.get('HERMES_LANGFUSE_SECRET_KEY', ''),\n    'HERMES_LANGFUSE_BASE_URL': os.environ.get('HERMES_LANGFUSE_BASE_URL', ''),\n}\nhomes = [root, *(root / 'profiles' / name for name in ('researcher',\
               \ 'builder', 'reviewer'))]\nfor home in homes:\n    path = home / '.env'\n    existing = path.read_text(encoding='utf-8').splitlines()\
               \ if path.exists() else []\n    kept = [line for line in existing if line.partition('=')[0] not in values]\n\
               \    path.write_text('\\n'.join([*kept, *(f'{key}={value}' for key, value in values.items())]) + '\\n', encoding='utf-8')\n\
@@ -146,6 +146,18 @@ spec:
                   name: kanzo-agent-credentials
                   key: LITELLM_API_KEY
                   optional: true
+            - name: HERMES_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_PUBLIC_KEY
+            - name: HERMES_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-langfuse-credentials
+                  key: HERMES_LANGFUSE_SECRET_KEY
+            - name: HERMES_LANGFUSE_BASE_URL
+              value: http://langfuse-web.langfuse.svc.cluster.local:3000
           volumeMounts:
             - name: hermes-home
               mountPath: /opt/data

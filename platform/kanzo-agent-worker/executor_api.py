@@ -866,8 +866,9 @@ def _reconcile_startup(store: Store) -> None:
         session = row["session_id"]
         admission = row["admission_id"]
         generation = row["execution_generation"]
-        # Missing admission or generation means the Gateway operation cannot be
-        # addressed exactly. Preserve ambiguity for human review.
+        # Admission is required for exact addressing. A missing generation can
+        # still be recovered from a terminal receipt, but a running turn cannot
+        # be interrupted without the stored generation.
         if (not _valid_identity(session, 256) or not _valid_identity(admission, 256)
                 or (generation is not None and (type(generation) is not int or generation < 0))):
             continue
@@ -879,11 +880,18 @@ def _reconcile_startup(store: Store) -> None:
                 args.extend(["--generation", str(generation)])
             code, output, _ = _run_helper(args, timeout=30, output_limit=64 * 1024)
             result = json.loads(output)
+            recovered_generation = (
+                result.get("execution_generation") if isinstance(result, dict) else None
+            )
             if (code == 0 and isinstance(result, dict) and result.get("accepted") is True
                     and result.get("terminal") is True and result.get("session_id") == session
-                    and result.get("execution_generation") == generation):
+                    and type(recovered_generation) is int and recovered_generation >= 0
+                    and (generation is None or recovered_generation == generation)):
                 outcome = result.get("outcome")
                 state = "cancelled" if outcome in {"cancelled", "interrupted"} else "reconciled_terminal"
+                if generation is None:
+                    store.set_generation(row["task_id"], row["run_id"], session, admission,
+                                         recovered_generation)
                 store.finish_submit(row["task_id"], row["run_id"], state)
             # Any uncertain Gateway response intentionally leaves this row ambiguous.
         except Exception:

@@ -311,6 +311,34 @@ async def _reconcile_via_gateway(
                     return _outcome(False, "none", "pending_state_unverified")
                 matches = [item for item in pending if isinstance(item, dict)
                            and item.get("admission_id") == admission_id]
+                if not matches:
+                    # Completed admissions are no longer present in `pending`.
+                    # Ask the Gateway for the exact durable receipt before leaving
+                    # a terminal run ambiguous or attempting any cancellation.
+                    try:
+                        receipt = await client.rpc(
+                            "prompt.receipt", session_id=session_id,
+                            admission_id=admission_id, include_result=False,
+                        )
+                    except Exception:
+                        return _outcome(False, "none", "admission_not_found_or_ambiguous",
+                                        execution_generation, session_id=session_id)
+                    receipt_generation = (
+                        receipt.get("execution_generation") if isinstance(receipt, dict) else None
+                    )
+                    if (not isinstance(receipt, dict)
+                            or receipt.get("admission_id") != admission_id
+                            or receipt.get("status") != "terminal"
+                            or type(receipt_generation) is not int or receipt_generation < 0
+                            or (execution_generation is not None
+                                and receipt_generation != execution_generation)):
+                        return _outcome(False, "none", "admission_not_found_or_ambiguous",
+                                        execution_generation, session_id=session_id)
+                    return {
+                        "accepted": True, "action": "already_terminal", "terminal": True,
+                        "outcome": receipt.get("outcome", "unknown"),
+                        "execution_generation": receipt_generation, "session_id": session_id,
+                    }
                 if len(matches) != 1:
                     return _outcome(False, "none", "admission_not_found_or_ambiguous")
                 item = matches[0]
@@ -356,10 +384,14 @@ async def _reconcile_via_gateway(
                     except Exception:
                         receipt = None
                     if (isinstance(receipt, dict) and receipt.get("admission_id", admission_id) == admission_id
-                            and receipt.get("status") == "terminal"):
+                            and receipt.get("status") == "terminal"
+                            and type(receipt.get("execution_generation")) is int
+                            and receipt.get("execution_generation") >= 0
+                            and (execution_generation is None
+                                 or receipt.get("execution_generation") == execution_generation)):
                         return {"accepted": True, "action": action, "terminal": True,
                                 "outcome": receipt.get("outcome", "unknown"),
-                                "execution_generation": execution_generation, "session_id": session_id}
+                                "execution_generation": receipt["execution_generation"], "session_id": session_id}
                     if asyncio.get_running_loop().time() >= deadline:
                         return _outcome(False, action, "terminal_state_unproven", execution_generation, session_id=session_id)
                     await asyncio.sleep(0.5)

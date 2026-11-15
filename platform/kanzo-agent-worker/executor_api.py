@@ -898,6 +898,26 @@ def _reconcile_startup(store: Store) -> None:
             continue
 
 
+def _reconciliation_loop(store: Store) -> None:
+    """Retry durable reconciliation after Gateway startup without blocking the API."""
+    while True:
+        try:
+            _reconcile_startup(store)
+            retryable_create = bool(store.ambiguous_creates())
+            retryable_submit = any(
+                _valid_identity(row["session_id"], 256)
+                and _valid_identity(row["admission_id"], 256)
+                for row in store.ambiguous_submits()
+            )
+            if not retryable_create and not retryable_submit:
+                return
+        except Exception:
+            # Keep the service available and try again after transient store or
+            # Gateway startup errors. Unaddressable rows remain human-reviewable.
+            pass
+        time.sleep(15)
+
+
 def main() -> int:
     token = os.environ.get("KANZO_EXECUTOR_API_TOKEN", "")
     data_dir_value = os.environ.get("KANZO_EXECUTOR_DATA_DIR", "")
@@ -915,10 +935,12 @@ def main() -> int:
         if not 1 <= port <= 65535 or not 1 <= max_threads <= 64:
             raise ValueError("configuration")
         server = BoundedServer((host, port), Handler, max_threads=max_threads)
-        _reconcile_startup(store)
     except Exception:
         print("executor_configuration_invalid", file=sys.stderr)
         return 2
+    threading.Thread(
+        target=_reconciliation_loop, args=(store,), name="kanzo-run-reconciliation", daemon=True
+    ).start()
     previous_handlers: dict[int, Any] = {}
     for signum in (signal.SIGTERM, signal.SIGINT):
         previous_handlers[signum] = signal.getsignal(signum)

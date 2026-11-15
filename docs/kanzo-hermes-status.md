@@ -280,3 +280,9 @@
 - 상태 이전 Sync hook이 기존 성공 migration의 ledger v1을 현재 버전으로 거부하는 것을 배포 중 발견했다. verifier가 v1과 v2 schema를 검증하도록 고쳐 hook을 성공시켰으며, dispatcher/executor도 새 ConfigMap을 참조한다. Argo `kanzo`와 `kanzo-agent-worker`는 commit `1ec912e`에서 Synced/Healthy다.
 - 검증: Kanzo `cargo fmt --check`, 전체 Rust 테스트 75/75, release 이미지 빌드 및 K3s import, Worker Python 구문 확인, 신규 ledger와 v1→v2 migration smoke, 두 Kustomize 렌더링을 통과했다. 실행 중인 dispatcher에서 MCPProxy를 통해 `kanzo:next_task` signature의 선택적 `run_id` 인자를 확인했다.
 - 실태스크 검증은 미완료다. 현재 `hermes-harness-lab#29`는 Todo이나 human-owned #31을 기다리며, dispatcher 로그도 agent-eligible task가 없다고 확인했다. 사람의 선행 판단 없이 이를 실행시키지 않았다.
+
+### 2026-11-15 — Executor readiness claim gate 롤아웃 확인
+
+- `67fa31b`를 배포했다. Executor 3/3 컨테이너와 Dispatcher 2/2 컨테이너가 Ready이며 Argo `kanzo-agent-worker`는 `Synced/Healthy`다.
+- 롤아웃 중 Executor가 준비되지 않았던 짧은 구간에 Dispatcher 로그가 `Executor is not ready; leaving Kanzo tasks unclaimed`를 기록했다. Executor 준비를 기다리는 동안 Kanzo task를 claim하지 않는 동작을 live에서 확인했다. 이후 Dispatcher가 재기동되어 정상 Ready 상태가 됐다.
+- 이 롤아웃에서 기존 human-gated 작업을 claim하지 않았다. 현재 자동 실행이 가능한 Todo가 없으므로 end-to-end 신규 run 검증은 보류다. #31 사람 검토 및 #29의 선행 관계가 해결된 뒤 실제 run으로 Kanzo 상태, run ledger, 산출물, Gateway session, Langfuse trace를 다시 대조해야 한다.

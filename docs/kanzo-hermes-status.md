@@ -28,7 +28,7 @@
 
 - 사용자가 로드맵 진행을 위임한 뒤 #47을 Backlog에서 Todo로 옮겼고, Kanzo 이벤트 경로가 run `db69643f27a1`을 시작했다(08:47 UTC). 이 실행은 동일 조건의 성공한 read-only researcher 표본을 수집하는 작업이며, 결과가 나오기 전에는 기준선으로 확정하지 않는다.
 - 현재 live Argo Application `kanzo-agent-worker`는 revision `fb676c1356a04fee52fec8369609ce1c0a71ef36`에서 Synced/Healthy다. `mcp` namespace의 Dispatcher와 Executor는 각각 1/1 Ready다.
-- Live `kanzo-sandboxes` runner Pod 설정은 `readOnlyRootFilesystem=true`, `/workspace` read-only, `/scratch` writable, `automountServiceAccountToken=false`다. namespace의 NetworkPolicy는 기본 ingress/egress deny이며 runner의 egress는 broker와 cluster DNS로 제한된다. 활성 #47 run이 해당 Pod를 소유하는지는 현재 Pod metadata만으로 연결되지 않아 귀속하지 않는다. 실제 파일 쓰기 거부, 취소 시 자식 프로세스 회수, memory/skill 연속성은 여전히 별도 런타임 검증이 필요하다.
+- Live runner Pod `kanzo-run-6812471543ec06998002`는 broker 코드의 결정적 이름 규칙 `kanzo-run-<sha256(task_id:run_id)[0:20]>`에 `hermes-harness-lab#47` / `db69643f27a1`을 대입한 값과 일치한다. Pod는 08:47:27 UTC에 시작했고 Running이다. 설정은 `readOnlyRootFilesystem=true`, `/workspace` read-only, `/scratch` writable, `automountServiceAccountToken=false`다. namespace의 NetworkPolicy는 기본 ingress/egress deny이며 runner의 egress는 broker와 cluster DNS로 제한된다. 이는 run에 귀속된 설정 증거다. 실제 파일 쓰기 거부, 취소 시 자식 프로세스 회수, memory/skill 연속성은 여전히 별도 런타임 검증이 필요하다.
 
 ### 2026-11-15 — Phase 2·3·6 감사와 취소 감시 보강
 

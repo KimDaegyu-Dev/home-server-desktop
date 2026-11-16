@@ -345,6 +345,39 @@ class Runner:
         self._lock = threading.RLock()
         self._closing = False
         self._exporting = False
+        self._memory_current_path = Path("/sys/fs/cgroup/memory.current")
+        if not self._memory_current_path.is_file():
+            self._memory_current_path = Path("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+        self._memory_peak_path = Path("/sys/fs/cgroup/memory.peak")
+        if not self._memory_peak_path.is_file():
+            self._memory_peak_path = Path("/sys/fs/cgroup/memory/memory.max_usage_in_bytes")
+        self._memory_peak_lock = threading.Lock()
+        self._memory_peak_stop = threading.Event()
+        self._sampled_memory_peak_bytes: int | None = None
+        self._memory_peak_sample_interval_ms = 100
+        if not self._memory_peak_path.is_file() and self._memory_current_path.is_file():
+            self._sample_memory_current()
+            self._memory_peak_thread = threading.Thread(
+                target=self._sample_memory_peak, name="kanzo-memory-peak", daemon=True
+            )
+            self._memory_peak_thread.start()
+
+    def _sample_memory_current(self) -> None:
+        try:
+            value = self._memory_current_path.read_text(encoding="ascii").strip()
+            if not value.isdecimal():
+                return
+            with self._memory_peak_lock:
+                current = int(value)
+                if self._sampled_memory_peak_bytes is None or current > self._sampled_memory_peak_bytes:
+                    self._sampled_memory_peak_bytes = current
+        except (OSError, ValueError):
+            pass
+
+    def _sample_memory_peak(self) -> None:
+        while not self._memory_peak_stop.is_set():
+            self._sample_memory_current()
+            self._memory_peak_stop.wait(self._memory_peak_sample_interval_ms / 1000)
 
     def activity(self) -> dict[str, Any]:
         with self._lock:
@@ -358,25 +391,24 @@ class Runner:
                 "exporting_changes": self._exporting,
             }
 
-    @staticmethod
-    def resource_usage() -> dict[str, Any]:
+    def resource_usage(self) -> dict[str, Any]:
         """Read container cgroup counters without exposing process details."""
         cgroup = Path("/sys/fs/cgroup")
         version = "v2"
         cpu_stat = cgroup / "cpu.stat"
-        memory_current = cgroup / "memory.current"
-        memory_peak = cgroup / "memory.peak"
+        memory_current = self._memory_current_path
+        memory_peak = self._memory_peak_path
         cpu_max = cgroup / "cpu.max"
         if not cpu_stat.is_file():
             version = "v1"
             cpu_stat = Path("/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage")
-            memory_current = Path("/sys/fs/cgroup/memory/memory.usage_in_bytes")
-            memory_peak = Path("/sys/fs/cgroup/memory/memory.max_usage_in_bytes")
+            memory_current = self._memory_current_path
+            memory_peak = self._memory_peak_path
             cpu_quota = Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
             cpu_period = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
         values: dict[str, Any] = {
             "schema": "kanzo-sandbox-resource-usage/v1",
-            "collector_version": "independent-cgroup-read-v2",
+            "collector_version": "sampled-memory-peak-v3",
             "cgroup_version": version,
             "sampled_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         }
@@ -432,10 +464,18 @@ class Runner:
             peak = memory_peak.read_text(encoding="ascii").strip()
             if peak.isdecimal():
                 values["memory_peak_bytes"] = int(peak)
+                values["memory_peak_source"] = "kernel_cgroup"
             else:
-                unavailable.append("memory_peak_bytes")
+                raise ValueError("invalid memory peak")
         except (OSError, ValueError):
-            unavailable.append("memory_peak_bytes")
+            with self._memory_peak_lock:
+                sampled_peak = self._sampled_memory_peak_bytes
+            if sampled_peak is None:
+                unavailable.append("memory_peak_bytes")
+            else:
+                values["memory_peak_bytes"] = sampled_peak
+                values["memory_peak_source"] = "sampled_memory_current"
+                values["memory_peak_sample_interval_ms"] = self._memory_peak_sample_interval_ms
         values["unavailable_metrics"] = sorted(set(unavailable))
         values["available"] = any(key in values for key in (
             "cpu_usage_seconds", "memory_current_bytes", "memory_peak_bytes",

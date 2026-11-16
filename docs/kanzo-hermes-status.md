@@ -37,3 +37,9 @@
 - Integrated `human-agent-report` into the Gateway executor's persistent Hermes homes and final-comment prompt. It applies only to human-facing final Kanzo reports; it adds no model rewrite call. Worker suite passed 45/45, skill tests 6/6, Python compilation and Kustomize rendering passed.
 - Completed the session-bound Langfuse user attribution change with the pseudonymous ID `kanzo-owner`; live trace verification and rollout are pending.
 - At the usage-limit interruption, work had already reached the post-drain Langfuse audit: run `test-1#111` proved trace/session/run attribution, but the Langfuse observations had an empty `userId`. The immediate task was to bind a user ID per Gateway session, then verify a new trace. Remaining roadmap work is summarized in `kanzo-hermes-evidence-log.md` and the design SSOT `kanzo-hermes-roadmap.md`; the live rollout and user-ID canary remain immediate.
+
+## Latest canary findings
+
+- `test-1#112` verified the skill is registered and can be loaded, but exposed a bad literal file path and unnecessary report-file/lint work. Langfuse counted 11 generations for a simple comment (27 total observations, 3 skill views, 2 file reads, plus temporary artifact and lint operations). The comment was still too verbose and confused earlier test results with checks performed during the run.
+- A prompt-only correction now calls the skill once by its Hermes name, requests inline compose, skips files/lint for a normal Kanzo comment, and marks prior results as prior evidence. It passed the worker suite 46/46 but has not been rolled out.
+- Langfuse user tracking now passed live: 27 observations in one trace for run `c19740fe3a57`, all with `userId=kanzo-owner`.

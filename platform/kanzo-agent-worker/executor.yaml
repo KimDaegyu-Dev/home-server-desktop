@@ -264,14 +264,6 @@ spec:
                   key: HERMES_LANGFUSE_SECRET_KEY
             - name: HERMES_LANGFUSE_BASE_URL
               value: http://langfuse-web.langfuse.svc.cluster.local:3000
-            - name: MCPPROXY_URL
-              value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
-            - name: MCPPROXY_AGENT_READ_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: kanzo-agent-credentials
-                  key: MCPPROXY_AGENT_READ_TOKEN
-                  optional: true
             - name: KANZO_BROKER_URL
               value: http://kanzo-sandbox-broker.mcp.svc.cluster.local:8080
             - name: KANZO_BROKER_TOKEN
@@ -282,34 +274,6 @@ spec:
                   optional: true
             - name: KANZO_ANALYSIS_MODEL
               value: iq_3s
-            - name: LITELLM_BASE_URL
-              value: http://litellm.litellm.svc.cluster.local:4000/v1
-            - name: LITELLM_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: kanzo-agent-credentials
-                  key: LITELLM_API_KEY
-                  optional: true
-            - name: OPENAI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: kanzo-agent-credentials
-                  key: LITELLM_API_KEY
-                  optional: true
-            - name: OPENAI_BASE_URL
-              value: http://litellm.litellm.svc.cluster.local:4000/v1
-            - name: HERMES_LANGFUSE_PUBLIC_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: hermes-langfuse-credentials
-                  key: HERMES_LANGFUSE_PUBLIC_KEY
-            - name: HERMES_LANGFUSE_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: hermes-langfuse-credentials
-                  key: HERMES_LANGFUSE_SECRET_KEY
-            - name: HERMES_LANGFUSE_BASE_URL
-              value: http://langfuse-web.langfuse.svc.cluster.local:3000
           volumeMounts:
             - name: hermes-home
               mountPath: /opt/data

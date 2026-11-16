@@ -19,7 +19,7 @@
 - Langfuse 사용자 연결은 canary `test-1#112`에서 확인됐다. 단일 trace의 27개 observation 모두 pseudonymous `userId=kanzo-owner`를 기록했다. 보고 canary #112/#114는 보관 완료, 중복 제안 #113은 `declined` 이유와 함께 보관했다.
 - report canary 결과의 사람 검토, #107–#110 등 기존 Review 카드의 판단은 사용자 몫으로 남겨 두었다. backlog #48/#49는 사용자 승인 전 Todo로 옮기지 않았다.
 
-- The #47 resource-baseline run failed after 40 model calls because a `KANZO_HUMAN_ACTION` title exceeded the parser's 180-character bound, which the prompt did not state. Logs show 1,865,026 input tokens (1,542,539 cache-read) and 44,741 output tokens; these are usage counts, not cost. The prompt now states the enforced title/description limits; live rollout verification is pending.
+- The #47 resource-baseline run failed after 40 model calls because a `KANZO_HUMAN_ACTION` title exceeded the parser's 180-character bound, which the prompt did not state. Logs show 1,865,026 input tokens (1,542,539 cache-read) and 44,741 output tokens; these are usage counts, not cost. The prompt now states the enforced title/description limits; Argo CD applied `bb6e0eb` (Synced/Healthy), the new dispatcher pod is 2/2 Ready, and the live worker code contains the constraints. No model canary ran.
 
 ## 남은 작업
 

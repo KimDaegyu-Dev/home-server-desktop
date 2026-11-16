@@ -524,10 +524,13 @@ class BrokerStore:
             db.execute("""INSERT INTO child_sessions(child_session_id,parent_session_id,task_id,run_id,
                 active,created_at) VALUES(?,?,?,?,1,?)""",
                        (child_session_id, parent_session_id, run["task_id"], run["run_id"], now))
+            parent_count = self._session_mapping_count(db, parent_session_id)
+            child_count = self._session_mapping_count(db, child_session_id)
             db.execute("COMMIT")
-        _LOG.info("registered child session (task_id=%s run_id=%s parent_fp=%s child_fp=%s)",
+        _LOG.info("registered child session (task_id=%s run_id=%s parent_fp=%s parent_mapping_count=%d "
+                  "child_fp=%s child_mapping_count=%d)",
                   run["task_id"], run["run_id"], _session_fingerprint(parent_session_id),
-                  _session_fingerprint(child_session_id))
+                  parent_count, _session_fingerprint(child_session_id), child_count)
         return {"state": "bound", "hermes_session_id": child_session_id, "idempotent": False}
 
     def close_child_session(self, parent_session_id: str, child_session_id: str) -> dict[str, Any]:
@@ -542,10 +545,23 @@ class BrokerStore:
                 raise BrokerError(409, "child_parent_mismatch")
             db.execute("UPDATE child_sessions SET active=0,closed_at=COALESCE(closed_at,?) "
                        "WHERE child_session_id=? AND active=1", (now, child_session_id))
-            _LOG.info("revoked child session (child_fp=%s parent_fp=%s active_before=%s)",
-                      _session_fingerprint(child_session_id), _session_fingerprint(parent_session_id),
-                      bool(row["active"]))
+            parent_count = self._session_mapping_count(db, parent_session_id)
+            child_count = self._session_mapping_count(db, child_session_id)
+            _LOG.info("revoked child session (parent_fp=%s parent_mapping_count=%d child_fp=%s "
+                      "child_mapping_count=%d active_before=%s)",
+                      _session_fingerprint(parent_session_id), parent_count,
+                      _session_fingerprint(child_session_id), child_count, bool(row["active"]))
             return {"state": "closed", "idempotent": not bool(row["active"])}
+
+    @staticmethod
+    def _session_mapping_count(db: sqlite3.Connection, session_id: str) -> int:
+        rows = db.execute("""SELECT 1 FROM runs WHERE hermes_session_id=?
+                AND state='bound' AND expires_at>?
+            UNION ALL
+            SELECT 1 FROM child_sessions c JOIN runs r ON r.task_id=c.task_id AND r.run_id=c.run_id
+                WHERE c.child_session_id=? AND c.active=1 AND r.state='bound' AND r.expires_at>?""",
+                          (session_id, _now(), session_id, _now())).fetchall()
+        return len(rows)
 
     @staticmethod
     def _bound_run_for_session(db: sqlite3.Connection, session_id: str) -> sqlite3.Row:
@@ -1121,6 +1137,11 @@ def _reaper(store: BrokerStore, stop: threading.Event) -> None:
 
 
 def main() -> None:
+    lifecycle_log = logging.StreamHandler()
+    lifecycle_log.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    _LOG.addHandler(lifecycle_log)
+    _LOG.setLevel(logging.INFO)
+    _LOG.propagate = False
     worker_token = _read_token_env("KANZO_BROKER_WORKER_TOKEN")
     gateway_token = _read_token_env("KANZO_BROKER_GATEWAY_TOKEN")
     if hmac.compare_digest(worker_token, gateway_token):

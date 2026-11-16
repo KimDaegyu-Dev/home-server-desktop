@@ -126,6 +126,18 @@ class BrokerChildSessionTests(unittest.TestCase):
         with self.assertRaises(sandbox_broker.BrokerError):
             self.store.register_child_session(second_root, "child-one")
 
+    def test_lifecycle_logs_mapping_counts_without_raw_session_ids(self) -> None:
+        with self.assertLogs("kanzo.sandbox_broker", level="INFO") as captured:
+            self.store.register_child_session(self.root_session, "child-count-test")
+            self.store.close_child_session(self.root_session, "child-count-test")
+
+        joined = "\n".join(captured.output)
+        self.assertIn("parent_mapping_count=1 child_fp=", joined)
+        self.assertIn("child_mapping_count=1", joined)
+        self.assertIn("child_mapping_count=0", joined)
+        self.assertNotIn(self.root_session, joined)
+        self.assertNotIn("child-count-test", joined)
+
     def test_missing_session_mapping_has_a_specific_error(self) -> None:
         with self.assertRaises(sandbox_broker.BrokerError) as caught:
             self.store.authorize_session("unmapped-session")

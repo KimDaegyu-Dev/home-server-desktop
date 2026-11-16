@@ -608,3 +608,11 @@ This file preserves the dated implementation notes and operational evidence form
 - The status document was reconciled to this deployed revision. Roadmap items still open are direct forced-Gateway-termination reconciliation evidence, ReadOnly learning/memory persistence and delegated lease boundaries, full cross-system terminal-outcome/generation/delegate trace reconciliation, and matched-run performance baselines. Backlog #48/#49 remain for user review.
 
 - Follow-up deterministic runtime probe: invoked the running Gateway’s actual `tools.terminal_tool._run_foreground` with a fake Kanzo environment returning the provider’s structured non-retryable error. The wrapper called `env.execute` exactly once and returned the failure payload. No model call or remote command was made. This closes the wrapper-integration gap for returned errors; it does not simulate a real broker network fault.
+
+
+### 2026-11-16 — deterministic preflight failures no longer enter Hermes retries
+
+- The running Hermes terminal wrapper retries exceptions three times with 2/4/8-second backoff. The previous provider change handled broker start/poll failures, but deterministic refusals before a broker request (invalid command/options, unsupported local background handoff, cleaned environment, or missing interrupt API) could still be thrown into that retry loop.
+- Commit `f05edac` converts those preflight failures to structured non-retryable results with `execution_state=not_started`; it computes and validates command argv and run authority before invoking `/exec/start`. Uncertain broker admission remains `unknown`, and exact post-start cancellation/result recovery remains unchanged.
+- Added tests for preflight refusal and invalid command. Full worker suite: WSL/Linux 56/56; Windows 53 pass and 3 POSIX-only skips. Python compilation and `git diff --check` pass.
+- Argo CD is Synced/Healthy at `f05edac94ce8782011f828e3873e772109ffc46e`; Executor 3/3, Dispatcher 2/2. Live profile code contains both preflight and broker non-retryable paths, and the `human-agent-report` skill remains installed. Executor ledger had no active submit state at inspection.

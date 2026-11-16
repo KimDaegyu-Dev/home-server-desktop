@@ -2,16 +2,14 @@
 
 이 문서는 구현 진행률, 코드/배포 revision, 검증 결과, 롤백 이력을 관리한다. 아키텍처 원칙과 목표 구조의 SSOT는 [Kanzo · Hermes 실행 구조 개선 로드맵](kanzo-hermes-roadmap.md)이다. 설계 변경은 로드맵에 반영하고, 여기에는 진행 상태와 근거만 기록한다.
 
-## 현재 상태
+## 현재 확인 상태 — 2026-11-16
 
-- 확인 기준: 2026-11-15. Argo CD kanzo-agent-worker는 revision 977484467bd8710c558bc330bf582419d280bb57에서 Synced/Healthy다. Executor는 3/3 Ready이며 현재 sandbox run은 없다. #70과 #72 파일 도구 canary는 검증 후 Done 처리했다.
-- #68은 최초 파일 도구 경로 수정의 실패 재현으로 Review에 남겼다. #70은 /workspace EROFS, /scratch write/read/cleanup 성공을 확인했고, #72는 symlink 경계 거부 로그를 확인해 둘 다 Done이다. #69/#71 제안은 사용자가 직접 Todo로 옮기기 전까지 Backlog에 둔다.
-- tool-free 정책은 Hermes에 `no_mcp` toolset sentinel을 전달해 프로필 MCP까지 포함한 도구 호출을 차단한다. #39 run `ac261e85586d`는 기대한 응답을 반환했고, researcher session DB의 `tool_call_count=0`, executor ledger의 completed 상태 및 Langfuse의 도구 없는 trace를 확인했다.
-- Langfuse task/run 귀속이 live canary로 확인됐다. #39 executor ledger task/run/session 매핑은 trace `975c391d227442973fa4338d29136e94`의 session ID와 일치한다. Observations API v2를 `fields=core,basic,metadata`로 조회했을 때 root `CHAIN`과 `GENERATION` 모두 `kanban_task_id=hermes-harness-lab#39`, `kanban_run_id=ac261e85586d`를 가진다. metadata가 `null`로 보였던 이전 조회는 기본 field set에서 metadata group을 요청하지 않아 생긴 관측 오류였다.
-- 기존 #37 trace `c68e83bdc95fa51675b53ffd53201e34`도 metadata field group을 지정해 재조회했다. 27개 observation에 task/run ID가 모두 있으며, 이전 Phase 6 표본 설명은 유지한다. #37의 상충 지시는 정상 one-turn latency baseline으로 쓰지 않는다.
-- Phase 6 worker duration histogram과 Prometheus scrape가 배포·확인됐다. 범위가 맞는 작업의 비교 표본, per-run 자원 peak, 학습 연속성 및 격리/cancel 시나리오 측정은 남아 있다.
-- 다음 구현은 Phase 5의 Langfuse 종료 상태 대조와 generation/delegate 중복·부모 자식 추적이며, 이후 Phase 6의 비교 가능한 성능 표본과 Hermes 학습 연속성을 검증한다. ReadOnly 프로필의 스킬 동기화는 원본을 덮을 수 있어 별도 수정이 필요하다.
-
+- 코드 저장소는 main, 최신 문서 커밋은 1c8d604다. 워커 이미지 수정은 8b57b0c에 반영됐고 Argo CD kanzo-agent-worker는 Synced/Healthy다.
+- Executor 3/3, Dispatcher 2/2 Ready. 실행 중인 Gateway 세션이나 worker run은 없다. Dispatcher ledger에는 terminal review 37건과 waiting 6건만 있다. #92–#96은 사용자 확인을 기다리는 Review 상태다.
+- OMH 4.0.7은 /opt/omh/.venv로 분리했다. Hermes PM의 persistent runtime venv를 현재 프로필 설정으로 동기화했고, activate() 결과는 [], venv_is_current()는 True다. Hermes CLI 스킬 목록은 198개 enabled(40 builtin, 158 local)이며 시작 경고가 재현되지 않는다.
+- 프로필 skill 파일은 Executor 두 차례 재시작 전후 해시가 일치했고 Hermes CLI에서 검색됐다. 이는 파일 보존과 검색 가능성의 증거이며, 모델이 해당 skill 내용을 실제 작업에 적용했다는 증거는 아니다.
+- Phase 6은 미완료다. 남은 증거: active-turn crash/restart와 재실행 방지, cancellation의 자식 프로세스 정리, claim 동시성/재접속, 장기 작업 handoff, ReadOnly 실행의 skill 학습 보존 및 위임 세션 경계. 별도 matched-run 성능 기준도 아직 제한적이다.
+- 로드맵은 설계 SSOT, 이 문서는 최신 상태와 날짜별 증거 기록이다. 아래 과거 기록은 이 최신 요약보다 오래된 상태를 담을 수 있다. 사용자 소유 Kanzo 카드를 임의 완료 처리하지 않았다.
 ## 단계별 진행
 
 | 로드맵 단계 | 상태 | 진행 및 남은 작업 |

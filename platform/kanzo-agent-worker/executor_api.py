@@ -32,6 +32,7 @@ MAX_BODY = 4 * 1024 * 1024 + 64 * 1024
 MAX_PROMPT = 4 * 1024 * 1024
 MAX_OUTPUT = 8 * 1024 * 1024
 MAX_CHILD_SECONDS = 2700
+SHUTDOWN_DRAIN_SECONDS = MAX_CHILD_SECONDS + 60
 PROFILE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 IDENTITY_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,256}$")
 SAFE_ERROR = "executor_operation_failed"
@@ -305,26 +306,30 @@ class BoundedServer(ThreadingHTTPServer):
         self._slots = threading.BoundedSemaphore(max_threads)
         self.stopping = threading.Event()
         self._children_lock = threading.RLock()
+        self._children_changed = threading.Condition(self._children_lock)
         self._children: dict[tuple[str, str], subprocess.Popen[bytes] | None] = {}
         super().__init__(*args, **kwargs)
 
     def register_submission(self, task: str, run: str) -> bool:
-        with self._children_lock:
+        with self._children_changed:
             if self.stopping.is_set():
                 return False
             self._children[(task, run)] = None
             return True
 
     def register_child(self, task: str, run: str, proc: subprocess.Popen[bytes]) -> bool:
-        with self._children_lock:
-            if self.stopping.is_set() or (task, run) not in self._children:
+        with self._children_changed:
+            # A submission accepted before SIGTERM remains part of the drain.
+            if (task, run) not in self._children:
                 return False
             self._children[(task, run)] = proc
+            self._children_changed.notify_all()
             return True
 
     def unregister_submission(self, task: str, run: str) -> None:
-        with self._children_lock:
+        with self._children_changed:
             self._children.pop((task, run), None)
+            self._children_changed.notify_all()
 
     def request_shutdown(self) -> None:
         # Signal handlers only set the gate and delegate blocking cleanup.
@@ -334,9 +339,18 @@ class BoundedServer(ThreadingHTTPServer):
         threading.Thread(target=self._shutdown, name="executor-shutdown", daemon=True).start()
 
     def _shutdown(self) -> None:
-        with self._children_lock:
+        deadline = time.monotonic() + SHUTDOWN_DRAIN_SECONDS
+        with self._children_changed:
+            while self._children:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._children_changed.wait(timeout=min(remaining, 1.0))
             children = list(self._children.items())
         for (task, run), proc in children:
+            if proc is not None and proc.poll() is not None:
+                # Let its request thread publish the terminal receipt it already observed.
+                continue
             state = "ambiguous"
             try:
                 row = Handler.store.get(task, run)
@@ -659,9 +673,6 @@ class Handler(BaseHTTPRequestHandler):
                 if time.monotonic() >= deadline:
                     _kill_process_group(proc)
                     raise ApiError(504, "execution_timeout")
-                if self.server.stopping.is_set():
-                    _kill_process_group(proc)
-                    raise ApiError(503, "executor_shutting_down")
                 ready = selector.select(min(deadline - time.monotonic(), 1.0))
                 if not ready:
                     if proc.poll() is not None:

@@ -30,7 +30,8 @@ spec:
     spec:
       serviceAccountName: kanzo-agent-executor
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 60
+      # Match the 2700s Gateway/execution deadline and leave shutdown/finalization reserve.
+      terminationGracePeriodSeconds: 3300
       securityContext:
         runAsNonRoot: true
         runAsUser: 10000
@@ -228,6 +229,8 @@ spec:
               value: /opt/data/home
             - name: HOME
               value: /opt/data/home
+            - name: HERMES_RESTART_DRAIN_TIMEOUT
+              value: '2760'
             - name: MCPPROXY_URL
               value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
             - name: MCPPROXY_AGENT_READ_TOKEN

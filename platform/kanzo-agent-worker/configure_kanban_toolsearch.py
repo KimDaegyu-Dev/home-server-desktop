@@ -51,7 +51,9 @@ def add_deferred_tools(
 
 def main() -> int:
     from hermes_cli.config_defaults import DEFAULT_CONFIG
-    import model_tools  # Registers the canonical toolset map without constructing tool schemas.
+    # Register only the Kanban tools needed for discovery. Importing model_tools
+    # runs global tool/plugin discovery and may trigger unrelated plugin installs.
+    import tools.kanban_tools  # noqa: F401
     from ruamel.yaml import YAML
     from tools.registry import registry
 

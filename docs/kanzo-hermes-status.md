@@ -4,7 +4,7 @@
 
 ## 현재 확인 상태 — 2026-11-16
 
-- 코드 저장소는 main, 최신 문서 커밋은 1c8d604다. 워커 이미지 수정은 8b57b0c에 반영됐고 Argo CD kanzo-agent-worker는 Synced/Healthy다.
+- GitOps 수정 커밋 8b57b0c가 Argo CD kanzo-agent-worker에 Synced/Healthy로 배포됐다.
 - Executor 3/3, Dispatcher 2/2 Ready. 실행 중인 Gateway 세션이나 worker run은 없다. Dispatcher ledger에는 terminal review 37건과 waiting 6건만 있다. #92–#96은 사용자 확인을 기다리는 Review 상태다.
 - OMH 4.0.7은 /opt/omh/.venv로 분리했다. Hermes PM의 persistent runtime venv를 현재 프로필 설정으로 동기화했고, activate() 결과는 [], venv_is_current()는 True다. Hermes CLI 스킬 목록은 198개 enabled(40 builtin, 158 local)이며 시작 경고가 재현되지 않는다.
 - 프로필 skill 파일은 Executor 두 차례 재시작 전후 해시가 일치했고 Hermes CLI에서 검색됐다. 이는 파일 보존과 검색 가능성의 증거이며, 모델이 해당 skill 내용을 실제 작업에 적용했다는 증거는 아니다.

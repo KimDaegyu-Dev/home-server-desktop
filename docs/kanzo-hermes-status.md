@@ -4,7 +4,7 @@
 
 ## 현재 상태 — 2026-11-16
 
-- GitOps `main` worker revision `d3f47c5` is Argo CD Synced/Healthy. Executor 3/3 and Dispatcher 2/2 are Ready with zero restarts. The executor also reconciles new ambiguous submissions that arise after startup; no active run was present at rollout.
+- GitOps `main` worker revision `9563e7e` is Argo CD Synced/Healthy. Executor 3/3 and Dispatcher 2/2 are Ready with zero restarts. Runtime ambiguous-submit reconciliation is deployed; the latest Gateway startup loaded persistent researcher memory into a fresh prompt.
 - Hermes가 Kanzo broker terminal 명령의 응답을 받지 못했을 때, provider가 일반 예외를 Hermes에 던져 같은 명령이 자동 재실행될 수 있는 경로를 막았다. 원격 실행 전의 입력 거부와 설정 오류도 `not_started` 결과로 반환해 불필요한 재시도를 막는다. broker start 응답이 유실된 경우는 실행 상태를 `unknown`으로 알리고, poll 오류는 가능한 경우 해당 실행만 취소하거나 이미 완료된 결과를 회수한다. 자동 재시도는 하지 않으며, 상태를 확인한 뒤 사람이 판단하도록 결과에 안내한다.
 - 변경 commit `f05edac`. 전체 worker 테스트는 WSL/Linux 58/58 통과, Windows 58개 중 55개 통과와 POSIX 전용 3개 skip이다. 실행 중 Hermes Gateway의 실제 `_run_foreground` 래퍼 프로브에서 모의 broker 실패 결과와 `env.execute` 1회 호출을 확인했다. 최신 배포 Pod에는 broker 오류와 사전 거부의 비재시도 코드가 있고 report skill도 설치돼 있다. Python compile과 `git diff --check`도 통과했다. 짧은 이벤트 wake canary `hermes-harness-lab#115`는 SSE 뒤 실제 run `fe8c9c250a2c`을 시작해 `EVENT_WAKE_OK`를 반환했고 ledger는 completed였다. 카드가 Review로 남은 원인은 outcome marker 누락이며, 재실행하지 않았다. 그 응답 형식을 구분하도록 prompt/test를 보완했다. report 품질 측정용 모델 canary는 실행하지 않았다.
 - 사용자가 제공한 `human-agent-report` 스킬은 persistent default/researcher/builder/reviewer Hermes 홈에 설치되어 있다. 일반 Kanzo 결과 댓글은 가독성 규칙을 worker prompt에서 직접 적용하므로 스킬 재로딩이나 별도 모델 호출을 추가하지 않는다. 자세한 감사·보고에만 스킬 전문을 사용한다. 배포된 Pod에서 스킬 파일과 provider 코드를 확인했다.
@@ -16,7 +16,7 @@
 ## 남은 작업
 
 1. Gateway가 실제 turn을 처리하는 중 강제 종료되는 상황에서 child process 정리, admission/ledger 복구, 최종 Kanzo 게시를 함께 검증한다. 이번에는 runtime 중 새로 생긴 ambiguous 제출도 재조회되도록 재조정기를 수정했다. #110에서 drain 중 결과 게시와 no-replay는 확인됐지만, Gateway 강제 종료를 직접 재현한 로그와 그 뒤 Kanzo/Langfuse/ledger 대조는 아직 남아 있다.
-2. ReadOnly 메모리·회고가 Pod 교체 뒤 후속 작업에서 실제로 검색·사용되는지 검증한다. #82는 저장 파일의 1회 재시작 생존은 보였지만 두 번째 작업의 회수는 입증하지 않았다.
+2. ReadOnly 메모리·회고의 실제 회수를 검증한다. 최신 Executor Pod 교체 뒤 Hermes prompt builder가 researcher 프로필의 영속 메모리 2,499바이트를 다시 불러온 것을 확인했다. 다만 특정 기억을 후속 Kanzo 작업이 실제로 사용한 증거는 아직 없다. 별도 ReadOnly HOME을 쓰는 구형 동기화 코드는 중첩 `memories/MEMORY.md`를 놓치던 문제를 `9563e7e`에서 고쳤지만, 해당 구형 Deployment는 replicas=0이다. 현재 활성 broker 경로는 상주 executor의 프로필 HOME을 사용한다.
 3. ReadOnly 위임 경계의 남은 부분을 검증한다. #88은 위임 자식의 `/workspace` 쓰기에서 커널 `EROFS`와 `/scratch` 쓰기 성공을 확인했고, #106은 자식 두 명을 순차 위임한 뒤 부모 terminal/file 검색이 계속 성공했다. 아직 repo checkout을 둔 전체 terminal/file/execute_code/delegate 경로 대조와 trusted telemetry의 child identity/transcript 상관관계가 남아 있다. #89/#90은 backlog에 있으며 사용자가 직접 검토한다.
 4. 성공·실패·취소·timeout의 Kanzo 카드, executor ledger, 산출물, Langfuse를 대조하고 generation 중복 방지 및 delegate trace 연결을 확인한다. backlog #48/#49는 사용자가 직접 검토한다.
 5. 같은 작업 범위의 one-shot/resident 실행을 비교해 cold/warm 지연, 입력·출력 토큰, CPU·메모리·GPU, 회고 재사용 효과를 측정한다.

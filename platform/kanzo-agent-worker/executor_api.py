@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -103,8 +104,9 @@ def _gateway_ready(profile_home: Path) -> bool:
 
 
 class Store:
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, reconcile_wakeup: threading.Event | None = None):
         data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.reconcile_wakeup = reconcile_wakeup
         try:
             os.chmod(data_dir, 0o700)
         except OSError:
@@ -116,7 +118,7 @@ class Store:
         self.owner_lock_fd: int | None = acquire_lock(data_dir / "executor-api.lock")
         self.path = data_dir / "executor.sqlite3"
         self.lock = threading.RLock()
-        with self.connect() as db:
+        with self.connection() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=FULL")
             db.execute("""CREATE TABLE IF NOT EXISTS runs (
@@ -151,6 +153,16 @@ class Store:
         db.execute("PRAGMA busy_timeout=10000")
         return db
 
+    @contextmanager
+    def connection(self):
+        """Commit/rollback and always close a short-lived SQLite connection."""
+        db = self.connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
     def close(self) -> None:
         if self.owner_lock_fd is not None:
             release_lock(self.owner_lock_fd)
@@ -158,12 +170,12 @@ class Store:
             self.owner_lock_fd = None
 
     def get(self, task: str, run: str) -> sqlite3.Row | None:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             return db.execute("SELECT * FROM runs WHERE task_id=? AND run_id=?", (task, run)).fetchone()
 
     def begin_create(self, task: str, run: str, profile: str, digest: str,
                      payload: dict[str, str]) -> tuple[bool, str]:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             row = db.execute("SELECT * FROM runs WHERE task_id=? AND run_id=?", (task, run)).fetchone()
             if row:
                 if row["request_hash"] != digest or row["profile"] != profile:
@@ -183,33 +195,33 @@ class Store:
             return True, request_id
 
     def ambiguous_creates(self) -> list[sqlite3.Row]:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             return list(db.execute("SELECT * FROM runs WHERE create_state='ambiguous' AND create_request_id IS NOT NULL AND create_payload IS NOT NULL"))
 
     def retry_create(self, task: str, run: str) -> bool:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             cur = db.execute("UPDATE runs SET create_state='creating',updated=? WHERE task_id=? AND run_id=? AND create_state='ambiguous' AND create_request_id IS NOT NULL AND create_payload IS NOT NULL",
                              (time.time(), task, run))
             return cur.rowcount == 1
 
     def ambiguous_submits(self) -> list[sqlite3.Row]:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             return list(db.execute("SELECT * FROM runs WHERE submit_state='ambiguous'"))
 
     def finish_create(self, task: str, run: str, session: str, generation: int) -> None:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             cur = db.execute("UPDATE runs SET session_id=?,create_generation=?,create_state='created',updated=? WHERE task_id=? AND run_id=? AND create_state='creating'",
                              (session, generation, time.time(), task, run))
             if cur.rowcount != 1:
                 raise ApiError(503, "session_persistence_failed")
 
     def fail_create(self, task: str, run: str) -> None:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             db.execute("UPDATE runs SET create_state='ambiguous',updated=? WHERE task_id=? AND run_id=? AND create_state='creating'",
                        (time.time(), task, run))
 
     def begin_submit(self, task: str, run: str) -> sqlite3.Row:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             row = db.execute("SELECT * FROM runs WHERE task_id=? AND run_id=?", (task, run)).fetchone()
             if not row or row["create_state"] != "created" or not row["session_id"]:
                 raise ApiError(409, "session_not_created")
@@ -220,21 +232,23 @@ class Store:
             return row
 
     def save_admission(self, task: str, run: str, session: str, admission: str) -> None:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             cur = db.execute("UPDATE runs SET admission_id=?,submit_state='admitted',updated=? WHERE task_id=? AND run_id=? AND session_id=? AND submit_state='submitting'",
                              (admission, time.time(), task, run, session))
             if cur.rowcount != 1:
                 raise ApiError(503, "admission_persistence_failed")
 
     def set_generation(self, task: str, run: str, session: str, admission: str, generation: int) -> None:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             db.execute("UPDATE runs SET execution_generation=?,updated=? WHERE task_id=? AND run_id=? AND session_id=? AND admission_id=?",
                        (generation, time.time(), task, run, session, admission))
 
     def finish_submit(self, task: str, run: str, state: str) -> None:
-        with self.lock, self.connect() as db:
+        with self.lock, self.connection() as db:
             db.execute("UPDATE runs SET submit_state=?,updated=? WHERE task_id=? AND run_id=?",
                        (state, time.time(), task, run))
+        if state == "ambiguous" and self.reconcile_wakeup is not None:
+            self.reconcile_wakeup.set()
 
 
 def _run_helper(args: list[str], *, timeout: int = 30,
@@ -499,7 +513,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if self.server.stopping.is_set():
                     raise RuntimeError("server is stopping")
-                with self.store.connect() as db:
+                with self.store.connection() as db:
                     db.execute("SELECT 1").fetchone()
                 for profile in PROFILES:
                     _profile_home(profile)
@@ -518,7 +532,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error(error)
             return
         try:
-            with self.store.connect() as db:
+            with self.store.connection() as db:
                 db.execute("SELECT 1").fetchone()
             _profile_home("default")
             self._send_json(200, {"status": "ok"})
@@ -632,6 +646,8 @@ class Handler(BaseHTTPRequestHandler):
             self.store.finish_create(task, run, session, generation)
         except Exception:
             self.store.fail_create(task, run)
+            if self.store.reconcile_wakeup is not None:
+                self.store.reconcile_wakeup.set()
             raise
         self._send_json(201, {"session_id": session, "execution_generation": generation, "idempotent": False})
 
@@ -925,9 +941,11 @@ def _reconcile_startup(store: Store) -> None:
             continue
 
 
-def _reconciliation_loop(store: Store) -> None:
-    """Retry durable reconciliation after Gateway startup without blocking the API."""
+def _reconciliation_loop(store: Store, wakeup: threading.Event) -> None:
+    """Reconcile ambiguous records at startup and when a live request becomes uncertain."""
     while True:
+        wakeup.clear()
+        retry_after: float | None = 60
         try:
             _reconcile_startup(store)
             retryable_create = bool(store.ambiguous_creates())
@@ -937,12 +955,12 @@ def _reconciliation_loop(store: Store) -> None:
                 for row in store.ambiguous_submits()
             )
             if not retryable_create and not retryable_submit:
-                return
+                retry_after = None
         except Exception:
             # Keep the service available and try again after transient store or
             # Gateway startup errors. Unaddressable rows remain human-reviewable.
             pass
-        time.sleep(60)
+        wakeup.wait(retry_after)
 
 
 def main() -> int:
@@ -953,7 +971,8 @@ def main() -> int:
         return 2
     try:
         data_dir = Path(data_dir_value).resolve()
-        store = Store(data_dir)
+        reconciliation_wakeup = threading.Event()
+        store = Store(data_dir, reconciliation_wakeup)
         Handler.store = store
         Handler.token = token.encode()
         host = os.environ.get("KANZO_EXECUTOR_API_HOST", "0.0.0.0")
@@ -966,7 +985,8 @@ def main() -> int:
         print("executor_configuration_invalid", file=sys.stderr)
         return 2
     threading.Thread(
-        target=_reconciliation_loop, args=(store,), name="kanzo-run-reconciliation", daemon=True
+        target=_reconciliation_loop, args=(store, reconciliation_wakeup),
+        name="kanzo-run-reconciliation", daemon=True
     ).start()
     previous_handlers: dict[int, Any] = {}
     for signum in (signal.SIGTERM, signal.SIGINT):

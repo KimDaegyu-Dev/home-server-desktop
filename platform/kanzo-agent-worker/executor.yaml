@@ -230,7 +230,7 @@ spec:
             - name: HOME
               value: /opt/data/home
             - name: HERMES_RESTART_DRAIN_TIMEOUT
-              value: '2760'
+              value: '2820'
             - name: MCPPROXY_URL
               value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
             - name: MCPPROXY_AGENT_READ_TOKEN

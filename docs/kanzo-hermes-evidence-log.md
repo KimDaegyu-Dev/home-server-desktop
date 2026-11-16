@@ -616,3 +616,11 @@ This file preserves the dated implementation notes and operational evidence form
 - Commit `f05edac` converts those preflight failures to structured non-retryable results with `execution_state=not_started`; it computes and validates command argv and run authority before invoking `/exec/start`. Uncertain broker admission remains `unknown`, and exact post-start cancellation/result recovery remains unchanged.
 - Added tests for preflight refusal and invalid command. Full worker suite: WSL/Linux 56/56; Windows 53 pass and 3 POSIX-only skips. Python compilation and `git diff --check` pass.
 - Argo CD is Synced/Healthy at `f05edac94ce8782011f828e3873e772109ffc46e`; Executor 3/3, Dispatcher 2/2. Live profile code contains both preflight and broker non-retryable paths, and the `human-agent-report` skill remains installed. Executor ledger had no active submit state at inspection.
+
+
+### 2026-11-16 — ReadOnly delegated boundary evidence reconciled from Kanzo cards
+
+- Read-only Kanzo reads of `hermes-harness-lab#88` and `#106` confirm that the delegated boundary is not wholly unverified. In #88 a delegated child terminal write under `/workspace` failed with kernel `Read-only file system`, the marker was absent, and a same-child `/scratch` write/read/remove succeeded. The platform tool trace contained terminal calls only. This directly proves mount-level enforcement for a delegated terminal call on an empty sandbox (`repo: none`).
+- In #106 two sequential child delegations and five parent follow-up calls succeeded; parent and children saw the same empty `/workspace`, with no broker mapping errors. This is live evidence for child registration/revocation and parent-session restoration across sequential delegation.
+- Limits remain: #88 did not use a checked-out repository, and child session identity/raw transcript could not be independently read from inside the sandbox. A combined repository-backed check across terminal, file, execute_code, and delegates plus trusted child trace attribution is still open. Proposals #89/#90 remain backlog for user review and were not moved.
+- The status document now distinguishes these proven mount/delegation properties from the remaining full-path and observability checks.

@@ -15,9 +15,10 @@
 ## 남은 작업
 
 1. Gateway가 실제 turn을 처리하는 중 강제 종료되는 상황에서 child process 정리, admission/ledger 복구, 최종 Kanzo 게시를 함께 검증한다. #110에서 drain 중 결과 게시와 no-replay는 확인됐지만, Gateway 종료 로그를 직접 보존하지 못했다.
-2. ReadOnly 회고·메모리가 Pod 교체 후 재사용되는지와 delegated child lease 경계를 확인한다.
-3. 성공·실패·취소·timeout의 Kanzo 카드, executor ledger, 산출물, Langfuse를 대조하고 generation 중복 방지 및 delegate trace 연결을 확인한다. backlog #48/#49는 사용자가 직접 검토한다.
-4. 같은 작업 범위의 one-shot/resident 실행을 비교해 cold/warm 지연, 입력·출력 토큰, CPU·메모리·GPU, 회고 재사용 효과를 측정한다.
-5. compact report 규칙의 실제 댓글 품질은 이후 자연스러운 작업에서 관찰한다. 운영 동작이 충분하지 않으면 별도 LLM canary보다 기존 댓글을 우선 검토한다.
+2. ReadOnly 메모리·회고가 Pod 교체 뒤 후속 작업에서 실제로 검색·사용되는지 검증한다. #82는 저장 파일의 1회 재시작 생존은 보였지만 두 번째 작업의 회수는 입증하지 않았다.
+3. ReadOnly 위임 경계의 남은 부분을 검증한다. #88은 위임 자식의 `/workspace` 쓰기에서 커널 `EROFS`와 `/scratch` 쓰기 성공을 확인했고, #106은 자식 두 명을 순차 위임한 뒤 부모 terminal/file 검색이 계속 성공했다. 아직 repo checkout을 둔 전체 terminal/file/execute_code/delegate 경로 대조와 trusted telemetry의 child identity/transcript 상관관계가 남아 있다. #89/#90은 backlog에 있으며 사용자가 직접 검토한다.
+4. 성공·실패·취소·timeout의 Kanzo 카드, executor ledger, 산출물, Langfuse를 대조하고 generation 중복 방지 및 delegate trace 연결을 확인한다. backlog #48/#49는 사용자가 직접 검토한다.
+5. 같은 작업 범위의 one-shot/resident 실행을 비교해 cold/warm 지연, 입력·출력 토큰, CPU·메모리·GPU, 회고 재사용 효과를 측정한다.
+6. compact report 규칙의 실제 댓글 품질은 이후 자연스러운 작업에서 관찰한다. 운영 동작이 충분하지 않으면 별도 LLM canary보다 기존 댓글을 우선 검토한다.
 
 완료 표시는 로드맵 각 acceptance와 배포 증거를 확인한 뒤 갱신한다.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from worker import ProjectRoute, Task, task_prompt
+from worker import ProjectRoute, Task, format_worker_comment, task_prompt
 
 
 class WorkerReportingPromptTests(unittest.TestCase):
@@ -31,12 +31,18 @@ class WorkerReportingPromptTests(unittest.TestCase):
 
         prompt = task_prompt(task, code=False)
 
-        self.assertIn("/human-agent-report compose", prompt)
-        self.assertIn("invoke the installed skill once", prompt)
-        self.assertIn("Do not access it through a literal filesystem path", prompt)
+        self.assertIn("Apply those rules directly from this instruction", prompt)
+        self.assertIn("target at most 1,200 characters", prompt)
         self.assertIn("Do not create `report.md` or `facts.json`", prompt)
-        self.assertIn("without a second model call", prompt)
+        self.assertIn("Do not make a second model call", prompt)
+        self.assertNotIn("/human-agent-report compose", prompt)
         self.assertNotIn("~/.hermes/skills", prompt)
+
+    def test_comment_formatter_removes_duplicate_separator_artifacts(self) -> None:
+        self.assertEqual(
+            format_worker_comment("Summary.\n\n--\n-\n\n# Evidence\n- verified"),
+            "Summary.\n\n# Evidence\n- verified",
+        )
 
 
 if __name__ == "__main__":

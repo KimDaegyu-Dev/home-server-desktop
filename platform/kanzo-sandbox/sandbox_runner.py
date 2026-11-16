@@ -379,8 +379,9 @@ class Runner:
             "cgroup_version": version,
             "sampled_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         }
-        try:
-            if version == "v2":
+        unavailable: list[str] = []
+        if version == "v2":
+            try:
                 stats = {}
                 for line in cpu_stat.read_text(encoding="ascii").splitlines():
                     key, separator, raw = line.partition(" ")
@@ -390,30 +391,54 @@ class Runner:
                     values["cpu_usage_seconds"] = stats["usage_usec"] / 1_000_000
                 if "throttled_usec" in stats:
                     values["cpu_throttled_seconds"] = stats["throttled_usec"] / 1_000_000
+            except (OSError, ValueError):
+                unavailable.append("cpu_usage_seconds")
+            try:
                 quota, separator, period = cpu_max.read_text(encoding="ascii").strip().partition(" ")
                 if separator and quota.isdecimal() and period.isdecimal() and int(period) > 0:
                     values["cpu_limit_cores"] = int(quota) / int(period)
-            else:
+            except (OSError, ValueError, ZeroDivisionError):
+                unavailable.append("cpu_limit_cores")
+        else:
+            try:
                 usage = int(cpu_stat.read_text(encoding="ascii").strip())
                 values["cpu_usage_seconds"] = usage / 1_000_000_000
+            except (OSError, ValueError):
+                unavailable.append("cpu_usage_seconds")
+            try:
                 throttled = Path("/sys/fs/cgroup/cpu/cpu.stat").read_text(encoding="ascii")
                 stats = dict(line.split() for line in throttled.splitlines() if len(line.split()) == 2)
                 if stats.get("throttled_time", "").isdecimal():
                     values["cpu_throttled_seconds"] = int(stats["throttled_time"]) / 1_000_000_000
+            except (OSError, ValueError):
+                unavailable.append("cpu_throttled_seconds")
+            try:
                 quota = int(cpu_quota.read_text(encoding="ascii").strip())
                 period = int(cpu_period.read_text(encoding="ascii").strip())
                 if quota > 0 and period > 0:
                     values["cpu_limit_cores"] = quota / period
+            except (OSError, ValueError, ZeroDivisionError):
+                unavailable.append("cpu_limit_cores")
+        try:
             current = memory_current.read_text(encoding="ascii").strip()
-            peak = memory_peak.read_text(encoding="ascii").strip()
             if current.isdecimal():
                 values["memory_current_bytes"] = int(current)
+            else:
+                unavailable.append("memory_current_bytes")
+        except (OSError, ValueError):
+            unavailable.append("memory_current_bytes")
+        try:
+            peak = memory_peak.read_text(encoding="ascii").strip()
             if peak.isdecimal():
                 values["memory_peak_bytes"] = int(peak)
-        except (OSError, ValueError, ZeroDivisionError):
-            values["available"] = False
-            return values
-        values["available"] = "cpu_usage_seconds" in values or "memory_peak_bytes" in values
+            else:
+                unavailable.append("memory_peak_bytes")
+        except (OSError, ValueError):
+            unavailable.append("memory_peak_bytes")
+        values["unavailable_metrics"] = sorted(set(unavailable))
+        values["available"] = any(key in values for key in (
+            "cpu_usage_seconds", "memory_current_bytes", "memory_peak_bytes",
+        ))
         return values
 
     def changes(self) -> bytes:

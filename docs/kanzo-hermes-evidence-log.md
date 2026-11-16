@@ -3,29 +3,10 @@
 This file preserves the dated implementation notes and operational evidence formerly kept in kanzo-hermes-status.md. Use kanzo-hermes-status.md for the current snapshot; use kanzo-hermes-roadmap.md as the design SSOT.
 
 ---
-# Kanzo · Hermes 진행 상태
 
-이 문서는 구현 진행률, 코드/배포 revision, 검증 결과, 롤백 이력을 관리한다. 아키텍처 원칙과 목표 구조의 SSOT는 [Kanzo · Hermes 실행 구조 개선 로드맵](kanzo-hermes-roadmap.md)이다. 설계 변경은 로드맵에 반영하고, 여기에는 진행 상태와 근거만 기록한다.
+## 아카이브 읽기 안내
 
-## 현재 확인 상태 — 2026-11-16
-
-- GitOps 수정 커밋 8b57b0c가 Argo CD kanzo-agent-worker에 Synced/Healthy로 배포됐다.
-- Executor 3/3, Dispatcher 2/2 Ready. 실행 중인 Gateway 세션이나 worker run은 없다. Dispatcher ledger에는 terminal review 37건과 waiting 6건만 있다. #92–#96은 사용자 확인을 기다리는 Review 상태다.
-- OMH 4.0.7은 /opt/omh/.venv로 분리했다. Hermes PM의 persistent runtime venv를 현재 프로필 설정으로 동기화했고, activate() 결과는 [], venv_is_current()는 True다. Hermes CLI 스킬 목록은 198개 enabled(40 builtin, 158 local)이며 시작 경고가 재현되지 않는다.
-- 프로필 skill 파일은 Executor 두 차례 재시작 전후 해시가 일치했고 Hermes CLI에서 검색됐다. 이는 파일 보존과 검색 가능성의 증거이며, 모델이 해당 skill 내용을 실제 작업에 적용했다는 증거는 아니다.
-- Phase 6은 미완료다. 남은 증거: active-turn crash/restart와 재실행 방지, cancellation의 자식 프로세스 정리, claim 동시성/재접속, 장기 작업 handoff, ReadOnly 실행의 skill 학습 보존 및 위임 세션 경계. 별도 matched-run 성능 기준도 아직 제한적이다.
-- 로드맵은 설계 SSOT, 이 문서는 최신 상태와 날짜별 증거 기록이다. 아래 과거 기록은 이 최신 요약보다 오래된 상태를 담을 수 있다. 사용자 소유 Kanzo 카드를 임의 완료 처리하지 않았다.
-## 단계별 진행
-
-| 로드맵 단계 | 상태 | 진행 및 남은 작업 |
-|---|---|---|
-| 0. 기준선과 지원 경로 확인 | 일부 완료 | 클러스터 Hermes 0.23.1에서 Gateway 세션 생성·제출·중단 API와 pluggable terminal backend를 직접 확인했다. backend 종료 정리 키 불일치와 provider 원격 명령 취소 책임도 확인했다. 처리 시간 분해, 활성 부하 peak, 학습·회고·기억 경로 전체 검증은 남아 있다. |
-| 1. 소스 준비·입력·산출물 | 진행 중 | repo가 있는 카탈로그 작업은 작업 유형과 무관하게 checkout을 준비하고 Git HEAD SHA를 프롬프트에 명시한다. checkout 디렉터리와 writable branch에 run ID를 붙여 재실행 간 충돌을 막았다. 긴 결과는 최대 4,200자 Markdown 댓글로 분할하고 코드 fence를 유지한다. task prompt에는 원 설명과 최근 비워커 댓글만 포함하고 이전 Hermes 워커 출력은 제외한다. 전체 Hermes 응답은 PVC의 `kanzo-worker/artifacts/<task_id>/<run_id>/result.md`와 SHA-256 manifest에 원자적으로 저장하고, 재시작 후 결과 댓글 게시를 이어간다. Graphify revision 확인과 Git object cache는 남아 있다. checkout은 run 종료 시 삭제된다. |
-| 2. 프로필·상태·공유 데이터 경계 | 코드 전환 초안, 실행 검증 전 | repo가 지정된 read-only run은 ReadOnly 전용 Gateway 복사본을 우회하고 주 Gateway에서 사전 생성한 세션을 사용하도록 worker 경로를 바꿨다. 프로필 DB와 memory/consolidation 데이터가 PVC에 존재하며 같은 프로필 경로를 가리키는 것도 확인됐다. 브로커 명세 테스트 2개와 live sandbox Pod 설정에서 runner `/workspace` read-only, root filesystem read-only, service-account token 자동 마운트 비활성화를 확인했다. 이는 설정 증거이며 실제 파일 쓰기 거부 동작은 아직 확인하지 않았다(#50 Todo 대기). ReadOnly run에서 만든 memory·skill의 일반 run 회수 및 Pod 교체 후 연속성, Desktop의 동일 Gateway 연결도 아직 입증되지 않았다. |
-| 3. durable run ledger와 이벤트 | claim 복구 구현·배포, 주요 live 경로 확인, 종료·복구 검증 일부 대기 | Kanzo `run_id` claim, SQLite intent 복구, SSE wake 및 readiness gate가 배포됐다. 활성 worker drain도 반영됐다. 외부 댓글 게시 중 종료와 restart 복구, 경합 조건은 남아 있다. 다중 dispatcher lease/CAS는 미구현이며 replica 1개를 유지한다. 자동 재시도는 추가하지 않는다. |
-| 4. 상주 executor와 작업 도구 격리 | 배포 완료, 파일 도구 경계 canary 통과, lifecycle 시나리오 일부 미검증 | 작업 sandbox/lease, heartbeat, 취소·불확실성 격리 경로가 배포됐다. #70에서 /workspace 쓰기는 sandbox EROFS로 차단되고 /scratch 파일 도구 왕복·정리가 성공했다. #72 Gateway 로그에서 symlink 해석 후 허용 roots 밖 target이 거부됨을 확인했다. 취소 후 자식 프로세스 회수, 동시성·재시작·장기 작업 검증은 남았다. |
-| 5. 결과·추적·위임 | task/run metadata live canary 통과, terminal outcome·generation/delegation 검증 대기 | #39 run `ac261e85586d`에서 executor ledger→Gateway session→Langfuse trace를 같은 ID로 대조했다. `fields=metadata`를 명시한 Observations API v2 응답에서 root와 generation 모두 task/run ID가 일치한다. 정적 코드 검토에서는 결과 저장과 최종 ledger/Kanzo 상태 전이가 별도 경로이고, Langfuse terminal 상태 reconcile 기록, generation 중복 판별, delegate 부모·자식 식별 연결은 확인되지 않았다. 이는 실제 trace 중복이나 불일치가 발생했다는 증거가 아니며 각각 #48, #49에서 검증한다. |
-| 6. 성능·학습 연속성 | 기초 계측·PVC 영속성 확인, 기준선과 재사용 검증 미완료 | phase duration histogram과 Prometheus scrape, 영속 Hermes HOME은 있다. 기존 표본은 비교 가능한 baseline이 아니고 p95·run별 resource peak 근거가 부족하다. 일반 HOME의 PVC 보존은 확인됐지만 ReadOnly 프로필에서 쌓은 스킬·기억·회고가 별도 실행과 재시작 후 재사용되는지는 검증되지 않았다. |
+이 파일의 날짜별 기록은 당시의 코드·클러스터·카드 상태를 보존한다. 이후 변경으로 대체된 커밋·상태·미검증 항목을 현재 상태로 해석하지 않는다. 현재 배포와 남은 작업은 [Kanzo / Hermes 진행 상태](kanzo-hermes-status.md), 목표와 acceptance는 [로드맵 SSOT](kanzo-hermes-roadmap.md)를 기준으로 한다.
 
 ### 2026-11-15 — 파일 도구의 broker sandbox 경로 검증과 Phase 5·6 재감사
 

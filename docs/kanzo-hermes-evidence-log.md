@@ -700,3 +700,10 @@ This file preserves the dated implementation notes and operational evidence form
 - Artifact audit of nine sample runs found valid matching SHA-256 for eight results, including failed #29 run `70e4105000c1`, accepted #29 run `aa7d46eea6c0`, #31 run `14f312e37d65`, #106, #107/#108, #110, #115, and #42. Cancelled executor submission #31 run `90ca4cd1f3c2` has no result artifact, consistent with its incomplete Review outcome.
 - RunLedger `record_fields` added separate `external_resolution` metadata for #29 `aa7d46eea6c0`, #31 `14f312e37d65`, and #106 `e3c6a145fbd1` after rechecking their done Kanzo cards, Codex acceptance comments, and Langfuse traces. Their RunLedger states remain respectively `review`, `waiting`, and `review`; no card, prompt, or model run was changed. #42's prior external resolution remains intact.
 - The missing Langfuse trace for #29 run `70e4105000c1` remains `not_found` after bounded read-only reconciliation. At 12:32:11Z, the live dispatcher recorded attempt 5 with zero observations and scheduled the next check for 12:42:11Z. This is only a telemetry lookup; no LLM retry or task replay was started.
+
+
+### 2026-11-16 - Full RunLedger artifact integrity audit
+
+- Read the live dispatcher SQLite database using a read-only connection. It contained 60 runs: 52 ledger state eview, 8 waiting; result outcome values were 28 done, 18 eview, 8 waiting, 4 ailed, and 2 without a saved result.
+- 58 rows referenced result artifacts. Every referenced file exists and its SHA-256 matches the ledger. The two rows without result artifacts are the cancelled hermes-harness-lab#31 submission 90ca4cd1f3c2 and hermes-harness-lab#97 run de407546c967. The latter was claimed while the Kanzo card status was canary; RunLedger records claim_not_executed and no Hermes session was started. These are expected no-result cases, not missing artifact data.
+- This audit covers artifact presence/integrity, not Langfuse trace coverage, generation deduplication, or whether every ledger disposition matches the live Kanzo card. Those remain separate reconciliation work.

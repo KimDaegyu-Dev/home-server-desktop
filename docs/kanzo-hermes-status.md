@@ -45,3 +45,10 @@
 - Langfuse user tracking now passed live: 27 observations in one trace for run `c19740fe3a57`, all with `userId=kanzo-owner`.
 
 - Second live canary `test-1#114` showed a correct fact/claim distinction but a very long report; the task's request to verify live cluster state caused 15 model generations and 44 Langfuse observations. The final adjustment applies the installed skill's rules directly in the standard prompt and loads the full skill only for substantial report work, while capping ordinary comments and removing redundant separators. Worker tests now pass 47/47; rollout remains pending.
+
+## Report-skill rollout
+
+- Final GitOps revision `5d2cf6e` is Argo Synced/Healthy; Executor 3/3 Ready. `human-agent-report` stays installed and enabled for the researcher profile after Pod replacement.
+- The deployed worker uses the skill's core reporting rules inline for ordinary Kanzo comments, without loading the full skill on every run. Full skill loading is reserved for substantial reports and audits. Routine comments target 1,200 characters, preserve evidence distinctions, and avoid report files/lint.
+- Worker suite: 47/47 passed. No canary was run against the last prompt-only change because the preceding short-report checks required 11 and 15 generations; the final prompt is therefore code/test/rollout verified, not post-change output-quality verified.
+- Test cards #112 and #114 are done; duplicate proposal #113 is declined with reason; temporary test-1 project activation #23 is done.

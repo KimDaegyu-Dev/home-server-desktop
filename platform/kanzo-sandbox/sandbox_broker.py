@@ -784,6 +784,11 @@ class BrokerHandler(BaseHTTPRequestHandler):
             elif path == "/v1/runs/changes":
                 self._worker_auth()
                 self._changes()
+            elif path == "/v1/runs/resource-usage":
+                self._worker_auth()
+                payload = self._json_body()
+                self.store.authorize(payload, require_handle=False)
+                self._proxy_runner(payload, "/resource-usage", require_handle=False)
             elif path == "/v1/runs/status":
                 self._worker_auth()
                 self._json(200, self.store.run_status(self._json_body()))
@@ -876,8 +881,8 @@ class BrokerHandler(BaseHTTPRequestHandler):
             raise BrokerError(400, "invalid_lease")
         self._json(200, self.store.finalize(task, run, lease))
 
-    def _proxy_runner(self, payload: dict[str, Any], runner_path: str) -> None:
-        ip, token = self.store.runner_address(payload)
+    def _proxy_runner(self, payload: dict[str, Any], runner_path: str, *, require_handle: bool = True) -> None:
+        ip, token = self.store.runner_address(payload, require_handle=require_handle)
         runner_payload = dict(payload)
         if runner_path == "/exec/start":
             runner_payload["exec_id"] = secrets.token_urlsafe(24)

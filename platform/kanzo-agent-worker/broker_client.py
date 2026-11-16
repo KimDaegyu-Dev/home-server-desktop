@@ -129,6 +129,13 @@ class BrokerClient:
     def finalize(self, lease: dict[str, Any]) -> None:
         self._post_json("/v1/runs/finalize", self._run_authority(lease), timeout=20)
 
+    def resource_usage(self, lease: dict[str, Any], session_id: str) -> dict[str, Any]:
+        payload = {**self._run_authority(lease), "hermes_session_id": session_id}
+        result = self._post_json("/v1/runs/resource-usage", payload, timeout=10)
+        if result.get("schema") != "kanzo-sandbox-resource-usage/v1":
+            raise BrokerClientError("broker returned invalid sandbox resource metrics")
+        return result
+
     @staticmethod
     def _run_authority(lease: dict[str, Any]) -> dict[str, str]:
         result = {}

@@ -2039,6 +2039,24 @@ class Worker:
             raise WorkerError("Hermes exited successfully without returning a result.")
         return result
 
+    def _capture_sandbox_resource_usage(self, run_id: str, active: dict[str, Any]) -> None:
+        if active.get("sandbox_resource_usage_recorded"):
+            return
+        client = active.get("broker_client")
+        lease = active.get("broker_lease")
+        session_id = active.get("gateway_session_id")
+        if not isinstance(client, BrokerClient) or not isinstance(lease, dict) or not isinstance(session_id, str):
+            return
+        try:
+            usage = client.resource_usage(lease, session_id)
+            self.ledger.record_fields(run_id, {"sandbox_resource_usage": usage})
+            active["sandbox_resource_usage_recorded"] = True
+            if not usage.get("available"):
+                LOG.warning("Sandbox cgroup metrics unavailable for run %s", run_id)
+        except Exception as exc:
+            # Telemetry must never turn a successful task into a failed one.
+            LOG.warning("Could not capture sandbox cgroup metrics for run %s (%s)", run_id, type(exc).__name__)
+
     def _prepare_sandbox(self, task: Task, checkout: Path, source_sha: str,
                          active: dict[str, Any]) -> None:
         """Prepare the source Pod and bind an empty Gateway session before prompt submission."""
@@ -2418,6 +2436,7 @@ class Worker:
                         broker_lease, active["gateway_session_id"], checkout
                     )
                     active["sandbox_change_count"] = int(transfer.get("files_written", 0)) + int(transfer.get("files_deleted", 0))
+                self._capture_sandbox_resource_usage(run_id, active)
                 broker_client.finalize(broker_lease)
                 active["broker_finalized"] = True
             result = self._redact_sensitive_output(result)
@@ -2601,6 +2620,7 @@ class Worker:
                 and not unresolved_remote
             ):
                 try:
+                    self._capture_sandbox_resource_usage(run_id, active)
                     broker_client.finalize(broker_lease)
                     active["broker_finalized"] = True
                 except Exception as cleanup_error:

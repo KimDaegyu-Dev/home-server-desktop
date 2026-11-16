@@ -36,6 +36,7 @@ import tarfile
 import threading
 import time
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
@@ -356,6 +357,64 @@ class Runner:
                 "active_executions": active,
                 "exporting_changes": self._exporting,
             }
+
+    @staticmethod
+    def resource_usage() -> dict[str, Any]:
+        """Read container cgroup counters without exposing process details."""
+        cgroup = Path("/sys/fs/cgroup")
+        version = "v2"
+        cpu_stat = cgroup / "cpu.stat"
+        memory_current = cgroup / "memory.current"
+        memory_peak = cgroup / "memory.peak"
+        cpu_max = cgroup / "cpu.max"
+        if not cpu_stat.is_file():
+            version = "v1"
+            cpu_stat = Path("/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage")
+            memory_current = Path("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+            memory_peak = Path("/sys/fs/cgroup/memory/memory.max_usage_in_bytes")
+            cpu_quota = Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+            cpu_period = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+        values: dict[str, Any] = {
+            "schema": "kanzo-sandbox-resource-usage/v1",
+            "cgroup_version": version,
+            "sampled_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        }
+        try:
+            if version == "v2":
+                stats = {}
+                for line in cpu_stat.read_text(encoding="ascii").splitlines():
+                    key, separator, raw = line.partition(" ")
+                    if separator and raw.isdecimal():
+                        stats[key] = int(raw)
+                if "usage_usec" in stats:
+                    values["cpu_usage_seconds"] = stats["usage_usec"] / 1_000_000
+                if "throttled_usec" in stats:
+                    values["cpu_throttled_seconds"] = stats["throttled_usec"] / 1_000_000
+                quota, separator, period = cpu_max.read_text(encoding="ascii").strip().partition(" ")
+                if separator and quota.isdecimal() and period.isdecimal() and int(period) > 0:
+                    values["cpu_limit_cores"] = int(quota) / int(period)
+            else:
+                usage = int(cpu_stat.read_text(encoding="ascii").strip())
+                values["cpu_usage_seconds"] = usage / 1_000_000_000
+                throttled = Path("/sys/fs/cgroup/cpu/cpu.stat").read_text(encoding="ascii")
+                stats = dict(line.split() for line in throttled.splitlines() if len(line.split()) == 2)
+                if stats.get("throttled_time", "").isdecimal():
+                    values["cpu_throttled_seconds"] = int(stats["throttled_time"]) / 1_000_000_000
+                quota = int(cpu_quota.read_text(encoding="ascii").strip())
+                period = int(cpu_period.read_text(encoding="ascii").strip())
+                if quota > 0 and period > 0:
+                    values["cpu_limit_cores"] = quota / period
+            current = memory_current.read_text(encoding="ascii").strip()
+            peak = memory_peak.read_text(encoding="ascii").strip()
+            if current.isdecimal():
+                values["memory_current_bytes"] = int(current)
+            if peak.isdecimal():
+                values["memory_peak_bytes"] = int(peak)
+        except (OSError, ValueError, ZeroDivisionError):
+            values["available"] = False
+            return values
+        values["available"] = "cpu_usage_seconds" in values or "memory_peak_bytes" in values
+        return values
 
     def changes(self) -> bytes:
         with self._lock:
@@ -838,6 +897,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             if method == "GET" and target.path == "/activity":
                 self._send(200, self.server.runner.activity())
+                return
+            if method == "POST" and target.path == "/resource-usage":
+                self._read_json()
+                self._send(200, self.server.runner.resource_usage())
                 return
             if method == "GET" and target.path == "/changes":
                 self._send_archive(self.server.runner.changes())

@@ -285,6 +285,9 @@ def _run_helper(args: list[str], *, timeout: int = 30,
         raise
     finally:
         selector.close()
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
 
 
 def _kill_process_group(proc: subprocess.Popen[bytes]) -> None:

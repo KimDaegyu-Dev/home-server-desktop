@@ -12,43 +12,31 @@
 
 ## Phase 6에서 남은 검증
 
-## Progress in this turn
+## Current verified state   2026-11-16
 
-- Added Hermes `subagent_start`/`subagent_stop` hooks and broker child-session aliases, then verified Plugin Doctor passes for default, researcher, builder, and reviewer. The claim parser now accepts only known Kanzo statuses; bracketed canary titles no longer masquerade as status tokens.
-- Live canaries #98, #101, and #103 reproduced the parent broker failure. Fingerprint comparison proved that Hermes reused the child's terminal environment after `subagent_stop` revoked that child alias.
-- The final fix evicts and cleans only the cached child terminal object before revoking its alias; parent and sibling environments stay untouched. Broker lookup errors now distinguish missing from ambiguous mappings and log only short session fingerprints.
-- Verification passed: broker tests 8/8; provider lifecycle tests 5/5; Python compile checks; Kustomize render; Argo CD apps Synced/Healthy at `63b4b23`; Plugin Doctor passed for default, researcher, builder, and reviewer. Canary #101 passed all child/parent terminal checks and parent `search_files`. Sequential two-child canary #106 also passed both child calls, parent terminal/search after each child, and parent `find`; all saw the same empty workspace and no broker mapping error appeared. One extra child `read_file` attempt against `/opt/hermes` failed because that path is outside the sandbox; no workspace write occurred.
-- Human action #102 was completed from the passing canary. Backlog proposals #99/#100/#104 were completed with the deployed fix, missing/ambiguous lookup diagnostics, lifecycle mapping-count logs, and passing terminal/search_files canaries; #105 was declined because no old memory page existed to correct. A durable ai-memory incident note records the verified cause, fix, evidence, and token-cost pattern.
-- Token-cost finding: Hermes' generic terminal wrapper retries deterministic broker 4xx errors three times (2/4/8 second backoffs). One earlier worker result said a call ran once while gateway logs showed these internal retries. Future reviews must distinguish model-visible tool calls from backend attempts; a follow-up to classify broker 4xx responses as non-retryable remains open.
-- Drain canary #107 failed on replacement ownership overlap; #108 verified ownership serialization and Gateway drain but exposed a post-completion receipt race. Canary #110 (`9f23ddeaa142`) passed end-to-end result publication across an active Pod drain: ledger `admitted → completed`, RTX 4080 `100% → 0%`, replacement init waited 71s for the previous runtime lock, and Kanzo posted the same run's final result. The previous Pod logs were garbage-collected before the Gateway drain summary could be captured, so the Gateway-specific drain state is inferred from lock release and successful publication rather than directly retained. #107/#108 remain Review; #109/#110 are also in Review for content review.
-- The completion-event fix is deployed at `934cdf6`; Argo CD is Synced/Healthy and Executor 3/3 Ready with zero restarts. Focused tests pass 5/5. Canary #109 completed without a drain and confirmed ordinary result publication on this code. Canary #110 verified publication during drain, but its answer contained incorrect timeout ordering and an unsupported claim that a script had verified constraints despite the no-tools instruction; lifecycle success does not establish answer-quality success.
-- The full worker suite exposed two Langfuse identity-isolation failures: the plugin's missing-session path fell back to process-wide Kanzo IDs. The fallback is removed; all 42 worker tests pass. Commit `923ba3c` is deployed and Argo CD is Synced/Healthy, Executor 3/3 Ready; the installed researcher plugin reads `bound_client_env` and contains no process-ID fallback. A post-fix Langfuse trace canary is still needed. Process inspection found one likely orphaned Windows Hermes CLI process (PID 19500, exited parent PID 15492) and two idle WSL bash shells; no live WSL TUI/tmux/screen process was found and none was terminated.
+- Worker runtime revision 5d2cf6e is Argo Synced/Healthy; Executor 3/3 Ready. The following docs-only GitOps commit fcaaedb does not alter runtime.
+- The human-agent-report ZIP is installed in the persistent default, researcher, builder, and reviewer Hermes homes. After rollout, Hermes lists it as an enabled local skill in researcher.
+- Ordinary final Kanzo comments use the skill's evidence and readability rules embedded in the worker prompt; the full skill is reserved for substantial reports/audits. Routine output targets 1,200 characters and skips report files/lint.
+- Worker suite: 47/47; report-skill suite: 6/6. Python compile and cluster Kustomize render passed. The final prompt change is code/test/rollout verified, not live-output-canary verified.
+- Langfuse user attribution passed live in run c19740fe3a57: 27 observations in one trace and each had userId=kanzo-owner. This is a stable pseudonymous owner ID because Kanzo actor identity is absent from the worker task contract.
+- Report canaries #112 and #114 are archived done; duplicate proposal #113 is archived with declined and its reason; temporary test-1 catalog activation #23 is restored to done. #107/#108 and #109/#110 remain Review as recorded in the evidence log.
 
-- 활성 모델 응답 중 정상 drain, restart 후 단일 terminal outcome, prompt 재실행 없음 확인
-- 강제 종료 상황에서 child process 정리와 Gateway admission reconciliation 확인
-- 동시 claim, reconnect/idempotency, 장기 작업 handoff 확인
-- ReadOnly 실행 중 skill/memory 학습 보존 및 delegated child의 lease 경계 확인
-- 같은 task/model/prompt 조건으로 end-to-end latency, token, CPU/memory/GPU 비교 기준 수립
+## Verified token-cost findings
 
-활성 모델 응답을 일부러 중단하는 canary는 하지 않았다. 사용자 소유 Kanzo 카드는 임의로 완료 처리하지 않는다. 확인된 token 낭비 패턴은 과거 상세 로그를 매번 읽는 것이므로, 상태 요약과 날짜별 증거를 분리했다.
+- The first simple report canary generated 11 LLM calls and 27 observations; it also made two read_file calls, three skill views, wrote temporary report/facts files, and ran the linter.
+- The next report canary generated 15 LLM calls and 44 observations because its task explicitly requested live cluster verification and triggered repeated MCP discovery. These were test canaries, not production report averages.
+- We removed routine skill reload, artifact generation, and lint from the common comment path. No third LLM canary was run to avoid more test cost. A matched production-run baseline is still needed before claiming a measured reduction.
 
-## Progress in this turn
+## Roadmap work still open
 
-- Integrated `human-agent-report` into the Gateway executor's persistent Hermes homes and final-comment prompt. It applies only to human-facing final Kanzo reports; it adds no model rewrite call. Worker suite passed 45/45, skill tests 6/6, Python compilation and Kustomize rendering passed.
-- Completed the session-bound Langfuse user attribution change with the pseudonymous ID `kanzo-owner`; live trace verification and rollout are pending.
-- At the usage-limit interruption, work had already reached the post-drain Langfuse audit: run `test-1#111` proved trace/session/run attribution, but the Langfuse observations had an empty `userId`. The immediate task was to bind a user ID per Gateway session, then verify a new trace. Remaining roadmap work is summarized in `kanzo-hermes-evidence-log.md` and the design SSOT `kanzo-hermes-roadmap.md`; the live rollout and user-ID canary remain immediate.
+- Exercise active-generation graceful drain/restart, terminal outcome publication, and no prompt replay together.
+- Verify child-process cleanup and Gateway admission reconciliation under forced termination.
+- Verify ReadOnly learning/memory persistence across Pod replacement and delegated child lease boundaries.
+- Reconcile Kanzo, executor ledger, artifacts, and Langfuse on success/failure/cancel/timeout; check generation deduplication and delegated trace links (#48/#49 remain backlog).
+- Establish matched-run latency, input/output token, CPU/memory/GPU baselines and verify learning reuse. See the design SSOT in kanzo-hermes-roadmap.md and dated evidence in kanzo-hermes-evidence-log.md.
 
-## Latest canary findings
+## Process cleanup follow-up
 
-- `test-1#112` verified the skill is registered and can be loaded, but exposed a bad literal file path and unnecessary report-file/lint work. Langfuse counted 11 generations for a simple comment (27 total observations, 3 skill views, 2 file reads, plus temporary artifact and lint operations). The comment was still too verbose and confused earlier test results with checks performed during the run.
-- A prompt-only correction now calls the skill once by its Hermes name, requests inline compose, skips files/lint for a normal Kanzo comment, and marks prior results as prior evidence. It passed the worker suite 46/46 but has not been rolled out.
-- Langfuse user tracking now passed live: 27 observations in one trace for run `c19740fe3a57`, all with `userId=kanzo-owner`.
-
-- Second live canary `test-1#114` showed a correct fact/claim distinction but a very long report; the task's request to verify live cluster state caused 15 model generations and 44 Langfuse observations. The final adjustment applies the installed skill's rules directly in the standard prompt and loads the full skill only for substantial report work, while capping ordinary comments and removing redundant separators. Worker tests now pass 47/47; rollout remains pending.
-
-## Report-skill rollout
-
-- Final GitOps revision `5d2cf6e` is Argo Synced/Healthy; Executor 3/3 Ready. `human-agent-report` stays installed and enabled for the researcher profile after Pod replacement.
-- The deployed worker uses the skill's core reporting rules inline for ordinary Kanzo comments, without loading the full skill on every run. Full skill loading is reserved for substantial reports and audits. Routine comments target 1,200 characters, preserve evidence distinctions, and avoid report files/lint.
-- Worker suite: 47/47 passed. No canary was run against the last prompt-only change because the preceding short-report checks required 11 and 15 generations; the final prompt is therefore code/test/rollout verified, not post-change output-quality verified.
-- Test cards #112 and #114 are done; duplicate proposal #113 is declined with reason; temporary test-1 project activation #23 is done.
+- Added Linux tests for actual Executor API timeout cleanup with a SIGTERM-ignoring descendant and ReadOnly executor termination with a child process. Both pass; Windows skips the two POSIX-only cases.
+- Tests caught stdout/stderr pipe handles leaking from executor helper execution. `executor_api._run_helper` now closes both streams in `finally`. Tests with `ResourceWarning` elevated to errors pass.
+- Full suite: 49/49 on WSL/Linux and Windows (2 skipped on Windows). Runtime forced-termination and Gateway-admission reconciliation are still outstanding.

@@ -7,13 +7,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OMH into Hermes' own interpreter so its plugin bridge and Kanban
-# board engine are importable from agent and gateway processes.
+# Keep OMH's CLI dependencies isolated from Hermes' locked runtime venv. The
+# Hermes PM drift check compares that venv against uv.lock and must stay clean.
 RUN test -n "${OMH_SOURCE_COMMIT}" \
-    && /opt/hermes/.venv/bin/python -m ensurepip --upgrade --default-pip \
-    && /opt/hermes/.venv/bin/python -m pip install --no-cache-dir \
+    && /opt/hermes/.venv/bin/python -m venv --system-site-packages /opt/omh/.venv \
+    && /opt/omh/.venv/bin/python -m ensurepip --upgrade \
+    && /opt/omh/.venv/bin/python -m pip install --no-cache-dir \
        "https://github.com/rlaope/oh-my-hermes/archive/${OMH_SOURCE_COMMIT}.tar.gz" \
-    && /opt/hermes/.venv/bin/omh --version
+    && /opt/omh/.venv/bin/omh --version \
+    && ln -s /opt/omh/.venv/bin/omh /usr/local/bin/omh
 
 # Hermes v0.23.1 declares pnpm required in its PM lockfile even in the
 # docker-managed runtime image. Bake the pinned PM artifact into this derived
@@ -21,7 +23,8 @@ RUN test -n "${OMH_SOURCE_COMMIT}" \
 RUN HERMES_HOME=/opt/hermes HOME=/opt/hermes \
     /opt/hermes/.venv/bin/python -c 'from pm.install import ensure, installed_package; ensure("pnpm", explicit=True); assert installed_package("pnpm") is not None' \
     && chmod 0644 /opt/hermes/tools/facts.json \
-    && chmod -R a+rX /opt/hermes/tools/pnpm-*
+    && chmod -R a+rX /opt/hermes/tools/pnpm-* \
+    && /opt/hermes/.venv/bin/python -c 'from pm.install import activate; problems = activate(); print(problems); assert not problems, problems'
 
 COPY --chown=10000:10000 entrypoint.sh /opt/kanzo-agent/entrypoint.sh
 RUN chmod 0555 /opt/kanzo-agent/entrypoint.sh

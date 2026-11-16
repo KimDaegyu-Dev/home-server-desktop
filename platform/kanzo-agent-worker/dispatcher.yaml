@@ -33,7 +33,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: worker
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
           imagePullPolicy: Never
           ports:
             - name: metrics
@@ -203,7 +203,7 @@ spec:
                 - ALL
             readOnlyRootFilesystem: true
         - name: kanzo-event-adapter
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
           imagePullPolicy: Never
           command:
             - python

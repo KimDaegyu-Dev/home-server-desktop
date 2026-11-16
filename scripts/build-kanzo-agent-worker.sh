@@ -31,5 +31,5 @@ k3s ctr -n k8s.io run --rm --user 10000:10000 \
   --env HERMES_HOME=/opt/hermes --env HOME=/opt/hermes \
   "${image}" kanzo-agent-worker-pmcheck \
   /opt/hermes/.venv/bin/python -c \
-  'from pm.install import activate; problems = activate(allow_incomplete=True); print(problems); assert not problems, problems'
+  'from pm.install import activate; problems = activate(); print(problems); assert not problems, problems'
 echo "Built and imported ${image} from ${base_image}."

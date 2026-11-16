@@ -70,7 +70,7 @@ spec:
               drop:
                 - ALL
         - name: bootstrap-omh
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
           imagePullPolicy: Never
           command:
             - /bin/sh
@@ -188,7 +188,7 @@ spec:
               drop:
                 - ALL
         - name: configure-langfuse-session-context
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
           imagePullPolicy: Never
           command:
             - python
@@ -217,7 +217,7 @@ spec:
                 - ALL
       containers:
         - name: hermes-gateway
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
           imagePullPolicy: Never
           command:
             - hermes
@@ -299,7 +299,7 @@ spec:
                 - ALL
             readOnlyRootFilesystem: true
         - name: hermes-dashboard
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
           imagePullPolicy: Never
           command:
             - hermes
@@ -369,7 +369,7 @@ spec:
                 - ALL
             readOnlyRootFilesystem: true
         - name: hermes-executor-api
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix1
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
           imagePullPolicy: Never
           command:
             - python

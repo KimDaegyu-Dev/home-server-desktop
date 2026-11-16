@@ -15,9 +15,10 @@
 ## Progress in this turn
 
 - Added Hermes `subagent_start`/`subagent_stop` hooks and broker child-session aliases, then verified Plugin Doctor passes for default, researcher, builder, and reviewer. The claim parser now accepts only known Kanzo statuses; bracketed canary titles no longer masquerade as status tokens.
-- Live canary #98 ran one delegated child successfully: both child terminal commands returned exit 0. After the child returned, both parent terminal commands failed with broker HTTP 404 `session_mapping_not_found_or_ambiguous`; other broker-routed tools for the parent failed too. The run ended in Review. This proves child access works, but parent access after delegation does not. The exact cause (missing mapping versus duplicate mapping or environment lifecycle) is still unverified; do not retry the existing card.
-- Canary #98 proposed backlog cards #99 (preserve the parent run-scoped broker sandbox after child completion) and #100 (distinguish missing from ambiguous broker session lookup). Check these proposals before creating more work.
-- Current dispatcher ledger after #98: no active run for this canary; task #98 is Review. ReadOnly delegated-child scope is not accepted as complete until the parent mapping failure is diagnosed and a fresh end-to-end canary passes.
+- Live canaries #98, #101, and #103 consistently ran the child terminal command(s) successfully, then failed on the parent broker call with a missing mapping. The broker now distinguishes `session_mapping_not_found` from `session_mapping_ambiguous` and logs short SHA-256 fingerprints instead of raw session IDs.
+- Fingerprint comparison in #103 proves the post-child parent lookup used the **child's session ID** after its alias was revoked; it did not use the bound parent session ID. This confirms stale task-local `HERMES_SESSION_ID` after `subagent_stop` as the cause.
+- The worker generated backlog proposals #99/#100 and human action card #102; #102 requires the parent mapping to be restored and a passing canary. A task result also understated retries: the Hermes terminal wrapper retried each deterministic 404 three times internally even though the worker described one tool attempt. Account for wrapper-level retries when reviewing worker reports.
+- A fix is now prepared in the `subagent_stop` hook: after broker revocation succeeds, restore only the task-local Hermes session ContextVar to the parent ID. It deliberately avoids the public setter because that also mutates process-wide `os.environ`. Four focused plugin tests pass. Rollout and a fresh delegated-child/parent canary are still required.
 
 - 활성 모델 응답 중 정상 drain, restart 후 단일 terminal outcome, prompt 재실행 없음 확인
 - 강제 종료 상황에서 child process 정리와 Gateway admission reconciliation 확인

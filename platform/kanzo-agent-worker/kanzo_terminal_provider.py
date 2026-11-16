@@ -760,9 +760,9 @@ def _kanzo_automation_active() -> bool:
     return isinstance(client_env, dict) and client_env.get("KANZO_AUTOMATED_RUN") == "1"
 
 
-def _delegate_sessions(payload: dict[str, Any], *, close: bool) -> None:
+def _delegate_sessions(payload: dict[str, Any], *, close: bool) -> bool:
     if not _kanzo_automation_active():
-        return
+        return False
     parent = payload.get("parent_session_id")
     child = payload.get("child_session_id")
     if not all(
@@ -771,27 +771,53 @@ def _delegate_sessions(payload: dict[str, Any], *, close: bool) -> None:
         for value in (parent, child)
     ):
         _LOG.warning("Kanzo delegate scope hook refused an invalid child session identity")
-        return
+        return False
     base_url = os.getenv("KANZO_BROKER_URL", "").strip()
     token = os.getenv("KANZO_BROKER_TOKEN", "")
     if not base_url or not token:
         _LOG.warning("Kanzo delegate scope hook could not reach the configured broker")
-        return
+        return False
     endpoint = "/v1/terminal/child/close" if close else "/v1/terminal/child/register"
     try:
         _BrokerClient(base_url, token, request_timeout=10).post(endpoint, {
             "parent_session_id": parent,
             "child_session_id": child,
         })
+        return True
     except Exception:
         # Lifecycle hooks are observers and Hermes intentionally does not abort
         # delegation on observer failure. Leave access denied by the broker.
         _LOG.warning("Kanzo delegate scope hook failed; child access remains fail-closed", exc_info=True)
+        return False
 
 
 def _register_delegated_child(**payload: Any) -> None:
     _delegate_sessions(payload, close=False)
 
 
+def _restore_parent_session_context(payload: dict[str, Any]) -> None:
+    """Restore the task-local Hermes session after a child-stop hook.
+
+    Hermes' delegated child may leave HERMES_SESSION_ID set to the child in the
+    resuming parent context. Use the ContextVar directly: the public setter also
+    writes os.environ outside child contexts, which could leak identity across
+    concurrent Gateway sessions.
+    """
+    parent = payload.get("parent_session_id")
+    child = payload.get("child_session_id")
+    if not isinstance(parent, str) or not isinstance(child, str):
+        return
+    try:
+        current = session_context.get_session_env("HERMES_SESSION_ID", "")
+        session_id_var = getattr(session_context, "_SESSION_ID", None)
+        set_current = getattr(session_id_var, "set", None)
+        if current == child and callable(set_current):
+            set_current(parent)
+            _LOG.info("restored parent Hermes session context after delegation")
+    except Exception:
+        _LOG.warning("could not restore parent Hermes session context after delegation", exc_info=True)
+
+
 def _close_delegated_child(**payload: Any) -> None:
-    _delegate_sessions(payload, close=True)
+    if _delegate_sessions(payload, close=True):
+        _restore_parent_session_context(payload)

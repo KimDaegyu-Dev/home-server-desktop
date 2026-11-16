@@ -18,7 +18,7 @@ def _load_provider():
     terminal.TerminalEnvironmentProvider = type("TerminalEnvironmentProvider", (), {})
     gateway = types.ModuleType("gateway")
     gateway.__path__ = []
-    gateway.session_context = types.SimpleNamespace()
+    gateway.session_context = types.SimpleNamespace(get_session_env=lambda name, default="": default)
     modules = {
         "agent": agent,
         "agent.terminal_env_provider": terminal,
@@ -76,6 +76,76 @@ class KanzoDelegateHookTests(unittest.TestCase):
                 parent_session_id="root-session", child_session_id="child-session"
             )
         client.assert_not_called()
+
+    def test_child_stop_restores_only_the_task_local_parent_session(self) -> None:
+        calls = []
+
+        class SessionVar:
+            def __init__(self):
+                self.value = "child-session"
+
+            def set(self, value):
+                self.value = value
+                calls.append(("contextvar", value))
+
+        session_var = SessionVar()
+        context = types.SimpleNamespace(
+            get_session_env=lambda name, default="": session_var.value,
+            _SESSION_ID=session_var,
+        )
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def post(self, path, payload):
+                calls.append((path, payload))
+                return {"state": "closed"}
+
+        env = {"KANZO_BROKER_URL": "http://broker.svc:8080", "KANZO_BROKER_TOKEN": "opaque-test-token"}
+        with (patch.dict(os.environ, env),
+              patch.object(self.provider, "session_context", context),
+              patch.object(self.provider, "_kanzo_automation_active", return_value=True),
+              patch.object(self.provider, "_BrokerClient", Client),
+              patch.object(self.provider._LOG, "warning")):
+            self.provider._close_delegated_child(
+                parent_session_id="root-session", child_session_id="child-session"
+            )
+
+        self.assertEqual(session_var.value, "root-session")
+        self.assertIn(("contextvar", "root-session"), calls)
+
+    def test_child_stop_does_not_restore_if_broker_revocation_fails(self) -> None:
+        class SessionVar:
+            value = "child-session"
+
+            def set(self, value):
+                self.value = value
+
+        session_var = SessionVar()
+        context = types.SimpleNamespace(
+            get_session_env=lambda name, default="": session_var.value,
+            _SESSION_ID=session_var,
+        )
+
+        class Client:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def post(self, path, payload):
+                raise RuntimeError("broker unavailable")
+
+        env = {"KANZO_BROKER_URL": "http://broker.svc:8080", "KANZO_BROKER_TOKEN": "opaque-test-token"}
+        with (patch.dict(os.environ, env),
+              patch.object(self.provider, "session_context", context),
+              patch.object(self.provider, "_kanzo_automation_active", return_value=True),
+              patch.object(self.provider, "_BrokerClient", Client),
+              patch.object(self.provider._LOG, "warning")):
+            self.provider._close_delegated_child(
+                parent_session_id="root-session", child_session_id="child-session"
+            )
+
+        self.assertEqual(session_var.value, "child-session")
 
 
 if __name__ == "__main__":

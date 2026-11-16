@@ -308,6 +308,18 @@ class BrokerStore:
                     closed_at INTEGER,
                     FOREIGN KEY(task_id, run_id) REFERENCES runs(task_id, run_id)
                 );
+                CREATE TABLE IF NOT EXISTS child_sessions (
+                    child_session_id TEXT PRIMARY KEY,
+                    parent_session_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+                    created_at INTEGER NOT NULL,
+                    closed_at INTEGER,
+                    FOREIGN KEY(task_id, run_id) REFERENCES runs(task_id, run_id)
+                );
+                CREATE INDEX IF NOT EXISTS child_sessions_run_idx
+                    ON child_sessions(task_id, run_id, active);
                 CREATE TABLE IF NOT EXISTS sandbox_pods (
                     task_id TEXT NOT NULL,
                     run_id TEXT NOT NULL,
@@ -444,11 +456,7 @@ class BrokerStore:
 
     def resolve(self, session_id: str) -> dict[str, Any]:
         with self.session() as db:
-            rows = db.execute("""SELECT * FROM runs WHERE hermes_session_id=?
-                AND state='bound' AND expires_at>?""", (session_id, _now())).fetchall()
-            if len(rows) != 1:
-                raise BrokerError(404, "session_mapping_not_found_or_ambiguous")
-            run = rows[0]
+            run = self._bound_run_for_session(db, session_id)
             lease = self._derive_lease(run["task_id"], run["run_id"], run["lease_nonce"])
             if not hmac.compare_digest(run["lease_hash"], _digest(lease)):
                 raise BrokerError(503, "run_lease_integrity_error")
@@ -479,6 +487,63 @@ class BrokerStore:
                 "temp_dir": "/scratch",
             }
 
+    def register_child_session(self, parent_session_id: str, child_session_id: str) -> dict[str, Any]:
+        """Bind a Hermes delegate child to its already-authorized parent run.
+
+        Only the Gateway service credential can call this endpoint. The Gateway's
+        subagent_start hook supplies the parent/child pair; a parent must already
+        resolve to one live run, so aliases cannot cross task/run boundaries.
+        """
+        now = _now()
+        if parent_session_id == child_session_id:
+            raise BrokerError(400, "child_session_must_differ_from_parent")
+        with self.session() as db:
+            db.execute("BEGIN IMMEDIATE")
+            run = self._bound_run_for_session(db, parent_session_id)
+            root = db.execute("SELECT 1 FROM runs WHERE hermes_session_id=?", (child_session_id,)).fetchone()
+            if root:
+                raise BrokerError(409, "child_session_already_bound_as_run")
+            existing = db.execute("SELECT * FROM child_sessions WHERE child_session_id=?",
+                                  (child_session_id,)).fetchone()
+            if existing:
+                same = (existing["task_id"] == run["task_id"] and existing["run_id"] == run["run_id"]
+                        and existing["parent_session_id"] == parent_session_id)
+                if same and existing["active"]:
+                    db.execute("COMMIT")
+                    return {"state": "bound", "hermes_session_id": child_session_id, "idempotent": True}
+                raise BrokerError(409, "child_session_already_registered")
+            db.execute("""INSERT INTO child_sessions(child_session_id,parent_session_id,task_id,run_id,
+                active,created_at) VALUES(?,?,?,?,1,?)""",
+                       (child_session_id, parent_session_id, run["task_id"], run["run_id"], now))
+            db.execute("COMMIT")
+        return {"state": "bound", "hermes_session_id": child_session_id, "idempotent": False}
+
+    def close_child_session(self, parent_session_id: str, child_session_id: str) -> dict[str, Any]:
+        """Revoke one child alias after Hermes has closed that delegated agent."""
+        now = _now()
+        with self.session() as db:
+            row = db.execute("SELECT parent_session_id,active FROM child_sessions WHERE child_session_id=?",
+                             (child_session_id,)).fetchone()
+            if not row:
+                return {"state": "closed", "idempotent": True}
+            if row["parent_session_id"] != parent_session_id:
+                raise BrokerError(409, "child_parent_mismatch")
+            db.execute("UPDATE child_sessions SET active=0,closed_at=COALESCE(closed_at,?) "
+                       "WHERE child_session_id=? AND active=1", (now, child_session_id))
+            return {"state": "closed", "idempotent": not bool(row["active"])}
+
+    @staticmethod
+    def _bound_run_for_session(db: sqlite3.Connection, session_id: str) -> sqlite3.Row:
+        rows = db.execute("""SELECT r.* FROM runs r WHERE r.hermes_session_id=?
+                AND r.state='bound' AND r.expires_at>?
+            UNION ALL
+            SELECT r.* FROM child_sessions c JOIN runs r ON r.task_id=c.task_id AND r.run_id=c.run_id
+                WHERE c.child_session_id=? AND c.active=1 AND r.state='bound' AND r.expires_at>?""",
+                          (session_id, _now(), session_id, _now())).fetchall()
+        if len(rows) != 1:
+            raise BrokerError(404, "session_mapping_not_found_or_ambiguous")
+        return rows[0]
+
     def runner_address(self, payload: dict[str, Any], *, require_handle: bool = True) -> tuple[str, str]:
         run = self.authorize(payload, require_handle=require_handle)
         with self.session() as db:
@@ -498,13 +563,7 @@ class BrokerStore:
     def authorize_session(self, session_id: str) -> dict[str, Any]:
         """Resolve a live Gateway session to its bound Kanzo run without creating a handle."""
         with self.session() as db:
-            rows = db.execute(
-                "SELECT * FROM runs WHERE hermes_session_id=? AND state='bound' AND expires_at>?",
-                (session_id, _now()),
-            ).fetchall()
-            if len(rows) != 1:
-                raise BrokerError(404, "session_mapping_not_found_or_ambiguous")
-            run = rows[0]
+            run = self._bound_run_for_session(db, session_id)
             lease = self._derive_lease(run["task_id"], run["run_id"], run["lease_nonce"])
             if not hmac.compare_digest(run["lease_hash"], _digest(lease)):
                 raise BrokerError(503, "run_lease_integrity_error")
@@ -586,7 +645,9 @@ class BrokerStore:
             raise BrokerError(401, "invalid_lease")
         with self.session() as db:
             run = self._authorized_run(db, task_id, run_id, lease)
-            if run["state"] != "bound" or run["hermes_session_id"] != session_id:
+            bound_run = self._bound_run_for_session(db, session_id)
+            if (run["state"] != "bound" or bound_run["task_id"] != task_id
+                    or bound_run["run_id"] != run_id):
                 raise BrokerError(409, "session_run_mismatch")
             if run["expires_at"] <= _now():
                 raise BrokerError(410, "run_expired")
@@ -645,6 +706,8 @@ class BrokerStore:
                        (now, task_id, run_id))
             db.execute("UPDATE environments SET active=0,closed_at=? WHERE task_id=? AND run_id=?",
                        (now, task_id, run_id))
+            db.execute("UPDATE child_sessions SET active=0,closed_at=COALESCE(closed_at,?) "
+                       "WHERE task_id=? AND run_id=? AND active=1", (now, task_id, run_id))
             db.execute("UPDATE runs SET state='closed',closed_at=?,updated_at=? WHERE task_id=? AND run_id=?",
                        (now, now, task_id, run_id))
             db.execute("COMMIT")
@@ -811,6 +874,18 @@ class BrokerHandler(BaseHTTPRequestHandler):
                 payload = self._json_body()
                 sid = _valid_id(payload.get("hermes_session_id"), "hermes_session_id")
                 self._json(200, self.store.authorize_session(sid))
+            elif path == "/v1/terminal/child/register":
+                self._gateway_auth()
+                payload = self._json_body()
+                parent = _valid_id(payload.get("parent_session_id"), "parent_session_id")
+                child = _valid_id(payload.get("child_session_id"), "child_session_id")
+                self._json(200, self.store.register_child_session(parent, child))
+            elif path == "/v1/terminal/child/close":
+                self._gateway_auth()
+                payload = self._json_body()
+                parent = _valid_id(payload.get("parent_session_id"), "parent_session_id")
+                child = _valid_id(payload.get("child_session_id"), "child_session_id")
+                self._json(200, self.store.close_child_session(parent, child))
             elif path in (
                 "/v1/terminal/exec/start", "/v1/terminal/exec/poll",
                 "/v1/terminal/exec/cancel", "/v1/terminal/environment/cleanup",

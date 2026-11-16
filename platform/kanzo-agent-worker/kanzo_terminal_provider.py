@@ -52,6 +52,8 @@ process environments. Redirects are rejected to prevent credential forwarding.
 Kanzo-scoped file writes are admitted by Hermes' host-side safe-root check only
 inside a broker-attributed one-shot session. Actual file operations still use
 the terminal provider and are enforced by the run pod's workspace mount.
+Hermes delegate sessions are registered under their already-bound parent run
+and revoked at subagent_stop. Failed registration remains fail-closed.
 """
 
 from __future__ import annotations
@@ -634,6 +636,8 @@ class KanzoTerminalProvider(TerminalEnvironmentProvider):
 def register(ctx: Any) -> None:
     """Hermes user-plugin entry point."""
     ctx.register_terminal_environment_provider(KanzoTerminalProvider())
+    ctx.register_hook("subagent_start", _register_delegated_child)
+    ctx.register_hook("subagent_stop", _close_delegated_child)
     # Hermes' ShellFileOperations applies the host safe-root check before it
     # dispatches a write to the selected terminal environment. Keep the global
     # HERMES_WRITE_SAFE_ROOT unchanged; bypass only that one denial when the
@@ -744,3 +748,50 @@ def register(ctx: Any) -> None:
 
         _execute_in_remote_kernel._kanzo_broker_oneshot = True  # type: ignore[attr-defined]
         code_kernel_remote.execute_in_remote_kernel = _execute_in_remote_kernel
+
+
+def _kanzo_automation_active() -> bool:
+    try:
+        from agent.session_client_env import bound_client_env
+
+        client_env = bound_client_env()
+    except (ImportError, RuntimeError):
+        return False
+    return isinstance(client_env, dict) and client_env.get("KANZO_AUTOMATED_RUN") == "1"
+
+
+def _delegate_sessions(payload: dict[str, Any], *, close: bool) -> None:
+    if not _kanzo_automation_active():
+        return
+    parent = payload.get("parent_session_id")
+    child = payload.get("child_session_id")
+    if not all(
+        isinstance(value, str) and value.strip() and len(value) <= 256
+        and not any(ord(char) < 0x20 for char in value)
+        for value in (parent, child)
+    ):
+        _LOG.warning("Kanzo delegate scope hook refused an invalid child session identity")
+        return
+    base_url = os.getenv("KANZO_BROKER_URL", "").strip()
+    token = os.getenv("KANZO_BROKER_TOKEN", "")
+    if not base_url or not token:
+        _LOG.warning("Kanzo delegate scope hook could not reach the configured broker")
+        return
+    endpoint = "/v1/terminal/child/close" if close else "/v1/terminal/child/register"
+    try:
+        _BrokerClient(base_url, token, request_timeout=10).post(endpoint, {
+            "parent_session_id": parent,
+            "child_session_id": child,
+        })
+    except Exception:
+        # Lifecycle hooks are observers and Hermes intentionally does not abort
+        # delegation on observer failure. Leave access denied by the broker.
+        _LOG.warning("Kanzo delegate scope hook failed; child access remains fail-closed", exc_info=True)
+
+
+def _register_delegated_child(**payload: Any) -> None:
+    _delegate_sessions(payload, close=False)
+
+
+def _close_delegated_child(**payload: Any) -> None:
+    _delegate_sessions(payload, close=True)

@@ -12,6 +12,11 @@
 
 ## Phase 6에서 남은 검증
 
+## Progress in this turn
+
+- Added Hermes `subagent_start`/`subagent_stop` hooks and broker child-session aliases so delegated children resolve only to their live parent run sandbox and lose access after child completion. Seven broker/plugin regression tests and Python compilation passed. This is not complete until GitOps rollout and a real Hermes delegation call are verified.
+- The dispatcher ledger currently has Review 37, Waiting 6, and zero active or uncertain runs. Recheck immediately before rollout.
+
 - 활성 모델 응답 중 정상 drain, restart 후 단일 terminal outcome, prompt 재실행 없음 확인
 - 강제 종료 상황에서 child process 정리와 Gateway admission reconciliation 확인
 - 동시 claim, reconnect/idempotency, 장기 작업 handoff 확인

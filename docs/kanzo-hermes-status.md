@@ -19,6 +19,8 @@
 - Langfuse 사용자 연결은 canary `test-1#112`에서 확인됐다. 단일 trace의 27개 observation 모두 pseudonymous `userId=kanzo-owner`를 기록했다. 보고 canary #112/#114는 보관 완료, 중복 제안 #113은 `declined` 이유와 함께 보관했다.
 - report canary 결과의 사람 검토, #107–#110 등 기존 Review 카드의 판단은 사용자 몫으로 남겨 두었다. backlog #48/#49는 사용자 승인 전 Todo로 옮기지 않았다.
 
+- The #47 resource-baseline run failed after 40 model calls because a `KANZO_HUMAN_ACTION` title exceeded the parser's 180-character bound, which the prompt did not state. Logs show 1,865,026 input tokens (1,542,539 cache-read) and 44,741 output tokens; these are usage counts, not cost. The prompt now states the enforced title/description limits; live rollout verification is pending.
+
 ## 남은 작업
 
 1. Graceful SIGTERM drain 중 active turn이 끝나고 결과가 게시되는 흐름은 #110에서 확인됐다. 공유 `gateway.log`에서 #107/#108/#110의 `timed_out=False`, active 1→0을 찾았고, #110은 Gateway 종료 로그·executor admission/ledger·Langfuse·SHA 검증된 산출물·run-tagged Kanzo 댓글이 연결된다. #110 콘텐츠 자체는 timeout 설명 오류 때문에 Review이며, lifecycle 성공과 내용 정확도는 별개다. 강제 kill/timeout 중 child process 정리와 복구는 아직 시험하지 않았다.

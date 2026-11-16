@@ -51,18 +51,16 @@ def add_deferred_tools(
 
 def main() -> int:
     from hermes_cli.config_defaults import DEFAULT_CONFIG
-    from model_tools import get_tool_definitions
+    import model_tools  # Registers the canonical toolset map without constructing tool schemas.
     from ruamel.yaml import YAML
+    from tools.registry import registry
 
     root = Path("/opt/data/home")
     profiles = ("researcher", "builder", "reviewer")
     defaults = DEFAULT_CONFIG["tools"]["tool_search"]["defer"]
     kanban_tools = sorted(
-        (tool.get("function") or {}).get("name", "")
-        for tool in get_tool_definitions(
-            ["kanban"], quiet_mode=True, skip_tool_search_assembly=True
-        )
-        if (tool.get("function") or {}).get("name")
+        name for name, toolset in registry.get_tool_to_toolset_map().items()
+        if toolset == "kanban"
     )
     if not kanban_tools:
         raise SystemExit("Hermes Kanban toolset is unavailable; refusing profile config update")

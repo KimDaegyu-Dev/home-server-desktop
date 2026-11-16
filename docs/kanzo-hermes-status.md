@@ -1,45 +1,23 @@
 # Kanzo / Hermes 진행 상태
 
-설계와 완료 기준의 SSOT는 [Kanzo / Hermes 로드맵](kanzo-hermes-roadmap.md)이다. 날짜별 근거는 [상세 증거 로그](kanzo-hermes-evidence-log.md)에 보존한다. 이 문서는 최신 확인 상태와 미완료 작업만 요약한다.
+설계 SSOT는 [Kanzo / Hermes 로드맵](kanzo-hermes-roadmap.md)이다. 이 문서는 현재 배포 상태와 아직 필요한 검증만 요약하며, 근거와 실행 이력은 [증거 로그](kanzo-hermes-evidence-log.md)에 기록한다.
 
-## 현재 확인 상태 — 2026-11-16
+## 현재 상태 — 2026-11-16
 
-- GitOps 저장소 main에 graceful-shutdown 수정이 반영됐다. Argo CD kanzo-agent-worker는 Synced/Healthy이며, Executor 3/3과 Dispatcher 2/2 Ready다.
-- Dispatcher는 실행 중 작업을 비우고 종료한다. Executor API는 SIGTERM 이후 새 제출을 막고, 이미 받아들인 제출은 최대 2,760초 drain한다. Gateway drain은 2,820초, Executor Pod 종료 유예는 3,300초다. 실행 중인 작업을 직접 끊지 않는 설정으로 배포됐지만, active-turn 중 drain은 아직 실증하지 않았다.
-- 현재 Dispatcher ledger에는 실행 중인 run이 없다. 상태는 Review 37건, Waiting 6건이다. #92–#96은 사용자가 판단할 수 있도록 Review에 그대로 둔다.
-- Hermes PM 검사는 깨끗하다: activate()는 빈 목록, venv_is_current()는 True다. OMH 4.0.7은 Hermes venv와 분리되어 있고 Hermes CLI는 198개 스킬을 표시한다.
-- 기존 researcher 스킬 파일은 Executor 두 차례 재시작 전후 해시가 일치했다. 이는 디스크 보존과 CLI 검색 가능성의 증거이며 모델이 실제 작업에서 지침을 적용했음을 증명하지는 않는다.
+- GitOps `main`의 worker revision `16b52af`가 Argo CD에서 Synced/Healthy다. Executor는 3/3 Ready, Dispatcher는 2/2 Ready다. 마지막 확인 당시 executor ledger에는 진행 중인 실행이 없었다.
+- Hermes가 Kanzo broker terminal 명령의 응답을 받지 못했을 때, provider가 일반 예외를 Hermes에 던져 같은 명령이 자동 재실행될 수 있는 경로를 막았다. broker start 응답이 유실된 경우는 실행 상태를 `unknown`으로 알리고, poll 오류는 가능한 경우 해당 실행만 취소하거나 이미 완료된 결과를 회수한다. 자동 재시도는 하지 않으며, 상태를 확인한 뒤 사람이 판단하도록 결과에 안내한다.
+- 변경 commit `16b52af`. 전체 worker 테스트는 WSL/Linux 54/54 통과, Windows 54개 중 51개 통과와 POSIX 전용 3개 skip이다. Python compile과 `git diff --check`도 통과했다. 실제 Hermes 모델 호출로 재시도를 유발하는 canary는 실행하지 않았다.
+- 사용자가 제공한 `human-agent-report` 스킬은 persistent default/researcher/builder/reviewer Hermes 홈에 설치되어 있다. 일반 Kanzo 결과 댓글은 가독성 규칙을 worker prompt에서 직접 적용하므로 스킬 재로딩이나 별도 모델 호출을 추가하지 않는다. 자세한 감사·보고에만 스킬 전문을 사용한다. 배포된 Pod에서 스킬 파일과 provider 코드를 확인했다.
+- 보고 규칙 변경 뒤 별도의 품질 canary는 비용을 고려해 수행하지 않았다. 앞선 단순 보고 canary 두 건이 각각 11회/27 observations, 15회/44 observations를 썼다. 그러므로 비용 절감은 설계상 줄였지만 운영 평균 감소량을 측정했다고 주장하지 않는다.
+- Langfuse 사용자 연결은 canary `test-1#112`에서 확인됐다. 단일 trace의 27개 observation 모두 pseudonymous `userId=kanzo-owner`를 기록했다. 보고 canary #112/#114는 보관 완료, 중복 제안 #113은 `declined` 이유와 함께 보관했다.
+- report canary 결과의 사람 검토, #107–#110 등 기존 Review 카드의 판단은 사용자 몫으로 남겨 두었다. backlog #48/#49는 사용자 승인 전 Todo로 옮기지 않았다.
 
-## Phase 6에서 남은 검증
+## 남은 작업
 
-## Current verified state   2026-11-16
+1. Gateway가 실제 turn을 처리하는 중 강제 종료되는 상황에서 child process 정리, admission/ledger 복구, 최종 Kanzo 게시를 함께 검증한다. #110에서 drain 중 결과 게시와 no-replay는 확인됐지만, Gateway 종료 로그를 직접 보존하지 못했다.
+2. ReadOnly 회고·메모리가 Pod 교체 후 재사용되는지와 delegated child lease 경계를 확인한다.
+3. 성공·실패·취소·timeout의 Kanzo 카드, executor ledger, 산출물, Langfuse를 대조하고 generation 중복 방지 및 delegate trace 연결을 확인한다. backlog #48/#49는 사용자가 직접 검토한다.
+4. 같은 작업 범위의 one-shot/resident 실행을 비교해 cold/warm 지연, 입력·출력 토큰, CPU·메모리·GPU, 회고 재사용 효과를 측정한다.
+5. compact report 규칙의 실제 댓글 품질은 이후 자연스러운 작업에서 관찰한다. 운영 동작이 충분하지 않으면 별도 LLM canary보다 기존 댓글을 우선 검토한다.
 
-- Worker runtime revision 5d2cf6e is Argo Synced/Healthy; Executor 3/3 Ready. The following docs-only GitOps commit fcaaedb does not alter runtime.
-- The human-agent-report ZIP is installed in the persistent default, researcher, builder, and reviewer Hermes homes. After rollout, Hermes lists it as an enabled local skill in researcher.
-- Ordinary final Kanzo comments use the skill's evidence and readability rules embedded in the worker prompt; the full skill is reserved for substantial reports/audits. Routine output targets 1,200 characters and skips report files/lint.
-- Worker suite: 47/47; report-skill suite: 6/6. Python compile and cluster Kustomize render passed. The final prompt change is code/test/rollout verified, not live-output-canary verified.
-- Langfuse user attribution passed live in run c19740fe3a57: 27 observations in one trace and each had userId=kanzo-owner. This is a stable pseudonymous owner ID because Kanzo actor identity is absent from the worker task contract.
-- Report canaries #112 and #114 are archived done; duplicate proposal #113 is archived with declined and its reason; temporary test-1 catalog activation #23 is restored to done. #107/#108 and #109/#110 remain Review as recorded in the evidence log.
-
-## Verified token-cost findings
-
-- The first simple report canary generated 11 LLM calls and 27 observations; it also made two read_file calls, three skill views, wrote temporary report/facts files, and ran the linter.
-- The next report canary generated 15 LLM calls and 44 observations because its task explicitly requested live cluster verification and triggered repeated MCP discovery. These were test canaries, not production report averages.
-- We removed routine skill reload, artifact generation, and lint from the common comment path. No third LLM canary was run to avoid more test cost. A matched production-run baseline is still needed before claiming a measured reduction.
-
-## Roadmap work still open
-
-- Exercise active-generation graceful drain/restart, terminal outcome publication, and no prompt replay together.
-- Verify child-process cleanup and Gateway admission reconciliation under forced termination.
-- Verify ReadOnly learning/memory persistence across Pod replacement and delegated child lease boundaries.
-- Reconcile Kanzo, executor ledger, artifacts, and Langfuse on success/failure/cancel/timeout; check generation deduplication and delegated trace links (#48/#49 remain backlog).
-- Establish matched-run latency, input/output token, CPU/memory/GPU baselines and verify learning reuse. See the design SSOT in kanzo-hermes-roadmap.md and dated evidence in kanzo-hermes-evidence-log.md.
-
-## Process cleanup follow-up
-
-- Added Linux tests for actual Executor API timeout cleanup with a SIGTERM-ignoring descendant and ReadOnly executor termination with a child process. Both pass; Windows skips the two POSIX-only cases.
-- Tests caught stdout/stderr pipe handles leaking from executor helper execution. `executor_api._run_helper` now closes both streams in `finally`. Tests with `ResourceWarning` elevated to errors pass.
-- Full suite: 49/49 on WSL/Linux and Windows (2 skipped on Windows). Runtime forced-termination and Gateway-admission reconciliation are still outstanding.
-
-- Extended the same process-tree test to dispatcher Worker._stop_hermes_process. All three POSIX cleanup paths stop SIGTERM-ignoring descendants. Current runtime commit d37921f is Argo Synced/Healthy and already contains the executor pipe-close fix; the new assertion is test-only.
-- Full suite: 50/50 in WSL/Linux, and 47 pass with 3 POSIX-only skips on Windows.
+완료 표시는 로드맵 각 acceptance와 배포 증거를 확인한 뒤 갱신한다.

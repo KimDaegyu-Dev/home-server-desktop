@@ -4,6 +4,7 @@ metadata:
   name: wsl-gpu-metrics
   namespace: monitoring
   labels:
+    release: monitoring
     app.kubernetes.io/part-of: gpu-observability
 spec:
   selector:

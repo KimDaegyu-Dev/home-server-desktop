@@ -188,6 +188,64 @@ spec:
             capabilities:
               drop:
                 - ALL
+        - name: install-human-agent-report-skill
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          imagePullPolicy: Never
+          command:
+            - python
+            - -c
+            - |
+              import shutil
+              from pathlib import Path
+
+              source = Path('/skill-src')
+              root = Path('/opt/data/home')
+              homes = [root, *(root / 'profiles' / name for name in ('researcher', 'builder', 'reviewer'))]
+              files = {
+                  'skill.md': 'SKILL.md',
+                  'readme.md': 'README.md',
+                  'report-lint.py': 'scripts/report_lint.py',
+                  'fact-contract.md': 'references/fact-contract.md',
+                  'report-template.md': 'templates/report-template.md',
+                  'example-report.md': 'examples/report.md',
+                  'example-facts.json': 'examples/facts.json',
+                  'test-report-lint.py': 'tests/test_report_lint.py',
+              }
+              for filename in files:
+                  if not (source / filename).is_file():
+                      raise SystemExit(f'human-agent-report skill file missing: {filename}')
+              for home in homes:
+                  target = home / 'skills' / 'productivity' / 'human-agent-report'
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  if target.exists():
+                      shutil.rmtree(target)
+                  for filename, relative in files.items():
+                      destination = target / relative
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copyfile(source / filename, destination)
+                      destination.chmod(0o644)
+              print('Installed human-agent-report in default and worker profile Hermes homes')
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: human-agent-report-skill
+              mountPath: /skill-src
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10000
+            runAsGroup: 10000
+            capabilities:
+              drop:
+                - ALL
         - name: configure-langfuse-session-context
           image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
           imagePullPolicy: Never
@@ -460,6 +518,8 @@ spec:
               value: 0.0.0.0
             - name: KANZO_EXECUTOR_API_PORT
               value: '8766'
+            - name: KANZO_LANGFUSE_USER_ID
+              value: kanzo-owner
             - name: KANZO_EXECUTOR_API_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -559,6 +619,10 @@ spec:
         - name: worker-code
           configMap:
             name: kanzo-agent-worker-code
+            defaultMode: 292
+        - name: human-agent-report-skill
+          configMap:
+            name: kanzo-human-agent-report-skill
             defaultMode: 292
 ---
 apiVersion: v1

@@ -22,8 +22,14 @@ from typing import Any
 HERMES_ROOT = Path("/opt/hermes")
 
 
-def _bind_kanzo_session_env(client_env: dict[str, Any], task_id: str, run_id: str) -> None:
+def _bind_kanzo_session_env(
+    client_env: dict[str, Any], task_id: str, run_id: str, user_id: str | None = None,
+) -> None:
     """Bind Kanzo attribution to this Gateway session, never the process env."""
+    bound_user_id = user_id if user_id is not None else os.environ.get("KANZO_LANGFUSE_USER_ID", "kanzo-owner")
+    bound_user_id = bound_user_id.strip() or "kanzo-owner"
+    if len(bound_user_id) > 200 or any(ord(char) < 32 for char in bound_user_id):
+        raise ValueError("invalid Langfuse user identity")
     for secret_name in (
         "KANZO_BROKER_WORKER_TOKEN",
         "KANZO_BROKER_TOKEN",
@@ -34,8 +40,10 @@ def _bind_kanzo_session_env(client_env: dict[str, Any], task_id: str, run_id: st
         "KANZO_AUTOMATED_RUN": "1",
         "KANZO_TASK_ID": task_id,
         "KANZO_RUN_ID": run_id,
+        "KANZO_USER_ID": bound_user_id,
         "HERMES_KANBAN_TASK": task_id,
         "HERMES_KANBAN_RUN_ID": run_id,
+        "HERMES_KANBAN_USER_ID": bound_user_id,
     })
 
 

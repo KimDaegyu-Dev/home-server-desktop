@@ -106,8 +106,10 @@ class GatewaySessionTests(unittest.TestCase):
         env = client.created_with["client_env"]
         self.assertEqual(env["KANZO_TASK_ID"], "project#41")
         self.assertEqual(env["KANZO_RUN_ID"], "run-41")
+        self.assertEqual(env["KANZO_USER_ID"], "kanzo-owner")
         self.assertEqual(env["HERMES_KANBAN_TASK"], "project#41")
         self.assertEqual(env["HERMES_KANBAN_RUN_ID"], "run-41")
+        self.assertEqual(env["HERMES_KANBAN_USER_ID"], "kanzo-owner")
         self.assertNotIn("KANZO_BROKER_WORKER_TOKEN", env)
 
     def test_binding_overwrites_stale_values_without_mutating_process_environment(self) -> None:
@@ -119,8 +121,17 @@ class GatewaySessionTests(unittest.TestCase):
         gateway_session._bind_kanzo_session_env(env, "project#42", "run-42")
         self.assertEqual(env["KANZO_TASK_ID"], "project#42")
         self.assertEqual(env["KANZO_RUN_ID"], "run-42")
+        self.assertEqual(env["KANZO_USER_ID"], "kanzo-owner")
         self.assertEqual(os.environ.get("KANZO_TASK_ID"), process_env["KANZO_TASK_ID"])
         self.assertEqual(os.environ.get("KANZO_RUN_ID"), process_env["KANZO_RUN_ID"])
+
+    def test_user_identity_is_session_bound_and_rejects_invalid_value(self) -> None:
+        env = {}
+        gateway_session._bind_kanzo_session_env(env, "project#43", "run-43", "stable-owner")
+        self.assertEqual(env["KANZO_USER_ID"], "stable-owner")
+        self.assertEqual(env["HERMES_KANBAN_USER_ID"], "stable-owner")
+        with self.assertRaises(ValueError):
+            gateway_session._bind_kanzo_session_env({}, "project#43", "run-44", "bad\nidentity")
 
 
 if __name__ == "__main__":

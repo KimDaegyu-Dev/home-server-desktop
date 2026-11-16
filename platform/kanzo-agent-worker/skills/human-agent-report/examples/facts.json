@@ -1,0 +1,8 @@
+{
+  "report_subject": "Hermes toolset narrowing",
+  "facts": [
+    {"id":"F01","summary":"역할별 도구 세트 18개에서 13개로 축소 설계를 확정했다.","status":"design_decided","critical":true,"evidence":["provided-task-result"],"required_terms":["18개","13개"]},
+    {"id":"F02","summary":"N1 연구 작업은 실행 중이다.","status":"running","critical":true,"evidence":["provided-task-result"],"required_terms":["N1","실행 중"]},
+    {"id":"F03","summary":"프롬프트 크기 감소량은 이번 실행에서 검증되지 않았다.","status":"unverified","critical":true,"evidence":[],"required_terms":["미검증"]}
+  ]
+}

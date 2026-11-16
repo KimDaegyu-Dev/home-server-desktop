@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path("/opt/data/home")
 PROFILES = ("default", "researcher", "builder", "reviewer")
-KANZO_CLIENT_ENV = ("KANZO_TASK_ID", "KANZO_RUN_ID")
+KANZO_CLIENT_ENV = ("KANZO_TASK_ID", "KANZO_RUN_ID", "KANZO_USER_ID")
 OLD = '''def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 '''
@@ -26,7 +26,8 @@ NEW = '''def _env(name: str, default: str = "") -> str:
     # Kanzo run identity must come from the active Gateway session. Process
     # environment is shared across sessions and can retain another run's IDs.
     session_name = {"HERMES_KANBAN_TASK": "KANZO_TASK_ID",
-                    "HERMES_KANBAN_RUN_ID": "KANZO_RUN_ID"}.get(name)
+                    "HERMES_KANBAN_RUN_ID": "KANZO_RUN_ID",
+                    "HERMES_KANBAN_USER_ID": "KANZO_USER_ID"}.get(name)
     if session_name:
         try:
             from agent.session_client_env import bound_client_env
@@ -59,7 +60,7 @@ PREVIOUS = '''def _env(name: str, default: str = "") -> str:
 '''
 
 def ensure_kanzo_client_env(config: dict) -> tuple[dict, bool]:
-    """Allow only the two non-secret run identifiers in this session's client env."""
+    """Allow only non-secret Kanzo attribution identifiers in this session's client env."""
     updated = dict(config)
     terminal = updated.setdefault("terminal", {})
     if not isinstance(terminal, dict):
@@ -90,6 +91,28 @@ def patch_plugin_text(text: str) -> tuple[str, bool]:
     raise SystemExit("unexpected Langfuse _env helper; refusing an unsafe patch")
 
 
+def patch_user_id_calls(text: str) -> tuple[str, bool]:
+    """Propagate the session-bound Kanzo owner ID into both Langfuse root paths."""
+    replacements = (
+        (
+            "user_id=sender or _turn_user_locked(turn_id, session_id)",
+            'user_id=_env("HERMES_KANBAN_USER_ID") or sender or _turn_user_locked(turn_id, session_id)',
+        ),
+        (
+            "user_id=_turn_user_locked(turn_id, session_id)",
+            'user_id=_env("HERMES_KANBAN_USER_ID") or _turn_user_locked(turn_id, session_id)',
+        ),
+    )
+    updated = text
+    for old, new in replacements:
+        if old in updated:
+            updated = updated.replace(old, new, 1)
+    marker = 'user_id=_env("HERMES_KANBAN_USER_ID") or '
+    if updated.count(marker) != len(replacements):
+        raise SystemExit("unexpected Langfuse user attribution hooks; refusing an unsafe patch")
+    return updated, updated != text
+
+
 def main() -> None:
     from ruamel.yaml import YAML
 
@@ -104,6 +127,8 @@ def main() -> None:
                 raise SystemExit(f"Langfuse plugin source missing for profile {profile}")
         text = source.read_text(encoding="utf-8")
         updated, changed = patch_plugin_text(text)
+        updated, user_id_changed = patch_user_id_calls(updated)
+        changed = changed or user_id_changed
         if changed:
             source.write_text(updated, encoding="utf-8")
             patched.append(profile)

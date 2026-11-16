@@ -49,3 +49,17 @@ configMapGenerator:
         argocd.argoproj.io/sync-wave: "-2"
     files:
       - model-chains.json=model-chains.json
+  - name: kanzo-human-agent-report-skill
+    namespace: mcp
+    options:
+      annotations:
+        argocd.argoproj.io/sync-wave: "-2"
+    files:
+      - skill.md=skills/human-agent-report/SKILL.md
+      - readme.md=skills/human-agent-report/README.md
+      - report-lint.py=skills/human-agent-report/scripts/report_lint.py
+      - fact-contract.md=skills/human-agent-report/references/fact-contract.md
+      - report-template.md=skills/human-agent-report/templates/report-template.md
+      - example-report.md=skills/human-agent-report/examples/report.md
+      - example-facts.json=skills/human-agent-report/examples/facts.json
+      - test-report-lint.py=skills/human-agent-report/tests/test_report_lint.py

@@ -31,3 +31,9 @@
 - 같은 task/model/prompt 조건으로 end-to-end latency, token, CPU/memory/GPU 비교 기준 수립
 
 활성 모델 응답을 일부러 중단하는 canary는 하지 않았다. 사용자 소유 Kanzo 카드는 임의로 완료 처리하지 않는다. 확인된 token 낭비 패턴은 과거 상세 로그를 매번 읽는 것이므로, 상태 요약과 날짜별 증거를 분리했다.
+
+## Progress in this turn
+
+- Integrated `human-agent-report` into the Gateway executor's persistent Hermes homes and final-comment prompt. It applies only to human-facing final Kanzo reports; it adds no model rewrite call. Worker suite passed 45/45, skill tests 6/6, Python compilation and Kustomize rendering passed.
+- Completed the session-bound Langfuse user attribution change with the pseudonymous ID `kanzo-owner`; live trace verification and rollout are pending.
+- At the usage-limit interruption, work had already reached the post-drain Langfuse audit: run `test-1#111` proved trace/session/run attribution, but the Langfuse observations had an empty `userId`. The immediate task was to bind a user ID per Gateway session, then verify a new trace. Remaining roadmap work is summarized in `kanzo-hermes-evidence-log.md` and the design SSOT `kanzo-hermes-roadmap.md`; the live rollout and user-ID canary remain immediate.

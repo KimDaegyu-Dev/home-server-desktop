@@ -13,6 +13,7 @@ import unittest
 
 from executor_api import ApiError, _run_helper
 from readonly_executor import terminate_process_group
+from worker import Worker
 
 
 @unittest.skipUnless(os.name == "posix", "process-group cleanup uses POSIX signals")
@@ -77,6 +78,16 @@ class ProcessGroupCleanupTests(unittest.TestCase):
         process, child_pid = self.start_parent(child_ignores_term=False)
         try:
             terminate_process_group(process)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=3)
+        self.assert_process_stopped(self, child_pid)
+
+    def test_dispatcher_worker_stop_kills_sigterm_ignoring_descendant(self) -> None:
+        process, child_pid = self.start_parent(child_ignores_term=True)
+        try:
+            Worker._stop_hermes_process(process)
         finally:
             if process.poll() is None:
                 process.kill()

@@ -40,3 +40,6 @@
 - Added Linux tests for actual Executor API timeout cleanup with a SIGTERM-ignoring descendant and ReadOnly executor termination with a child process. Both pass; Windows skips the two POSIX-only cases.
 - Tests caught stdout/stderr pipe handles leaking from executor helper execution. `executor_api._run_helper` now closes both streams in `finally`. Tests with `ResourceWarning` elevated to errors pass.
 - Full suite: 49/49 on WSL/Linux and Windows (2 skipped on Windows). Runtime forced-termination and Gateway-admission reconciliation are still outstanding.
+
+- Extended the same process-tree test to dispatcher Worker._stop_hermes_process. All three POSIX cleanup paths stop SIGTERM-ignoring descendants. Current runtime commit d37921f is Argo Synced/Healthy and already contains the executor pipe-close fix; the new assertion is test-only.
+- Full suite: 50/50 in WSL/Linux, and 47 pass with 3 POSIX-only skips on Windows.

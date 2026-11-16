@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -52,6 +53,7 @@ class KanzoDelegateHookTests(unittest.TestCase):
         env = {"KANZO_BROKER_URL": "http://broker.svc:8080", "KANZO_BROKER_TOKEN": "opaque-test-token"}
         with (patch.dict(os.environ, env),
               patch.object(self.provider, "_kanzo_automation_active", return_value=True),
+              patch.object(self.provider, "_retire_delegated_child_environment"),
               patch.object(self.provider, "_BrokerClient", Client)):
             self.provider._register_delegated_child(
                 parent_session_id="root-session", child_session_id="child-session"
@@ -106,6 +108,7 @@ class KanzoDelegateHookTests(unittest.TestCase):
         with (patch.dict(os.environ, env),
               patch.object(self.provider, "session_context", context),
               patch.object(self.provider, "_kanzo_automation_active", return_value=True),
+              patch.object(self.provider, "_retire_delegated_child_environment"),
               patch.object(self.provider, "_BrokerClient", Client),
               patch.object(self.provider._LOG, "warning")):
             self.provider._close_delegated_child(
@@ -139,6 +142,7 @@ class KanzoDelegateHookTests(unittest.TestCase):
         with (patch.dict(os.environ, env),
               patch.object(self.provider, "session_context", context),
               patch.object(self.provider, "_kanzo_automation_active", return_value=True),
+              patch.object(self.provider, "_retire_delegated_child_environment"),
               patch.object(self.provider, "_BrokerClient", Client),
               patch.object(self.provider._LOG, "warning")):
             self.provider._close_delegated_child(
@@ -146,6 +150,41 @@ class KanzoDelegateHookTests(unittest.TestCase):
             )
 
         self.assertEqual(session_var.value, "child-session")
+
+    def test_child_stop_evicts_only_the_matching_cached_terminal_environment(self) -> None:
+        calls = []
+
+        class Environment:
+            def __init__(self, session_id):
+                self._hermes_backend_name = "kanzo_broker"
+                self._session_id = session_id
+
+            def cleanup(self):
+                calls.append(("cleanup", self._session_id))
+
+        child_env = Environment("child-session")
+        parent_env = Environment("root-session")
+        terminal_tool = types.SimpleNamespace(
+            _active_environments={"child-key": child_env, "parent-key": parent_env},
+            _last_activity={"child-key": 1.0, "parent-key": 2.0},
+            _env_lock=threading.RLock(),
+            _clear_file_ops_cache=lambda key: calls.append(("clear", key)),
+        )
+        tools_package = types.ModuleType("tools")
+        tools_package.__path__ = []
+        with patch.dict(sys.modules, {
+            "tools": tools_package,
+            "tools.terminal_tool": terminal_tool,
+        }):
+            self.provider._retire_delegated_child_environment({
+                "parent_session_id": "root-session", "child_session_id": "child-session",
+            })
+
+        self.assertEqual(terminal_tool._active_environments, {"parent-key": parent_env})
+        self.assertEqual(terminal_tool._last_activity, {"parent-key": 2.0})
+        self.assertIn(("clear", "child-key"), calls)
+        self.assertIn(("cleanup", "child-session"), calls)
+        self.assertNotIn(("cleanup", "root-session"), calls)
 
 
 if __name__ == "__main__":

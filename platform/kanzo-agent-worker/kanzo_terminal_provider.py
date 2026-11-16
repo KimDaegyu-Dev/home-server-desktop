@@ -795,6 +795,49 @@ def _register_delegated_child(**payload: Any) -> None:
     _delegate_sessions(payload, close=False)
 
 
+def _retire_delegated_child_environment(payload: dict[str, Any]) -> None:
+    """Evict the child terminal object before its broker session is revoked.
+
+    Hermes may retain a per-session terminal object in its cache after the child
+    returns. If the resumed parent is routed through that cached object, it keeps
+    using the child's now-revoked broker identity. Remove only objects bound to
+    this exact child session; parent and sibling environments remain untouched.
+    """
+    child = payload.get("child_session_id")
+    if not isinstance(child, str) or not child.strip():
+        return
+    try:
+        from tools import terminal_tool
+
+        active = terminal_tool._active_environments
+        lock = terminal_tool._env_lock
+    except (ImportError, AttributeError):
+        _LOG.warning("could not inspect Hermes terminal cache for delegated child")
+        return
+    with lock:
+        matches = [
+            (key, env) for key, env in active.items()
+            if isinstance(key, str)
+            and getattr(env, "_hermes_backend_name", "") == "kanzo_broker"
+            and getattr(env, "_session_id", "") == child
+        ]
+        for key, _env in matches:
+            active.pop(key, None)
+            getattr(terminal_tool, "_last_activity", {}).pop(key, None)
+    clear_cache = getattr(terminal_tool, "_clear_file_ops_cache", None)
+    for _key, env in matches:
+        if callable(clear_cache):
+            clear_cache(_key)
+        try:
+            env.cleanup()
+        except Exception:
+            # Revocation still follows; run finalization remains the last-resort
+            # cleanup for this environment handle.
+            _LOG.warning("could not clean the retired child terminal handle", exc_info=True)
+    if matches:
+        _LOG.info("retired delegated child terminal environment count=%d", len(matches))
+
+
 def _restore_parent_session_context(payload: dict[str, Any]) -> None:
     """Restore the task-local Hermes session after a child-stop hook.
 
@@ -819,5 +862,6 @@ def _restore_parent_session_context(payload: dict[str, Any]) -> None:
 
 
 def _close_delegated_child(**payload: Any) -> None:
+    _retire_delegated_child_environment(payload)
     if _delegate_sessions(payload, close=True):
         _restore_parent_session_context(payload)

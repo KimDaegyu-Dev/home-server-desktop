@@ -235,7 +235,7 @@ spec:
           \ *(Path('/opt/data/home/profiles') / name for name in ('researcher', 'builder', 'reviewer'))]\nfor home in homes:\n\
           \    plugin = home / 'plugins' / 'kanzo_broker'\n    plugin.mkdir(parents=True, exist_ok=True)\n    shutil.copy2(source,\
           \ plugin / '__init__.py')\n    (plugin / 'plugin.yaml').write_text(\n        'name: kanzo_broker\\\\nversion: 0.1.0\\\
-          \\ndescription: Per-run Kanzo Kubernetes terminal backend\\\\nkind: backend\\\\n',\n        encoding='utf-8',\n\
+          \\ndescription: Per-run Kanzo Kubernetes terminal backend\\\\nkind: backend\\\\nprovides_hooks:\\\\n  - subagent_start\\\\n  - subagent_stop\\\\n',\n        encoding='utf-8',\n\
           \    )\nPY\nhermes plugins enable kanzo_broker\nhermes config set plugins.isolation in_process\nhermes config set\
           \ terminal.backend kanzo_broker\nfor profile in researcher builder reviewer; do\n  hermes -p \"$profile\" plugins\
           \ enable kanzo_broker\n  hermes -p \"$profile\" config set plugins.isolation in_process\n  hermes -p \"$profile\"\

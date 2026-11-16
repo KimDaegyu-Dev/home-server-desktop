@@ -605,3 +605,11 @@ This file preserves the dated implementation notes and operational evidence form
 - In #106 two sequential child delegations and five parent follow-up calls succeeded; parent and children saw the same empty `/workspace`, with no broker mapping errors. This is live evidence for child registration/revocation and parent-session restoration across sequential delegation.
 - Limits remain: #88 did not use a checked-out repository, and child session identity/raw transcript could not be independently read from inside the sandbox. A combined repository-backed check across terminal, file, execute_code, and delegates plus trusted child trace attribution is still open. Proposals #89/#90 remain backlog for user review and were not moved.
 - The status document now distinguishes these proven mount/delegation properties from the remaining full-path and observability checks.
+
+
+### 2026-11-16 — SSE event wake smoke and exact-response protocol correction
+
+- Live dispatcher logs showed the event adapter connected to Kanzo SSE; dispatcher and executor were Ready with no active executor admission. A temporary `tool-free` task `hermes-harness-lab#115` was created in the already active project to verify an actual event wake at low token cost.
+- The task changed to Doing within the event cycle, run `fe8c9c250a2c` was admitted and completed, and the worker posted exactly `EVENT_WAKE_OK`. Kanzo moved it to Review because the model followed the exact-body instruction but omitted the worker outcome marker. This is not recorded as a fully successful task completion, and it was not automatically retried.
+- The worker's tool-free prompt now explicitly separates exact human-facing body text from the required outcome/summary protocol footer. A unit test checks that `parse_worker_outcome` removes the footer and preserves the exact body. Event-adapter tests also cover a failed local wake followed by reconnect reconciliation.
+- Validation: full suite 58/58 WSL/Linux; Windows 55 passed with 3 POSIX-only skips. Commit `47fe509` is Argo Synced/Healthy; Executor 3/3 and Dispatcher 2/2. The live dispatcher code contains the prompt correction, event adapter logs a current SSE connection, and the executor ledger has no active submissions. #115 remains Review as evidence of the missing-marker outcome; no retry or status override was performed.

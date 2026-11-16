@@ -67,6 +67,11 @@ GIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _LOG = logging.getLogger("kanzo.sandbox_broker")
 
 
+def _session_fingerprint(session_id: str) -> str:
+    """Stable, non-reversible identifier for correlating session lookup logs."""
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12]
+
+
 class BrokerError(Exception):
     def __init__(self, status: int, code: str):
         super().__init__(code)
@@ -454,6 +459,8 @@ class BrokerStore:
             except sqlite3.IntegrityError:
                 raise BrokerError(409, "session_already_bound") from None
             db.execute("COMMIT")
+        _LOG.info("bound run session (task_id=%s run_id=%s session_fp=%s)",
+                  task_id, run_id, _session_fingerprint(session_id))
         return {"state": "bound", "hermes_session_id": session_id}
 
     def resolve(self, session_id: str) -> dict[str, Any]:
@@ -518,6 +525,9 @@ class BrokerStore:
                 active,created_at) VALUES(?,?,?,?,1,?)""",
                        (child_session_id, parent_session_id, run["task_id"], run["run_id"], now))
             db.execute("COMMIT")
+        _LOG.info("registered child session (task_id=%s run_id=%s parent_fp=%s child_fp=%s)",
+                  run["task_id"], run["run_id"], _session_fingerprint(parent_session_id),
+                  _session_fingerprint(child_session_id))
         return {"state": "bound", "hermes_session_id": child_session_id, "idempotent": False}
 
     def close_child_session(self, parent_session_id: str, child_session_id: str) -> dict[str, Any]:
@@ -532,6 +542,9 @@ class BrokerStore:
                 raise BrokerError(409, "child_parent_mismatch")
             db.execute("UPDATE child_sessions SET active=0,closed_at=COALESCE(closed_at,?) "
                        "WHERE child_session_id=? AND active=1", (now, child_session_id))
+            _LOG.info("revoked child session (child_fp=%s parent_fp=%s active_before=%s)",
+                      _session_fingerprint(child_session_id), _session_fingerprint(parent_session_id),
+                      bool(row["active"]))
             return {"state": "closed", "idempotent": not bool(row["active"])}
 
     @staticmethod
@@ -543,10 +556,12 @@ class BrokerStore:
                 WHERE c.child_session_id=? AND c.active=1 AND r.state='bound' AND r.expires_at>?""",
                           (session_id, _now(), session_id, _now())).fetchall()
         if not rows:
-            _LOG.warning("session lookup found no live mapping (mapping_count=0)")
+            _LOG.warning("session lookup found no live mapping (mapping_count=0 session_fp=%s)",
+                         _session_fingerprint(session_id))
             raise BrokerError(404, "session_mapping_not_found")
         if len(rows) > 1:
-            _LOG.error("session lookup found multiple live mappings (mapping_count=%d)", len(rows))
+            _LOG.error("session lookup found multiple live mappings (mapping_count=%d session_fp=%s)",
+                       len(rows), _session_fingerprint(session_id))
             raise BrokerError(409, "session_mapping_ambiguous")
         return rows[0]
 

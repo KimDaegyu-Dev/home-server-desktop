@@ -30,6 +30,9 @@ spec:
     spec:
       serviceAccountName: kanzo-agent-executor
       automountServiceAccountToken: false
+      # Hermes Dashboard and Gateway are separate containers; sharing the Pod PID
+      # namespace lets the dashboard's local liveness probe see the Gateway process.
+      shareProcessNamespace: true
       # Match the 2700s Gateway/execution deadline and leave shutdown/finalization reserve.
       terminationGracePeriodSeconds: 3300
       securityContext:

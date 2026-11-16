@@ -169,8 +169,8 @@ def _sync_profile_state(source: Path, destination: Path) -> None:
     """Three-way-sync mutable Hermes profile files without erasing local learning.
 
     The source profile remains authoritative for ordinary settings files. For
-    skills, plugins, scripts, .omh data, and MEMORY.md, this records the last
-    source hash. Source updates flow into an unchanged destination; a local
+    skills, plugins, scripts, .omh data, and curated memory files, it records
+    the last source hash. Source updates flow into an unchanged destination; a local
     destination edit wins on conflict and is logged for later review.
     """
     state_path = destination / ".kanzo-profile-sync.json"
@@ -196,15 +196,16 @@ def _sync_profile_state(source: Path, destination: Path) -> None:
                 continue
             relative = src.relative_to(source).as_posix()
             sources[relative] = src
-    memory_source = source / "MEMORY.md"
-    if memory_source.is_file() and not memory_source.is_symlink():
-        sources["MEMORY.md"] = memory_source
+    for relative in ("MEMORY.md", "memories/MEMORY.md", "memories/USER.md"):
+        memory_source = source / relative
+        if memory_source.is_file() and not memory_source.is_symlink():
+            sources[relative] = memory_source
 
     current: dict[str, str] = {}
     destination_root = destination.resolve()
 
     def destination_path(relative: str) -> Path | None:
-        if relative != "MEMORY.md" and not relative.startswith(("skills/", "plugins/", "scripts/", ".omh/")):
+        if relative not in {"MEMORY.md", "memories/MEMORY.md", "memories/USER.md"} and not relative.startswith(("skills/", "plugins/", "scripts/", ".omh/")):
             return None
         candidate = destination / relative
         try:

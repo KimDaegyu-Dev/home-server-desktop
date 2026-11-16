@@ -192,7 +192,7 @@ class KanzoBrokerRetryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.provider = _load_provider()
 
-    def execute_with_broker(self, broker):
+    def execute_with_broker(self, broker, **execute_kwargs):
         tools = types.ModuleType("tools")
         tools.__path__ = []
         interrupt = types.ModuleType("tools.interrupt")
@@ -223,7 +223,49 @@ class KanzoBrokerRetryTests(unittest.TestCase):
                 cwd="/workspace",
                 timeout=5,
             )
-            return env.execute("echo hello")
+            return env.execute("echo hello", **execute_kwargs)
+
+    def test_preflight_refusal_does_not_enter_hermes_retry_loop(self) -> None:
+        class Broker:
+            def __init__(self):
+                self.calls = []
+
+            def post(self, path, _payload):
+                self.calls.append(path)
+                raise AssertionError(f"broker must not be called: {path}")
+
+        broker = Broker()
+        result = self.execute_with_broker(broker, yield_handler=object())
+
+        self.assertEqual(broker.calls, [])
+        self.assertEqual(result["exit_code"], 1)
+        self.assertTrue(result["kanzo_non_retryable"])
+        self.assertIn("execution state=not_started", result["output"])
+
+    def test_invalid_command_is_reported_as_not_started(self) -> None:
+        broker = types.SimpleNamespace(post=lambda *_args: self.fail("broker must not be called"))
+        tools = types.ModuleType("tools")
+        tools.__path__ = []
+        interrupt = types.ModuleType("tools.interrupt")
+        interrupt.is_interrupted = lambda: False
+        interrupt.is_thread_interrupted = lambda _thread_id: False
+        with patch.dict(sys.modules, {"tools": tools, "tools.interrupt": interrupt}), \
+                patch.object(self.provider.os.path, "normpath", posixpath.normpath):
+            env = self.provider.KanzoTerminalEnvironment(
+                broker=broker,
+                session_id="session-1",
+                mapping={
+                    "task_id": "test-1#1", "run_id": "run-1", "lease": "lease-1",
+                    "environment_handle": "env-1", "cwd": "/workspace", "temp_dir": "/scratch",
+                },
+                cwd="/workspace",
+                timeout=5,
+            )
+            result = env.execute("")
+
+        self.assertEqual(result["exit_code"], 1)
+        self.assertTrue(result["kanzo_non_retryable"])
+        self.assertIn("execution state=not_started", result["output"])
 
     def test_start_error_returns_non_retryable_result_after_one_request(self) -> None:
         class Broker:

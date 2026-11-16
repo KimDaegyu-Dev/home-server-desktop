@@ -263,49 +263,60 @@ class KanzoTerminalEnvironment:
         stdin_data: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        if kwargs:
-            # Hermes may add optional execution hints over time. Do not silently
-            # reinterpret them as process/environment controls.
-            allowed = {"rewrite_compound_background", "bounded_capture", "yield_handler"}
-            unknown = set(kwargs) - allowed
-            if unknown:
-                raise TypeError(f"unsupported execute options: {', '.join(sorted(unknown))}")
-            if kwargs.get("yield_handler") is not None:
-                raise KanzoBrokerError("broker backend cannot hand a remote command to local background execution")
-        if self._cleaned:
-            raise KanzoBrokerError("environment has already been cleaned up")
-        if stdin_data is not None and not isinstance(stdin_data, str):
-            raise ValueError("stdin_data must be text or None")
-        if stdin_data is not None and len(stdin_data.encode("utf-8")) > _MAX_STDIN_BYTES:
-            raise ValueError("stdin_data exceeds the size limit")
-        effective_cwd = _clean_absolute_path(cwd or self.cwd, "cwd")
-        # Hermes execute_code's staging and cleanup helpers deliberately run
-        # absolute-path operations with cwd="/". The per-run runner accepts
-        # only /workspace and /scratch as initial working directories, so map
-        # that root cwd request to the broker-provided writable scratch area.
-        # Commands still operate on their explicit absolute paths.
-        if effective_cwd == "/":
-            effective_cwd = self._temp_dir
         try:
-            effective_timeout = int(timeout or self.timeout or _DEFAULT_TIMEOUT_SECONDS)
-        except (TypeError, ValueError):
-            effective_timeout = _DEFAULT_TIMEOUT_SECONDS
-        effective_timeout = max(1, min(effective_timeout, _MAX_TIMEOUT_SECONDS))
-        try:
-            from tools.interrupt import is_interrupted, is_thread_interrupted
-        except ImportError as exc:
-            raise KanzoBrokerError("Hermes interrupt API is unavailable; refusing uncancellable remote execution") from exc
+            if kwargs:
+                # Hermes may add optional execution hints over time. Do not silently
+                # reinterpret them as process/environment controls.
+                allowed = {"rewrite_compound_background", "bounded_capture", "yield_handler"}
+                unknown = set(kwargs) - allowed
+                if unknown:
+                    raise TypeError(f"unsupported execute options: {', '.join(sorted(unknown))}")
+                if kwargs.get("yield_handler") is not None:
+                    raise KanzoBrokerError("broker backend cannot hand a remote command to local background execution")
+            if self._cleaned:
+                raise KanzoBrokerError("environment has already been cleaned up")
+            if stdin_data is not None and not isinstance(stdin_data, str):
+                raise ValueError("stdin_data must be text or None")
+            if stdin_data is not None and len(stdin_data.encode("utf-8")) > _MAX_STDIN_BYTES:
+                raise ValueError("stdin_data exceeds the size limit")
+            effective_cwd = _clean_absolute_path(cwd or self.cwd, "cwd")
+            # Hermes execute_code's staging and cleanup helpers deliberately run
+            # absolute-path operations with cwd="/". The per-run runner accepts
+            # only /workspace and /scratch as initial working directories, so map
+            # that root cwd request to the broker-provided writable scratch area.
+            # Commands still operate on their explicit absolute paths.
+            if effective_cwd == "/":
+                effective_cwd = self._temp_dir
+            try:
+                effective_timeout = int(timeout or self.timeout or _DEFAULT_TIMEOUT_SECONDS)
+            except (TypeError, ValueError):
+                effective_timeout = _DEFAULT_TIMEOUT_SECONDS
+            effective_timeout = max(1, min(effective_timeout, _MAX_TIMEOUT_SECONDS))
+            argv = self._argv(command)
+            authority = self._authority()
+            try:
+                from tools.interrupt import is_interrupted, is_thread_interrupted
+            except ImportError as exc:
+                raise KanzoBrokerError(
+                    "Hermes interrupt API is unavailable; refusing uncancellable remote execution"
+                ) from exc
+        except (KanzoBrokerError, TypeError, ValueError) as exc:
+            return self._failed_result(
+                type(exc).__name__, outcome_uncertain=False, execution_state="not_started"
+            )
         caller_thread_id = threading.current_thread().ident
         with self._active_lock:
             if self._closing or self._cleaned:
-                raise KanzoBrokerError("environment cleanup has started; refusing new execution")
+                return self._failed_result(
+                    "EnvironmentClosing", outcome_uncertain=False, execution_state="not_started"
+                )
             self._pending_starts += 1
         try:
             start = self._broker.post(
                 "/v1/terminal/exec/start",
                 {
-                    **self._authority(),
-                    "argv": self._argv(command),
+                    **authority,
+                    "argv": argv,
                     "stdin": stdin_data,
                     "cwd": effective_cwd,
                     "timeout_seconds": effective_timeout,
@@ -445,9 +456,9 @@ class KanzoTerminalEnvironment:
 
     @staticmethod
     def _failed_result(
-        error_type: str, *, outcome_uncertain: bool, partial: str = ""
+        error_type: str, *, outcome_uncertain: bool, partial: str = "", execution_state: str | None = None
     ) -> dict[str, Any]:
-        state = "unknown" if outcome_uncertain else "cancelled"
+        state = execution_state or ("unknown" if outcome_uncertain else "cancelled")
         output = (
             partial
             + f"\n[Kanzo broker {error_type}; remote execution state={state}. "

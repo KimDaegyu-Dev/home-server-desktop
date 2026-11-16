@@ -311,6 +311,14 @@ class KanzoTerminalEnvironment:
                     "timeout_seconds": effective_timeout,
                 },
             )
+        except Exception as exc:
+            with self._active_lock:
+                self._pending_starts -= 1
+                self._active_lock.notify_all()
+            # The broker may have admitted the command before the response was
+            # lost. Return a failed terminal result instead of raising into
+            # Hermes' generic exception retry loop and possibly starting it twice.
+            return self._failed_result(type(exc).__name__, outcome_uncertain=True)
         except BaseException:
             with self._active_lock:
                 self._pending_starts -= 1
@@ -321,7 +329,7 @@ class KanzoTerminalEnvironment:
             with self._active_lock:
                 self._pending_starts -= 1
                 self._active_lock.notify_all()
-            raise KanzoBrokerError("broker start response lacks a valid exec_id")
+            return self._failed_result("InvalidStartResponse", outcome_uncertain=True)
         with self._active_lock:
             self._pending_starts -= 1
             closing = self._closing or self._cleaned
@@ -330,12 +338,13 @@ class KanzoTerminalEnvironment:
             self._active_lock.notify_all()
         if closing:
             try:
-                self._cancel_exec(exec_id)
+                state = self._cancel_exec(exec_id)
+                if state == "completed":
+                    final = self._poll_exec(exec_id, 0)
+                    return self._completed_result(final, [], 0)
             except Exception as exc:
-                raise KanzoBrokerError(
-                    "environment cleanup raced with command start; remote execution may still be running"
-                ) from exc
-            raise KanzoBrokerError("environment was cleaned while execution was starting")
+                return self._failed_result(type(exc).__name__, outcome_uncertain=True)
+            return self._failed_result("EnvironmentClosing", outcome_uncertain=False)
 
         cursor = 0
         chunks: list[str] = []
@@ -409,9 +418,20 @@ class KanzoTerminalEnvironment:
                 "returncode": 130,
                 "hermes_interrupted": True,
             }
+        except Exception as exc:
+            # Do not let Hermes' generic retry loop repeat a command after a
+            # broker failure: start/poll may have reached the remote runner.
+            try:
+                state = self._cancel_exec(exec_id)
+                if state == "completed":
+                    final = self._poll_exec(exec_id, cursor)
+                    return self._completed_result(final, chunks, output_size)
+                return self._failed_result(type(exc).__name__, outcome_uncertain=False, partial="".join(chunks))
+            except Exception:
+                return self._failed_result(type(exc).__name__, outcome_uncertain=True, partial="".join(chunks))
         except BaseException as exc:
-            # Do not leave an orphaned remote process when the caller exits or
-            # a broker operation fails after start. Preserve the original error.
+            # Preserve cancellation/exit semantics, while still trying to stop
+            # the remote process before propagating a non-Exception signal.
             try:
                 self._cancel_exec(exec_id)
             except Exception as cancel_error:
@@ -422,6 +442,24 @@ class KanzoTerminalEnvironment:
         finally:
             with self._active_lock:
                 self._active_exec_ids.discard(exec_id)
+
+    @staticmethod
+    def _failed_result(
+        error_type: str, *, outcome_uncertain: bool, partial: str = ""
+    ) -> dict[str, Any]:
+        state = "unknown" if outcome_uncertain else "cancelled"
+        output = (
+            partial
+            + f"\n[Kanzo broker {error_type}; remote execution state={state}. "
+            "This command was not retried automatically. Check the Kanzo run state before invoking it again.]"
+        )
+        return {
+            "output": output,
+            "exit_code": 1,
+            "returncode": 1,
+            "error": f"non_retryable_broker_error:{error_type}",
+            "kanzo_non_retryable": True,
+        }
 
     def _poll_exec(self, exec_id: str, cursor: int) -> dict[str, Any]:
         return self._broker.post(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import posixpath
 import sys
 import threading
 import types
@@ -185,6 +186,145 @@ class KanzoDelegateHookTests(unittest.TestCase):
         self.assertIn(("clear", "child-key"), calls)
         self.assertIn(("cleanup", "child-session"), calls)
         self.assertNotIn(("cleanup", "root-session"), calls)
+
+
+class KanzoBrokerRetryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.provider = _load_provider()
+
+    def execute_with_broker(self, broker):
+        tools = types.ModuleType("tools")
+        tools.__path__ = []
+        interrupt = types.ModuleType("tools.interrupt")
+        interrupt.is_interrupted = lambda: False
+        interrupt.is_thread_interrupted = lambda _thread_id: False
+        environments = types.ModuleType("tools.environments")
+        environments.__path__ = []
+        base = types.ModuleType("tools.environments.base")
+        base.touch_activity_if_due = lambda *_args: None
+        with patch.dict(sys.modules, {
+            "tools": tools,
+            "tools.interrupt": interrupt,
+            "tools.environments": environments,
+            "tools.environments.base": base,
+        }), patch.object(self.provider.time, "sleep"), \
+                patch.object(self.provider.os.path, "normpath", posixpath.normpath):
+            env = self.provider.KanzoTerminalEnvironment(
+                broker=broker,
+                session_id="session-1",
+                mapping={
+                    "task_id": "test-1#1",
+                    "run_id": "run-1",
+                    "lease": "lease-1",
+                    "environment_handle": "env-1",
+                    "cwd": "/workspace",
+                    "temp_dir": "/scratch",
+                },
+                cwd="/workspace",
+                timeout=5,
+            )
+            return env.execute("echo hello")
+
+    def test_start_error_returns_non_retryable_result_after_one_request(self) -> None:
+        class Broker:
+            def __init__(self):
+                self.calls = []
+
+            def post(self, path, _payload):
+                self.calls.append(path)
+                raise self_error("broker returned HTTP 409")
+
+        self_error = self.provider.KanzoBrokerError
+        broker = Broker()
+        result = self.execute_with_broker(broker)
+
+        self.assertEqual(broker.calls, ["/v1/terminal/exec/start"])
+        self.assertEqual(result["exit_code"], 1)
+        self.assertTrue(result["kanzo_non_retryable"])
+        self.assertIn("not retried automatically", result["output"])
+
+    def test_poll_error_cancels_once_and_returns_without_replaying_start(self) -> None:
+        class Broker:
+            def __init__(self):
+                self.calls = []
+
+            def post(self, path, _payload):
+                self.calls.append(path)
+                if path.endswith("/start"):
+                    return {"exec_id": "exec-1"}
+                if path.endswith("/poll"):
+                    raise self_error("broker poll unavailable")
+                if path.endswith("/cancel"):
+                    return {"state": "cancelled"}
+                raise AssertionError(path)
+
+        self_error = self.provider.KanzoBrokerError
+        broker = Broker()
+        result = self.execute_with_broker(broker)
+
+        self.assertEqual(broker.calls, [
+            "/v1/terminal/exec/start",
+            "/v1/terminal/exec/poll",
+            "/v1/terminal/exec/cancel",
+        ])
+        self.assertEqual(result["exit_code"], 1)
+        self.assertTrue(result["kanzo_non_retryable"])
+        self.assertIn("execution state=cancelled", result["output"])
+
+    def test_completed_state_returns_final_result_instead_of_replaying(self) -> None:
+        class Broker:
+            def __init__(self):
+                self.calls = []
+                self.polls = 0
+
+            def post(self, path, _payload):
+                self.calls.append(path)
+                if path.endswith("/start"):
+                    return {"exec_id": "exec-1"}
+                if path.endswith("/poll"):
+                    self.polls += 1
+                    if self.polls == 1:
+                        raise self_error("transient poll error")
+                    return {"state": "completed", "exit_code": 0, "output_chunk": "done"}
+                if path.endswith("/cancel"):
+                    return {"state": "completed"}
+                raise AssertionError(path)
+
+        self_error = self.provider.KanzoBrokerError
+        broker = Broker()
+        result = self.execute_with_broker(broker)
+
+        self.assertEqual(broker.calls.count("/v1/terminal/exec/start"), 1)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["output"], "done")
+
+    def test_unconfirmed_cancel_marks_state_unknown_without_replaying(self) -> None:
+        class Broker:
+            def __init__(self):
+                self.calls = []
+
+            def post(self, path, _payload):
+                self.calls.append(path)
+                if path.endswith("/start"):
+                    return {"exec_id": "exec-1"}
+                if path.endswith("/poll"):
+                    raise self_error("poll response lost")
+                if path.endswith("/cancel"):
+                    raise self_error("cancel response lost")
+                raise AssertionError(path)
+
+        self_error = self.provider.KanzoBrokerError
+        broker = Broker()
+        result = self.execute_with_broker(broker)
+
+        self.assertEqual(broker.calls, [
+            "/v1/terminal/exec/start",
+            "/v1/terminal/exec/poll",
+            "/v1/terminal/exec/cancel",
+        ])
+        self.assertEqual(result["exit_code"], 1)
+        self.assertTrue(result["kanzo_non_retryable"])
+        self.assertIn("execution state=unknown", result["output"])
 
 
 if __name__ == "__main__":

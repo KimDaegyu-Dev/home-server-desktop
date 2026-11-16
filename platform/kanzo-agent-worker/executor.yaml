@@ -688,7 +688,7 @@ spec:
             defaultMode: 292
         - name: worker-code
           configMap:
-            name: kanzo-agent-worker-code
+            name: kanzo-agent-executor-code
             defaultMode: 292
         - name: human-agent-report-skill
           configMap:

@@ -17,7 +17,7 @@ configMapGenerator:
         argocd.argoproj.io/sync-wave: "-2"
     files:
       - config.yaml=hermes-config.yaml
-  - name: kanzo-agent-worker-code
+  - name: kanzo-agent-dispatcher-code
     namespace: mcp
     options:
       annotations:
@@ -29,21 +29,34 @@ configMapGenerator:
       - artifact_store.py=artifact_store.py
       - event_adapter.py=event_adapter.py
       - readonly_executor.py=readonly_executor.py
+      - executor_client.py=executor_client.py
+      - broker_client.py=broker_client.py
+      - workspace_transfer.py=workspace_transfer.py
+      - langfuse_reconcile.py=langfuse_reconcile.py
+      - migrate_dispatcher_state.py=migrate_dispatcher_state.py
+      - executor_api.py=executor_api.py
+      - runtime_lock.py=runtime_lock.py
       - gateway_control.py=gateway_control.py
       - gateway_session.py=gateway_session.py
       - gateway_execution.py=gateway_execution.py
+      - kanzo_terminal_provider.py=kanzo_terminal_provider.py
+  - name: kanzo-agent-executor-code
+    namespace: mcp
+    options:
+      annotations:
+        argocd.argoproj.io/sync-wave: "-2"
+        argocd.argoproj.io/sync-options: ServerSideApply=true
+    files:
       - executor_api.py=executor_api.py
       - runtime_lock.py=runtime_lock.py
-      - executor_client.py=executor_client.py
-      - migrate_dispatcher_state.py=migrate_dispatcher_state.py
-      - broker_client.py=broker_client.py
-      - langfuse_reconcile.py=langfuse_reconcile.py
-      - workspace_transfer.py=workspace_transfer.py
+      - gateway_control.py=gateway_control.py
+      - gateway_session.py=gateway_session.py
+      - gateway_execution.py=gateway_execution.py
       - kanzo_terminal_provider.py=kanzo_terminal_provider.py
-      - langfuse_session_context.py=langfuse_session_context.py
       - sync_hermes_env.py=sync_hermes_env.py
-      - reconcile_hermes_pm.py=reconcile_hermes_pm.py
+      - langfuse_session_context.py=langfuse_session_context.py
       - configure_kanban_toolsearch.py=configure_kanban_toolsearch.py
+      - reconcile_hermes_pm.py=reconcile_hermes_pm.py
   - name: kanzo-agent-omh-routing
     namespace: mcp
     options:

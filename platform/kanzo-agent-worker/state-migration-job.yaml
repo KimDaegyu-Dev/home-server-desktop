@@ -74,5 +74,5 @@ spec:
             claimName: kanzo-agent-worker-state
         - name: worker-code
           configMap:
-            name: kanzo-agent-worker-code
+            name: kanzo-agent-dispatcher-code
             defaultMode: 292

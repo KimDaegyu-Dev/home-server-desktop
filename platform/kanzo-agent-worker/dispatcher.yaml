@@ -240,7 +240,7 @@ spec:
             sizeLimit: 512Mi
         - name: worker-code
           configMap:
-            name: kanzo-agent-worker-code
+            name: kanzo-agent-dispatcher-code
             defaultMode: 292
         - name: dispatcher-state
           persistentVolumeClaim:

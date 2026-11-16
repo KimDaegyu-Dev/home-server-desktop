@@ -14,9 +14,10 @@
 
 ## Progress in this turn
 
-- Added Hermes `subagent_start`/`subagent_stop` hooks and broker child-session aliases so delegated children resolve only to their live parent run sandbox and lose access after child completion. Seven broker/plugin regression tests and Python compilation passed. This is not complete until GitOps rollout and a real Hermes delegation call are verified.
-- The dispatcher ledger currently has Review 38, Waiting 6, and zero active or uncertain runs. Recheck immediately before rollout.
-- A first canary card with a bracketed title was rejected before Hermes started: the claim parser treated `[Canary]` as the status. The parser now accepts only known Kanzo statuses and falls back to the response metadata; its three regression cases pass. A fresh canary is still required after deployment.
+- Added Hermes `subagent_start`/`subagent_stop` hooks and broker child-session aliases, then verified Plugin Doctor passes for default, researcher, builder, and reviewer. The claim parser now accepts only known Kanzo statuses; bracketed canary titles no longer masquerade as status tokens.
+- Live canary #98 ran one delegated child successfully: both child terminal commands returned exit 0. After the child returned, both parent terminal commands failed with broker HTTP 404 `session_mapping_not_found_or_ambiguous`; other broker-routed tools for the parent failed too. The run ended in Review. This proves child access works, but parent access after delegation does not. The exact cause (missing mapping versus duplicate mapping or environment lifecycle) is still unverified; do not retry the existing card.
+- Canary #98 proposed backlog cards #99 (preserve the parent run-scoped broker sandbox after child completion) and #100 (distinguish missing from ambiguous broker session lookup). Check these proposals before creating more work.
+- Current dispatcher ledger after #98: no active run for this canary; task #98 is Review. ReadOnly delegated-child scope is not accepted as complete until the parent mapping failure is diagnosed and a fresh end-to-end canary passes.
 
 - 활성 모델 응답 중 정상 drain, restart 후 단일 terminal outcome, prompt 재실행 없음 확인
 - 강제 종료 상황에서 child process 정리와 Gateway admission reconciliation 확인

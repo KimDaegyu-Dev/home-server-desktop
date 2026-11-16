@@ -28,6 +28,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import re
 import secrets
@@ -63,6 +64,7 @@ PREPARE_TTL_SECONDS = 15 * 60
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:#-]{0,255}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_LOG = logging.getLogger("kanzo.sandbox_broker")
 
 
 class BrokerError(Exception):
@@ -540,8 +542,12 @@ class BrokerStore:
             SELECT r.* FROM child_sessions c JOIN runs r ON r.task_id=c.task_id AND r.run_id=c.run_id
                 WHERE c.child_session_id=? AND c.active=1 AND r.state='bound' AND r.expires_at>?""",
                           (session_id, _now(), session_id, _now())).fetchall()
-        if len(rows) != 1:
-            raise BrokerError(404, "session_mapping_not_found_or_ambiguous")
+        if not rows:
+            _LOG.warning("session lookup found no live mapping (mapping_count=0)")
+            raise BrokerError(404, "session_mapping_not_found")
+        if len(rows) > 1:
+            _LOG.error("session lookup found multiple live mappings (mapping_count=%d)", len(rows))
+            raise BrokerError(409, "session_mapping_ambiguous")
         return rows[0]
 
     def runner_address(self, payload: dict[str, Any], *, require_handle: bool = True) -> tuple[str, str]:

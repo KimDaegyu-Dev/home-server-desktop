@@ -126,6 +126,21 @@ class BrokerChildSessionTests(unittest.TestCase):
         with self.assertRaises(sandbox_broker.BrokerError):
             self.store.register_child_session(second_root, "child-one")
 
+    def test_missing_session_mapping_has_a_specific_error(self) -> None:
+        with self.assertRaises(sandbox_broker.BrokerError) as caught:
+            self.store.authorize_session("unmapped-session")
+        self.assertEqual(caught.exception.code, "session_mapping_not_found")
+
+    def test_ambiguous_session_mapping_has_a_specific_error(self) -> None:
+        now = sandbox_broker._now()
+        with self.store.session() as db:
+            db.execute("INSERT INTO child_sessions(child_session_id,parent_session_id,task_id,run_id,active,created_at) "
+                       "VALUES(?,?,?,?,1,?)",
+                       (self.root_session, "other-parent", self.task_id, self.run_id, now))
+        with self.assertRaises(sandbox_broker.BrokerError) as caught:
+            self.store.authorize_session(self.root_session)
+        self.assertEqual(caught.exception.code, "session_mapping_ambiguous")
+
 
 if __name__ == "__main__":
     unittest.main()

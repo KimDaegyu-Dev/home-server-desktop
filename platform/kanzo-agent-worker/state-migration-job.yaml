@@ -34,8 +34,13 @@ spec:
             - /bin/sh
             - -ec
           args:
-            - "sleep 65\npython /opt/kanzo-agent/migrate_dispatcher_state.py \\\n  --source /legacy/home/kanzo-worker \\\n\
-              \  --destination /dispatcher/state\n"
+            - |
+              if [ ! -f /dispatcher/state/.kanzo-dispatcher-state-migrated-v1 ]; then
+                sleep 65
+              fi
+              python /opt/kanzo-agent/migrate_dispatcher_state.py \
+                --source /legacy/home/kanzo-worker \
+                --destination /dispatcher/state
           env:
             - name: PYTHONDONTWRITEBYTECODE
               value: '1'

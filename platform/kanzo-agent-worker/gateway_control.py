@@ -383,7 +383,7 @@ async def _reconcile_via_gateway(
                                                    admission_id=admission_id, include_result=False)
                     except Exception:
                         receipt = None
-                    if (isinstance(receipt, dict) and receipt.get("admission_id", admission_id) == admission_id
+                    if (isinstance(receipt, dict) and receipt.get("admission_id") == admission_id
                             and receipt.get("status") == "terminal"
                             and type(receipt.get("execution_generation")) is int
                             and receipt.get("execution_generation") >= 0

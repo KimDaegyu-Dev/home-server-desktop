@@ -131,7 +131,7 @@ class Store:
             # A process restart cannot establish whether an in-flight helper crossed
             # the Gateway boundary. Such operations must never be replayed implicitly.
             db.execute("UPDATE runs SET create_state='ambiguous', updated=? WHERE create_state='creating'", (time.time(),))
-            db.execute("UPDATE runs SET submit_state='ambiguous', updated=? WHERE submit_state='submitting'", (time.time(),))
+            db.execute("UPDATE runs SET submit_state='ambiguous', updated=? WHERE submit_state IN ('submitting','admitted')", (time.time(),))
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -915,7 +915,7 @@ def _reconciliation_loop(store: Store) -> None:
             # Keep the service available and try again after transient store or
             # Gateway startup errors. Unaddressable rows remain human-reviewable.
             pass
-        time.sleep(15)
+        time.sleep(60)
 
 
 def main() -> int:

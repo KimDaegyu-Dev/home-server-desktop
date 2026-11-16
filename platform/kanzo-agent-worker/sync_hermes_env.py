@@ -11,6 +11,7 @@ ROOT = Path("/opt/data/home")
 VALUES = {
     "MCPPROXY_URL": os.environ.get("MCPPROXY_URL", ""),
     "MCPPROXY_AGENT_READ_TOKEN": os.environ.get("MCPPROXY_AGENT_READ_TOKEN", ""),
+    "SEARXNG_URL": os.environ.get("SEARXNG_URL", ""),
     "LITELLM_API_KEY": os.environ.get("LITELLM_API_KEY", ""),
     "LITELLM_BASE_URL": os.environ.get("LITELLM_BASE_URL", ""),
     "OPENAI_API_KEY": os.environ.get("LITELLM_API_KEY", ""),

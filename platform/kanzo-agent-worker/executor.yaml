@@ -121,7 +121,7 @@ spec:
               for profile in researcher builder reviewer; do\n  hermes -p \"$profile\" plugins enable kanzo_broker\n  hermes\
               \ -p \"$profile\" config set plugins.isolation in_process\n  hermes -p \"$profile\" config set terminal.backend\
               \ kanzo_broker\ndone\npython - <<'PY'\nimport os\nfrom pathlib import Path\n\nroot = Path('/opt/data/home')\n\
-              values = {\n    'MCPPROXY_URL': os.environ['MCPPROXY_URL'],\n    'MCPPROXY_AGENT_READ_TOKEN': os.environ.get('MCPPROXY_AGENT_READ_TOKEN',\
+              values = {\n    'SEARXNG_URL': os.environ['SEARXNG_URL'],\n    'MCPPROXY_URL': os.environ['MCPPROXY_URL'],\n    'MCPPROXY_AGENT_READ_TOKEN': os.environ.get('MCPPROXY_AGENT_READ_TOKEN',\
               \ ''),\n    'LITELLM_API_KEY': os.environ.get('LITELLM_API_KEY', ''),\n    'LITELLM_BASE_URL': os.environ['LITELLM_BASE_URL'],\n\
               \    'OPENAI_API_KEY': os.environ.get('LITELLM_API_KEY', ''),\n    'OPENAI_BASE_URL': os.environ['LITELLM_BASE_URL'],\n\
               \    'KANZO_ANALYSIS_MODEL': 'iq_3s',\n    'HERMES_LANGFUSE_PUBLIC_KEY': os.environ.get('HERMES_LANGFUSE_PUBLIC_KEY', ''),\n    'HERMES_LANGFUSE_SECRET_KEY': os.environ.get('HERMES_LANGFUSE_SECRET_KEY', ''),\n    'HERMES_LANGFUSE_BASE_URL': os.environ.get('HERMES_LANGFUSE_BASE_URL', ''),\n}\nhomes = [root, *(root / 'profiles' / name for name in ('researcher',\
@@ -133,6 +133,8 @@ spec:
           env:
             - name: MCPPROXY_URL
               value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
+            - name: SEARXNG_URL
+              value: http://searxng.search.svc.cluster.local:8080
             - name: MCPPROXY_AGENT_READ_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -389,6 +391,8 @@ spec:
               value: /opt/data/home
             - name: HERMES_RESTART_DRAIN_TIMEOUT
               value: '2820'
+            - name: SEARXNG_URL
+              value: http://searxng.search.svc.cluster.local:8080
             - name: MCPPROXY_URL
               value: http://mcpproxy.mcp.svc.cluster.local:8080/mcp
             - name: MCPPROXY_AGENT_READ_TOKEN

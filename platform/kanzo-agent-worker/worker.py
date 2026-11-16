@@ -43,6 +43,7 @@ STANDARD_HERMES_TOOLSETS = (
 TASK_ID_RE = re.compile(r"\b([a-zA-Z0-9._-]+#\d+)\b")
 TASK_LINE_RE = re.compile(r"^\s*([^\s]+#\d+)\s+\[([^]]+)\]\s+(.*)$", re.MULTILINE)
 TASK_HEADER_RE = re.compile(r"^\s*([a-zA-Z0-9._-]+#\d+)\s+(.+)$", re.MULTILINE)
+KANZO_TASK_STATUSES = frozenset({"backlog", "todo", "doing", "review", "waiting", "done"})
 HERMES_SESSION_LINE_RE = re.compile(r"^\s*(?:Session|session_id):\s*([A-Za-z0-9._:-]{8,128})\s*$", re.IGNORECASE)
 WORKER_OUTCOME_RE = re.compile(r"(?i)KANZO_WORKER_OUTCOME:\s*(done|review)(?=KANZO_WORKER_SUMMARY:|\s|$)")
 WORKER_SUMMARY_RE = re.compile(r"(?im)KANZO_WORKER_SUMMARY:\s*.*$")
@@ -334,17 +335,24 @@ def parse_catalog_cards(text: str) -> list[ProjectRoute]:
 
 def parse_task_line(text: str) -> tuple[str, str, str] | None:
     match = TASK_LINE_RE.search(text)
-    if match:
+    if match and match.group(2).strip().lower() in KANZO_TASK_STATUSES:
         return match.group(1), match.group(2).strip().lower(), match.group(3).strip()
     # MCPProxy's Kanzo adapter returns a prose preamble followed by a task header
     # and a details block, rather than the legacy `[doing]` single-line form.
+    # A title beginning with e.g. `[Canary]` also matches TASK_LINE_RE; only known
+    # Kanzo statuses may be accepted from that position, otherwise fall through
+    # and read the actual status from the response metadata.
     match = TASK_HEADER_RE.search(text)
     if not match:
         return None
     status_match = re.search(r"\bMoved to ([a-zA-Z_-]+):", text)
     if not status_match:
         status_match = re.search(r"^status:\s*([a-zA-Z_-]+)", text, re.IGNORECASE | re.MULTILINE)
+    if not status_match and TASK_LINE_RE.search(text):
+        return None
     status = status_match.group(1).strip().lower() if status_match else "doing"
+    if status not in KANZO_TASK_STATUSES:
+        return None
     return match.group(1), status, match.group(2).strip()
 
 

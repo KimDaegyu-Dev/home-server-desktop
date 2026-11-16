@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -32,6 +33,8 @@ from run_ledger import RunLedger
 
 LOG = logging.getLogger("kanzo-agent-worker")
 TASK_DURATION_BUCKETS = (30, 60, 120, 300, 600, 1800, 3600)
+SANDBOX_CPU_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800)
+SANDBOX_MEMORY_BUCKETS = tuple(value * 1024 * 1024 for value in (8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192))
 RUN_PHASES = {"claimed", "preparing", "running", "finalizing"}
 STANDARD_HERMES_TOOLSETS = (
     "search", "memory", "skills", "todo", "terminal", "file",
@@ -604,6 +607,8 @@ class Worker:
             "cycles": {}, "tasks": {}, "active": 0, "last_success": 0,
             "task_duration": {"count": {}, "sum": {}, "buckets": {}},
             "phase_duration": {"count": {}, "sum": {}, "buckets": {}},
+            "sandbox_cpu": {"count": {}, "sum": {}, "buckets": {}},
+            "sandbox_memory_peak": {"count": {}, "sum": {}, "buckets": {}},
         }
         self.heartbeat_path = self.state_dir / "worker-heartbeat"
         self.wake_queue: queue.Queue[str] = queue.Queue(maxsize=1)
@@ -835,6 +840,39 @@ class Worker:
                         f'kanzo_worker_phase_duration_seconds_bucket{{phase="{phase}",outcome="{outcome}",le="+Inf"}} {count}',
                         f'kanzo_worker_phase_duration_seconds_sum{{phase="{phase}",outcome="{outcome}"}} {phase_duration["sum"].get(key, 0.0):.6f}',
                         f'kanzo_worker_phase_duration_seconds_count{{phase="{phase}",outcome="{outcome}"}} {count}',
+                    ]
+                sandbox_cpu = worker.metrics["sandbox_cpu"]
+                lines += [
+                    "# HELP kanzo_worker_sandbox_cpu_seconds Cumulative CPU time consumed by one ephemeral sandbox run.",
+                    "# TYPE kanzo_worker_sandbox_cpu_seconds histogram",
+                ]
+                for kind, count in sandbox_cpu["count"].items():
+                    observed = sandbox_cpu["buckets"].get(kind, {})
+                    for bound in SANDBOX_CPU_BUCKETS:
+                        lines.append(
+                            f'kanzo_worker_sandbox_cpu_seconds_bucket{{kind="{kind}",le="{bound:g}"}} {observed.get(bound, 0)}'
+                        )
+                    lines += [
+                        f'kanzo_worker_sandbox_cpu_seconds_bucket{{kind="{kind}",le="+Inf"}} {count}',
+                        f'kanzo_worker_sandbox_cpu_seconds_sum{{kind="{kind}"}} {sandbox_cpu["sum"].get(kind, 0.0):.6f}',
+                        f'kanzo_worker_sandbox_cpu_seconds_count{{kind="{kind}"}} {count}',
+                    ]
+                sandbox_memory = worker.metrics["sandbox_memory_peak"]
+                lines += [
+                    "# HELP kanzo_worker_sandbox_memory_peak_bytes Peak memory used by one ephemeral sandbox run; source distinguishes kernel and sampled measurements.",
+                    "# TYPE kanzo_worker_sandbox_memory_peak_bytes histogram",
+                ]
+                for key, count in sandbox_memory["count"].items():
+                    kind, source = key.split("|", 1)
+                    observed = sandbox_memory["buckets"].get(key, {})
+                    for bound in SANDBOX_MEMORY_BUCKETS:
+                        lines.append(
+                            f'kanzo_worker_sandbox_memory_peak_bytes_bucket{{kind="{kind}",source="{source}",le="{bound}"}} {observed.get(bound, 0)}'
+                        )
+                    lines += [
+                        f'kanzo_worker_sandbox_memory_peak_bytes_bucket{{kind="{kind}",source="{source}",le="+Inf"}} {count}',
+                        f'kanzo_worker_sandbox_memory_peak_bytes_sum{{kind="{kind}",source="{source}"}} {sandbox_memory["sum"].get(key, 0)}',
+                        f'kanzo_worker_sandbox_memory_peak_bytes_count{{kind="{kind}",source="{source}"}} {count}',
                     ]
                 lines += [
                     "# HELP kanzo_worker_task_active Whether a task is currently being processed.",
@@ -2039,7 +2077,7 @@ class Worker:
             raise WorkerError("Hermes exited successfully without returning a result.")
         return result
 
-    def _capture_sandbox_resource_usage(self, run_id: str, active: dict[str, Any]) -> None:
+    def _capture_sandbox_resource_usage(self, run_id: str, active: dict[str, Any], kind: str) -> None:
         if active.get("sandbox_resource_usage_recorded"):
             return
         client = active.get("broker_client")
@@ -2050,12 +2088,36 @@ class Worker:
         try:
             usage = client.resource_usage(lease, session_id)
             self.ledger.record_fields(run_id, {"sandbox_resource_usage": usage})
+            self._record_sandbox_usage_metrics(usage, kind)
             active["sandbox_resource_usage_recorded"] = True
             if not usage.get("available"):
                 LOG.warning("Sandbox cgroup metrics unavailable for run %s", run_id)
         except Exception as exc:
             # Telemetry must never turn a successful task into a failed one.
             LOG.warning("Could not capture sandbox cgroup metrics for run %s (%s)", run_id, type(exc).__name__)
+
+    def _record_sandbox_usage_metrics(self, usage: dict[str, Any], kind: str) -> None:
+        cpu = usage.get("cpu_usage_seconds")
+        if isinstance(cpu, (int, float)) and not isinstance(cpu, bool) and math.isfinite(cpu) and cpu >= 0:
+            metric = self.metrics["sandbox_cpu"]
+            metric["count"][kind] = metric["count"].get(kind, 0) + 1
+            metric["sum"][kind] = metric["sum"].get(kind, 0.0) + cpu
+            buckets = metric["buckets"].setdefault(kind, {})
+            for bound in SANDBOX_CPU_BUCKETS:
+                if cpu <= bound:
+                    buckets[bound] = buckets.get(bound, 0) + 1
+        memory = usage.get("memory_peak_bytes")
+        source = usage.get("memory_peak_source")
+        if (isinstance(memory, int) and not isinstance(memory, bool) and memory >= 0
+                and source in {"kernel_cgroup", "sampled_memory_current"}):
+            key = f"{kind}|{source}"
+            metric = self.metrics["sandbox_memory_peak"]
+            metric["count"][key] = metric["count"].get(key, 0) + 1
+            metric["sum"][key] = metric["sum"].get(key, 0) + memory
+            buckets = metric["buckets"].setdefault(key, {})
+            for bound in SANDBOX_MEMORY_BUCKETS:
+                if memory <= bound:
+                    buckets[bound] = buckets.get(bound, 0) + 1
 
     def _prepare_sandbox(self, task: Task, checkout: Path, source_sha: str,
                          active: dict[str, Any]) -> None:
@@ -2436,7 +2498,7 @@ class Worker:
                         broker_lease, active["gateway_session_id"], checkout
                     )
                     active["sandbox_change_count"] = int(transfer.get("files_written", 0)) + int(transfer.get("files_deleted", 0))
-                self._capture_sandbox_resource_usage(run_id, active)
+                self._capture_sandbox_resource_usage(run_id, active, "code" if task.is_code else "noncode")
                 broker_client.finalize(broker_lease)
                 active["broker_finalized"] = True
             result = self._redact_sensitive_output(result)
@@ -2620,7 +2682,7 @@ class Worker:
                 and not unresolved_remote
             ):
                 try:
-                    self._capture_sandbox_resource_usage(run_id, active)
+                    self._capture_sandbox_resource_usage(run_id, active, "code" if task.is_code else "noncode")
                     broker_client.finalize(broker_lease)
                     active["broker_finalized"] = True
                 except Exception as cleanup_error:

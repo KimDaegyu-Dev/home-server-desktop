@@ -4,6 +4,7 @@ resources:
   - worker.yaml
   - executor.yaml
   - dispatcher.yaml
+  - grafana-dashboard.yaml
   - dispatcher-state.yaml
   - dispatcher-state-binder.yaml
   - state-migration-job.yaml

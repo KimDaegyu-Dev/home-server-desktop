@@ -39,9 +39,9 @@ class WorkerReportingPromptTests(unittest.TestCase):
         prompt = task_prompt(task, code=False)
 
         self.assertIn('skill_view(name="productivity/human-agent-report")', prompt)
-        self.assertIn("Follow its Compose and evidence-contract guidance", prompt)
-        self.assertIn("Do not create `report.md` or `facts.json`", prompt)
-        self.assertIn("Do not make a second model call", prompt)
+        self.assertIn("follow the skill's Compose and evidence-contract guidance", prompt)
+        self.assertIn("Do not create report artifacts", prompt)
+        self.assertIn("Do not create report artifacts or make a second model call", prompt)
         self.assertNotIn("/human-agent-report compose", prompt)
         self.assertNotIn("~/.hermes/skills", prompt)
 

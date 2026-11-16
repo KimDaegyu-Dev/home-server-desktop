@@ -33,6 +33,20 @@ def _emit(value: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
+def _committed_completion_text(payload: dict[str, Any], admission_id: str) -> str | None:
+    """Return the durable result carried by a successful completion event."""
+    if payload.get("admission_id") != admission_id:
+        return None
+    if str(payload.get("status", "")).lower() != "complete":
+        return None
+    if str(payload.get("outcome", "")).lower() not in {"completed", "success"}:
+        return None
+    text = payload.get("text") or payload.get("content")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text
+
+
 async def execute(profile_home: Path, session_id: str, prompt_path: Path) -> int:
     _prepare_imports()
     prompt_bytes = prompt_path.read_bytes()
@@ -130,33 +144,10 @@ async def execute(profile_home: Path, session_id: str, prompt_path: Path) -> int
         if final_event is None:
             raise RuntimeError("gateway_turn_deadline_exceeded")
 
-        try:
-            settled = await client.rpc(
-                "prompt.receipt",
-                session_id=session_id,
-                admission_id=admission_id,
-                include_result=True,
-            )
-        except Exception:
-            raise RuntimeError("gateway_turn_receipt_unavailable") from None
-        if not isinstance(settled, dict):
-            raise RuntimeError("gateway_turn_receipt_invalid")
-        result = settled.get("result") if isinstance(settled, dict) else None
-        if not isinstance(result, dict):
-            raise RuntimeError("gateway_turn_result_unsettled")
-        text = result.get("final_response") or final_event.get("text") or final_event.get("content") or ""
-        if not isinstance(text, str):
-            raise RuntimeError("gateway_result_invalid")
-        if text:
-            _emit({"type": "text", "text": text})
-        outcomes = {
-            str(value).lower()
-            for value in (settled.get("outcome"), settled.get("status"), final_event.get("outcome"), final_event.get("status"))
-            if value is not None
-        }
-        failed = bool(outcomes & {"failed", "partial", "interrupted", "unknown", "error"})
-        if failed or not text:
+        text = _committed_completion_text(final_event, admission_id)
+        if text is None:
             raise RuntimeError("gateway_turn_not_confirmed_successful")
+        _emit({"type": "text", "text": text})
         _emit({"type": "executor_exit", "code": 0, "settled": True, "gateway_turn_settled": True})
         return 0
 

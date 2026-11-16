@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import unittest
 
-from worker import ProjectRoute, Task, format_worker_comment, parse_worker_outcome, task_prompt
+from worker import (
+    ProjectRoute,
+    Task,
+    format_worker_comment,
+    parse_worker_outcome,
+    strip_expected_readonly_mutation_footer,
+    task_prompt,
+)
 
 
 class WorkerReportingPromptTests(unittest.TestCase):
@@ -31,8 +38,8 @@ class WorkerReportingPromptTests(unittest.TestCase):
 
         prompt = task_prompt(task, code=False)
 
-        self.assertIn("Apply those rules directly from this instruction", prompt)
-        self.assertIn("target at most 1,200 characters", prompt)
+        self.assertIn('skill_view(name="productivity/human-agent-report")', prompt)
+        self.assertIn("Follow its Compose and evidence-contract guidance", prompt)
         self.assertIn("Do not create `report.md` or `facts.json`", prompt)
         self.assertIn("Do not make a second model call", prompt)
         self.assertNotIn("/human-agent-report compose", prompt)
@@ -43,6 +50,36 @@ class WorkerReportingPromptTests(unittest.TestCase):
             format_worker_comment("Summary.\n\n--\n-\n\n# Evidence\n- verified"),
             "Summary.\n\n# Evidence\n- verified",
         )
+
+    def test_expected_readonly_verifier_footer_is_removed_from_comment(self) -> None:
+        comment = (
+            "Read-only checks passed; workspace writes were correctly rejected.\n\n"
+            "⚠️ File-mutation verifier: 1 file edit(s) FAILED this turn\n"
+            "• `/workspace/.kanzo-ro-file-marker` — [write_file] Read-only file system"
+        )
+
+        self.assertEqual(
+            strip_expected_readonly_mutation_footer(comment, read_only=True),
+            "Read-only checks passed; workspace writes were correctly rejected.",
+        )
+
+    def test_readonly_footer_filter_preserves_real_or_unrelated_failures(self) -> None:
+        external_path = (
+            "Result.\n\nFile-mutation verifier: 1 file edit(s) FAILED this turn\n"
+            "• `/tmp/output.md` — [write_file] Read-only file system"
+        )
+        non_readonly = (
+            "Result.\n\nFile-mutation verifier: 1 file edit(s) FAILED this turn\n"
+            "• `/workspace/output.md` — [write_file] Read-only file system"
+        )
+        actual_failure = (
+            "Result.\n\nFile-mutation verifier: 1 file edit(s) FAILED this turn\n"
+            "• `/workspace/output.md` — [write_file] Permission denied by policy"
+        )
+
+        self.assertEqual(strip_expected_readonly_mutation_footer(external_path, read_only=True), external_path)
+        self.assertEqual(strip_expected_readonly_mutation_footer(non_readonly, read_only=False), non_readonly)
+        self.assertEqual(strip_expected_readonly_mutation_footer(actual_failure, read_only=True), actual_failure)
 
     def test_tool_free_exact_response_keeps_protocol_markers_out_of_comment(self) -> None:
         task = Task(

@@ -216,6 +216,40 @@ spec:
             capabilities:
               drop:
                 - ALL
+        - name: wait-for-previous-hermes-owner
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          imagePullPolicy: Never
+          command:
+            - python
+            - /opt/kanzo-agent/runtime_lock.py
+            - wait
+          env:
+            - name: HERMES_HOME
+              value: /opt/data/home
+            - name: KANZO_EXECUTOR_DATA_DIR
+              value: /opt/data/home/kanzo-worker/executor-state
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/runtime_lock.py
+              subPath: runtime_lock.py
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10000
+            runAsGroup: 10000
+            capabilities:
+              drop:
+                - ALL
       containers:
         - name: hermes-gateway
           image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
@@ -446,6 +480,10 @@ spec:
               subPath: executor_api.py
               readOnly: true
             - name: worker-code
+              mountPath: /opt/kanzo-agent/runtime_lock.py
+              subPath: runtime_lock.py
+              readOnly: true
+            - name: worker-code
               mountPath: /opt/kanzo-agent/gateway_control.py
               subPath: gateway_control.py
               readOnly: true
@@ -462,9 +500,9 @@ spec:
               command:
                 - python
                 - -c
-                - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/readyz', timeout=2)
+                - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/livez', timeout=2)
             periodSeconds: 5
-            failureThreshold: 24
+            failureThreshold: 60
             timeoutSeconds: 3
           livenessProbe:
             exec:

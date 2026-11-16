@@ -33,6 +33,7 @@ configMapGenerator:
       - gateway_session.py=gateway_session.py
       - gateway_execution.py=gateway_execution.py
       - executor_api.py=executor_api.py
+      - runtime_lock.py=runtime_lock.py
       - executor_client.py=executor_client.py
       - migrate_dispatcher_state.py=migrate_dispatcher_state.py
       - broker_client.py=broker_client.py

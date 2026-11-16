@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from runtime_lock import acquire_lock, release_lock
+
 
 ROOT = Path(__file__).resolve().parent
 SESSION_HELPER = ROOT / "gateway_session.py"
@@ -107,6 +109,11 @@ class Store:
             os.chmod(data_dir, 0o700)
         except OSError:
             pass
+        # The persistent SQLite ledger must have one process owner. During a
+        # Kubernetes Recreate rollout the old Pod can still be draining after
+        # its replacement has started; without this lock the new Store would
+        # mark the old process's admitted submission ambiguous prematurely.
+        self.owner_lock_fd: int | None = acquire_lock(data_dir / "executor-api.lock")
         self.path = data_dir / "executor.sqlite3"
         self.lock = threading.RLock()
         with self.connect() as db:
@@ -143,6 +150,12 @@ class Store:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA busy_timeout=10000")
         return db
+
+    def close(self) -> None:
+        if self.owner_lock_fd is not None:
+            release_lock(self.owner_lock_fd)
+            os.close(self.owner_lock_fd)
+            self.owner_lock_fd = None
 
     def get(self, task: str, run: str) -> sqlite3.Row | None:
         with self.lock, self.connect() as db:
@@ -963,6 +976,7 @@ def main() -> int:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         server.server_close()
+        store.close()
     return 0
 
 

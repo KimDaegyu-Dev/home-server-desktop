@@ -376,6 +376,7 @@ class Runner:
             cpu_period = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
         values: dict[str, Any] = {
             "schema": "kanzo-sandbox-resource-usage/v1",
+            "collector_version": "independent-cgroup-read-v2",
             "cgroup_version": version,
             "sampled_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         }

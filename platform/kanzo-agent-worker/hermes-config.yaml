@@ -19,6 +19,9 @@ agent:
     - browser
     - computer_use
 
+delegation:
+  oneshot_max_children: 0
+
 kanban:
   dispatch_in_gateway: true
   dispatch_interval_seconds: 60

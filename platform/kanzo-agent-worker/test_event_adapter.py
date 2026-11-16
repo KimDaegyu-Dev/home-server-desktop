@@ -48,6 +48,30 @@ class EventAdapterTests(unittest.TestCase):
         # only the Kanzo change event adds a wake within the stream.
         self.assertEqual(wake.call_count, 3)
 
+    def test_failed_event_wake_is_reconciled_after_reconnect(self) -> None:
+        first = FakeResponse([
+            b"event: kanzo.changed\n",
+            b"data: {}\n",
+            b"\n",
+        ])
+        second = FakeResponse([b": keepalive\n"])
+
+        with patch.object(event_adapter.urllib.request, "urlopen", side_effect=[first, second]) as open_stream:
+            with patch.object(
+                event_adapter,
+                "wake_worker",
+                side_effect=[None, RuntimeError("local wake endpoint unavailable"), None],
+            ) as wake:
+                with self.assertRaisesRegex(RuntimeError, "wake endpoint unavailable"):
+                    event_adapter.listen_once()
+                with self.assertRaises(ConnectionError):
+                    event_adapter.listen_once()
+
+        self.assertEqual(open_stream.call_count, 2)
+        # Startup reconciliation on the second connection catches the event
+        # whose local wake failed on the first connection.
+        self.assertEqual(wake.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

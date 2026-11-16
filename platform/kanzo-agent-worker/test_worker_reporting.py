@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from worker import ProjectRoute, Task, format_worker_comment, task_prompt
+from worker import ProjectRoute, Task, format_worker_comment, parse_worker_outcome, task_prompt
 
 
 class WorkerReportingPromptTests(unittest.TestCase):
@@ -43,6 +43,29 @@ class WorkerReportingPromptTests(unittest.TestCase):
             format_worker_comment("Summary.\n\n--\n-\n\n# Evidence\n- verified"),
             "Summary.\n\n# Evidence\n- verified",
         )
+
+    def test_tool_free_exact_response_keeps_protocol_markers_out_of_comment(self) -> None:
+        task = Task(
+            task_id="test-1#2",
+            project="test-1",
+            status="doing",
+            title="Exact response smoke",
+            tags=("tool-free",),
+            details="Reply exactly EVENT_WAKE_OK.",
+        )
+        prompt = task_prompt(task, code=False)
+        result = (
+            "EVENT_WAKE_OK\n"
+            "KANZO_WORKER_OUTCOME: done\n"
+            "KANZO_WORKER_SUMMARY: exact response returned"
+        )
+
+        outcome, comment = parse_worker_outcome(result)
+
+        self.assertIn("keep that exact response as the answer body", prompt)
+        self.assertIn("protocol markers are not part of the human-facing response", prompt)
+        self.assertEqual(outcome, "done")
+        self.assertEqual(comment, "EVENT_WAKE_OK")
 
 
 if __name__ == "__main__":

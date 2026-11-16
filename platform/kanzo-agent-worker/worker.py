@@ -486,7 +486,7 @@ Task details:
 {select_task_prompt_context(task.details)}
 </kanzo-task>
 
-Use only the supplied task text. Do not request tools, research, delegate, create subtasks, propose backlog work, update memory, or claim external checks. Give the shortest answer that satisfies the task. End with exactly one `KANZO_WORKER_OUTCOME: done` or `KANZO_WORKER_OUTCOME: review` line, then one concise `KANZO_WORKER_SUMMARY: ...` line."""
+Use only the supplied task text. Do not request tools, research, delegate, create subtasks, propose backlog work, update memory, or claim external checks. Give the shortest answer that satisfies the task. If the task requires an exact human-facing response, keep that exact response as the answer body, then append the required worker outcome and summary markers on separate lines; those protocol markers are not part of the human-facing response. End with exactly one `KANZO_WORKER_OUTCOME: done` or `KANZO_WORKER_OUTCOME: review` line, then one concise `KANZO_WORKER_SUMMARY: ...` line."""
     scope = (
         "Work only in the current repository. Make the requested changes and run relevant checks. "
         "Do not push, create a PR, merge, deploy, modify cluster state, or access credentials; the worker handles GitHub operations."

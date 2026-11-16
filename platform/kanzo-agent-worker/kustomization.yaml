@@ -43,6 +43,7 @@ configMapGenerator:
       - langfuse_session_context.py=langfuse_session_context.py
       - sync_hermes_env.py=sync_hermes_env.py
       - reconcile_hermes_pm.py=reconcile_hermes_pm.py
+      - configure_kanban_toolsearch.py=configure_kanban_toolsearch.py
   - name: kanzo-agent-omh-routing
     namespace: mcp
     options:

@@ -308,6 +308,39 @@ spec:
             capabilities:
               drop:
                 - ALL
+        - name: configure-worker-kanban-tool-search
+          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          imagePullPolicy: Never
+          command:
+            - /opt/hermes/.venv/bin/python
+            - /opt/kanzo-agent/configure_kanban_toolsearch.py
+          env:
+            - name: HERMES_HOME
+              value: /opt/data/home
+            - name: HOME
+              value: /opt/data/home
+          volumeMounts:
+            - name: hermes-home
+              mountPath: /opt/data
+            - name: worker-code
+              mountPath: /opt/kanzo-agent/configure_kanban_toolsearch.py
+              subPath: configure_kanban_toolsearch.py
+              readOnly: true
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10000
+            runAsGroup: 10000
+            capabilities:
+              drop:
+                - ALL
         - name: reconcile-hermes-pm-environment
           image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
           imagePullPolicy: Never

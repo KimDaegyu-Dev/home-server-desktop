@@ -2,25 +2,23 @@
 
 SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문서는 구현·검증·배포 진행만 기록한다. 배포된 워커 동작은 [워커 안내](kanzo-agent-worker.md)를 참조한다.
 
-## 현재 상태 — 2026-11-17
+## 현재 상태 — 2026-11-18
 
-- 새 로드맵으로 기존 로드맵을 대체했다. 최신 합의는 태스크마다 worktree를 만들지 않고, 하나의 지속형 Workspace를 여러 연결 태스크가 순차 공유하는 것이다. Workspace는 절대경로와 runner/OS를 기록하고, PR 병합 및 연결 태스크 종료가 검증되면 작업 파일과 브랜치를 자동 삭제한다.
-- Kanzo 변경은 private downstream 저장소에서 유지하고 공식 Kanzo 저장소를 `upstream` remote로 연결한다. 병합된 Workspace의 원격 브랜치와 로컬 파일은 정리 조건이 충족되면 삭제하며, 별도 workspace archive 없이 tombstone metadata만 남긴다.
-- 현재 배포는 GitOps revision `6891d36ee9a1edf3322eb645923fbf5113929744` 기준으로 Argo CD `kanzo`와 `kanzo-agent-worker`가 모두 Synced/Healthy다. Kanzo 이미지는 `localhost/home-server/kanzo:0.4.2-agent.4`이며 dispatcher는 ConfigMap 코드와 `/workspace`의 persistent PVC를 사용한다.
-- task-level repo/ref override와 pinned checkout SHA 기록이 배포됐다. task 본문 structured `agent_config`의 `repo`, `ref`, `workspace_id`를 프로젝트 기본값에 병합한다.
-- dispatcher의 공유 Workspace registry는 `/opt/worker-state/state/workspace-registry.sqlite3`에 생성됐고 `/workspace` PVC `kanzo-agent-workspaces`는 32Gi RWO Bound다. Worker Pod는 2/2 Running, `kanzo_worker_task_active`는 0이다.
-- 현재 dispatcher 한 개가 task를 순차 claim하고 Workspace별 SQLite lease도 적용한다. 재시작 뒤 이전 run이 소유하던 lease만 `conflict`로 풀며 checkout 파일은 보존한다.
-- 로컬 호스트 경로는 Kanzo에 alias가 아닌 사용자가 지정한 절대경로로 저장·표시한다. Windows와 WSL은 별도 runner namespace이며, 실행 전에 경로와 Git root를 검증한다. `C:\` 전체를 Pod에 mount하지 않고 host runner를 사용한다.
+- 현재 배포 revision은 Argo 앱 `kanzo`, `kanzo-agent-worker`, `kanzo-sandbox`가 Synced/Healthy인 `2c40720249b214d76b618d1c849da932b1705b8b`다. Kanzo는 `0.4.2-agent.5`, dispatcher는 `0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2` 이미지로 실행 중이며 `/workspace` PVC는 32Gi Bound다.
+- draft PR #1은 `ca0ca00748454458e16d457b49e7777780608474`까지 올라와 있고 아직 merge/deploy되지 않았다. 이 PR에는 안전한 merged-branch cleanup, executor 재시작 reconciliation, latest catalog route parsing, GitHub push 사전 점검이 포함된다.
+- 실제 Kanzo task #143은 이벤트 경로로 claim되어 persistent workspace에 marker를 생성하고 로컬 commit까지 만들었지만, push 단계에서 403으로 종료되어 review에 남아 있다. marker와 브랜치는 보존되어 있고 재실행하지 않았다.
+- WSL runner의 `GITHUB_TOKEN`은 Windows `gh` 로그인 토큰과 다르다. Runner 토큰은 저장소 조회는 되지만 `git push --dry-run`을 거부한다. push preflight 변경은 아직 배포되지 않았으므로 다음 배포 전까지는 실제 모델 호출 비용을 막지 못한다.
+- Kanzo #140은 Todo에서 human 승인 카드 #141을 기다린다. #140 본문은 source manifest 구현을 요구하며 deploy/merge/push를 금지한다. #141은 사용자 승인 게이트로 유지한다.
 
 ## 단계 진행
 
 | 단계 | 상태 | 근거/다음 작업 |
 |---|---|---|
-| 0. 소스 라우팅 정확성 | 구현·배포·local-source canary 완료 | task-level repo/ref override, source SHA ledger 기록, Kanzo `AgentConfig` 필드를 배포했고 Babmukdang WSL local-source canary에서 저장소·고정 SHA·runner를 대조했다. |
-| 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 PVC/Pod 재시작 smoke 완료; Kanzo task canary 대기 | 운영 Pod에서 격리된 임시 Git checkout과 registry를 이용해 두 task의 순차 lease·checkpoint 공유를 확인하고 dispatcher 교체 뒤 지속성을 검증했다. 실제 Kanzo 이벤트가 두 task를 claim하는 end-to-end acceptance는 남았다. |
-| 2. 정지·재개·병합 후 정리 | 구현·배포 완료, merge lifecycle canary 대기 | waiting/review/취소 중 Workspace 보존, same branch 재개, stale lease 복구, verified merge state 기록 후 branch/file 삭제 코드를 배포했다. 실제 merged PR·완료 task를 통한 자동 정리 acceptance는 아직 실행하지 않았다. |
-| 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료 | 절대경로 + OS/runner 종류를 Kanzo에 저장하고 host runner가 workspace별 worktree를 관리한다. WSL route, 이벤트 claim, source SHA 전달, read-only snapshot 검증 완료. checkpoint/resume와 runner 중단 복구는 남았다. |
-| 4. 다중 저장소·운영 검증 | 구현 태스크 준비, 재개 대기 | source manifest 구현을 Kanzo #140으로 시작했으나 `coder`의 unsupported reasoning-effort 오류로 코드 실행 전에 review로 종료됐다. 프로젝트 기본 coding model은 `iq_3s/high`로 수정했다. 자동 재시도 없이 사람의 재개 결정이 필요하다. |
+| 0. 소스 라우팅 정확성 | 구현·배포·local-source canary 완료 | task-level repo/ref override와 source SHA 기록을 배포했다. Babmukdang WSL read-only canary에서 저장소·고정 SHA·runner 및 원본 파일 무변경을 확인했다. |
+| 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 1-task event canary 통과; 다중 task acceptance 미완료 | PVC/registry의 synthetic 순차 lease·Pod 재시작 smoke와 실제 #143의 workspace 생성은 확인했다. 실제 두 번째 task 재사용은 #143의 publish 권한 실패로 아직 입증하지 못했다. Vault runner token에 push 권한을 준비한 뒤 별도 후속 canary가 필요하다. |
+| 2. 정지·재개·병합 후 정리 | 기반 기능 배포; hardening은 draft PR, merged-PR cleanup E2E 미완료 | 현재 배포에는 persistent workspace 기반 기능이 있다. force-with-lease cleanup, 중단된 Gateway run reconciliation 등 강화 변경은 PR #1에만 있고 미배포다. 실제 merged PR 및 완료 task를 통한 자동 branch/file cleanup은 검증되지 않았다. |
+| 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료; writable resume/offline 검증 미완료 | 절대경로와 OS/runner 라우팅, event claim, source SHA, 원본 무변경을 확인했다. 같은 workspace에서 writable 중단·재개와 runner offline 복구는 live 검증이 남았다. |
+| 4. 다중 저장소·운영 검증 | 승인 대기 | #140은 #141 human gate를 기다린다. task가 요구하는 source manifest 구현은 승인 전 실행하지 않는다. |
 
 ## 이번 구현 세션
 

@@ -107,5 +107,6 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 ## Follow-up evidence (2026-11-18, merged workspace cleanup review)
 
 - Review branch fix/conditional-merged-branch-cleanup adds compare-and-delete using Git force-with-lease, so a remote branch that moves after merge verification is preserved. Merged workspaces are also blocked from new leases while cleanup is pending; cleanup can resume after worker restart.
-- Implementation commits: 9651a7f, 36134fa, and 2515c53. Worker suite: 106 tests passed. git diff --check passed; changed Python files are LF in both index and worktree.
+- Implementation commits: 9651a7f, 36134fa, 2515c53, and 0ed1c7b. Worker suite: 110 tests passed. git diff --check passed; changed Python files are LF in both index and worktree.
+- Worker restart reconciliation now confirms cancellation or terminal state for the exact Gateway run before releasing its workspace lease or routing it to review. If confirmation fails, the run stays orphaned and blocks new claims. The Executor API atomically cancels not-yet-submitted runs so a prompt cannot race past recovery.
 - Draft PR #1 is open at https://github.com/KimDaegyu-Dev/home-server-desktop/pull/1. It has not been merged or deployed. The live cluster remains on the previously verified revision; a real merged-PR cleanup canary is still open.

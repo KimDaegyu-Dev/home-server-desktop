@@ -61,3 +61,4 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Worker suite: 88 passed, 3 skipped.
 - A local bare-Git integration test confirms linked tasks reuse the same dirty checkout and branch, preserving tracked edits and an untracked checkpoint. This does not replace a live PVC/Pod restart canary.
 - Private Kanzo downstream created and pushed at commit `2c4bb60`; remote topology verified.
+- Live PVC restart canary: wrote a temporary marker in the mounted workspace PVC, restarted the dispatcher, read the marker from the replacement Pod (`kanzo-agent-dispatcher-55d4c69dc4-22w78`, 2/2 Running), and removed it. This proves PVC file survival across Pod replacement; no Kanzo task was claimed or changed.

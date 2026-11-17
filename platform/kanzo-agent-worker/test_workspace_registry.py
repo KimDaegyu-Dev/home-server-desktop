@@ -97,9 +97,10 @@ class WorkspaceRegistryTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.registry.mark_merged("shared", head_sha="not-a-git-sha")
 
-    def test_workspace_id_path_characters_are_rejected(self) -> None:
-        with self.assertRaises(Exception):
-            self.acquire(workspace_id="../escape")
+    def test_workspace_id_path_and_git_ref_characters_are_rejected(self) -> None:
+        for workspace_id in ("../escape", "name..suffix", "trailing.", "name.lock", "name@{suffix}"):
+            with self.subTest(workspace_id=workspace_id), self.assertRaises(Exception):
+                self.acquire(workspace_id=workspace_id)
 
     def test_metrics_snapshot_reports_state_lease_and_dirty_counts(self) -> None:
         self.acquire()

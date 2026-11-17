@@ -40,8 +40,15 @@ def _now() -> str:
 
 
 def validate_workspace_id(value: str) -> str:
-    if not isinstance(value, str) or not _WORKSPACE_ID.fullmatch(value):
-        raise WorkspaceRegistryError("workspace_id must be 1-64 letters, digits, dots, underscores, or hyphens")
+    if (
+        not isinstance(value, str)
+        or not _WORKSPACE_ID.fullmatch(value)
+        or ".." in value
+        or value.endswith(".")
+        or value.lower().endswith(".lock")
+        or "@{" in value
+    ):
+        raise WorkspaceRegistryError("workspace_id must be a safe Git branch component with 1-64 letters, digits, dots, underscores, or hyphens")
     return value
 
 

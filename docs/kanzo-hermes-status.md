@@ -17,7 +17,7 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 | 단계 | 상태 | 근거/다음 작업 |
 |---|---|---|
 | 0. 소스 라우팅 정확성 | 구현·배포·local-source canary 완료 | task-level repo/ref override, source SHA ledger 기록, Kanzo `AgentConfig` 필드를 배포했고 Babmukdang WSL local-source canary에서 저장소·고정 SHA·runner를 대조했다. |
-| 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 이미지 registry smoke 완료; task canary 대기 | 배포된 SQLite registry에서 임시 DB로 두 task의 순차 lease와 linked ID 기록을 확인했다. 운영 registry는 현재 0개 workspace이며, 실제 checkout 파일 공유와 Pod 재시작을 포함한 Kanzo task canary가 필요하다. |
+| 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 PVC/Pod 재시작 smoke 완료; Kanzo task canary 대기 | 운영 Pod에서 격리된 임시 Git checkout과 registry를 이용해 두 task의 순차 lease·checkpoint 공유를 확인하고 dispatcher 교체 뒤 지속성을 검증했다. 실제 Kanzo 이벤트가 두 task를 claim하는 end-to-end acceptance는 남았다. |
 | 2. 정지·재개·병합 후 정리 | 구현·배포 완료, merge lifecycle canary 대기 | waiting/review/취소 중 Workspace 보존, same branch 재개, stale lease 복구, verified merge state 기록 후 branch/file 삭제 코드를 배포했다. 실제 merged PR·완료 task를 통한 자동 정리 acceptance는 아직 실행하지 않았다. |
 | 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료 | 절대경로 + OS/runner 종류를 Kanzo에 저장하고 host runner가 workspace별 worktree를 관리한다. WSL route, 이벤트 claim, source SHA 전달, read-only snapshot 검증 완료. checkpoint/resume와 runner 중단 복구는 남았다. |
 | 4. 다중 저장소·운영 검증 | 구현 태스크 준비, 재개 대기 | source manifest 구현을 Kanzo #140으로 시작했으나 `coder`의 unsupported reasoning-effort 오류로 코드 실행 전에 review로 종료됐다. 프로젝트 기본 coding model은 `iq_3s/high`로 수정했다. 자동 재시도 없이 사람의 재개 결정이 필요하다. |
@@ -118,3 +118,10 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Prometheus over the last 15 minutes reported `kanzo_worker_task_active=0`, workspace registry ready `1`, and both `k3s/linux` and `wsl-home/wsl` runner heartbeats up `1`. This is availability evidence only; no host-offline recovery was induced.
 - Read-only inspection of the persistent registry found zero workspace rows. A smoke check against the deployed `WorkspaceRegistry` class used only a temporary `/tmp` database: `canary#1` released the lease, `canary#2` reacquired the same workspace path, and both task IDs were retained. No live Kanzo card, persistent registry row, or workspace checkout was changed. This does not prove the worker creates/reuses actual checkout files across task runs or Pod replacement.
 - At capture time PR #1 was draft/open and had not been deployed; #141 remained the human approval gate for #140.
+
+## Follow-up evidence (2026-11-18, live PVC workspace restart canary)
+
+- Precondition: direct worker metric `kanzo_worker_task_active=0`; the production Workspace registry had zero rows. No Kanzo task was created or changed and no model was called.
+- On the deployed dispatcher, created an isolated temporary Git checkout and separate SQLite registry under `/workspace` (PVC). Using the deployed `WorkspaceRegistry` module, `canary#1` wrote a dirty checkpoint and released the lease; `canary#2` acquired the same workspace path and both task IDs were recorded.
+- Restarted the idle dispatcher Deployment. The replacement Pod was 2/2 Running; it read the same Git branch, checkpoint file, and registry row (`review`, dirty, no active lease). This proves PVC-backed file/registry persistence across this Pod replacement for the synthetic sequential-task flow.
+- Removed the exact temporary canary directory after verification. Production registry remained unchanged, Argo stayed Synced/Healthy at `2c40720249b214d76b618d1c849da932b1705b8b`, and worker metrics returned to active=0 / registry-ready=1. The actual Kanzo event claim and worker task lifecycle are still unverified.

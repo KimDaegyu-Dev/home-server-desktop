@@ -30,6 +30,21 @@ class WorkspaceRoutingTests(unittest.TestCase):
             source_ref="main",
         )
 
+    def test_latest_catalog_agent_config_overrides_stale_duplicate(self) -> None:
+        route = parse_project_route(
+            "demo",
+            "\n".join((
+                'agent_config: {"slug":"demo","repo":"org/repo","model_lane":"coding",'
+                '"provider":"openai-api","model":"coder","reason":"high",'
+                '"profile":"builder","read_only":false}',
+                'agent_config: {"slug":"demo","repo":"org/repo","model_lane":"coding",'
+                '"provider":"openai-api","model":"iq_3s","reason":"high",'
+                '"profile":"builder","read_only":false}',
+            )),
+        )
+        self.assertEqual(route.model, "iq_3s")
+        self.assertEqual(route.reason, "high")
+
     def test_catalog_ref_is_parsed(self) -> None:
         route = parse_project_route(
             "demo",

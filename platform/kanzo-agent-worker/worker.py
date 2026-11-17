@@ -343,10 +343,18 @@ ALLOWED_PROFILES = {"researcher", "builder", "reviewer"}
 
 def parse_project_route(title: str, description: str) -> ProjectRoute:
     fields: dict[str, str] = {}
-    structured = re.search(r"^agent_config:\s*(\{.*\})\s*$", description, re.IGNORECASE | re.MULTILINE)
-    if structured:
+    # Kanzo can append an updated structured config to a catalog card's
+    # description instead of replacing the older line. The newest explicit
+    # config is authoritative; selecting the first one can silently route a
+    # task to an obsolete model/provider after a settings change.
+    structured_configs = re.findall(
+        r"^agent_config:\s*(.*?)\s*$",
+        description,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if structured_configs:
         try:
-            config = json.loads(structured.group(1))
+            config = json.loads(structured_configs[-1])
             if isinstance(config, dict) and config.get("slug"):
                 fields = {key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in config.items()}
         except json.JSONDecodeError as exc:

@@ -103,3 +103,9 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Windows Git `core.autocrlf=true` left the mounted `C:\Github\home-server-desktop` worktree looking CRLF-dirty to WSL (index LF, worktree CRLF across many files). It was not used as a local source. A clean WSL ext4 clone at `/home/eorbr/kanzo-sources/home-server-desktop` is pinned to `84e7150194691ff75b5afd1bcc69b5d1ec731e67`; `git status` is clean and the origin matches GitHub.
 - Kanzo project #139 and Kanzo project slug `home-server-desktop` were created for the remaining implementation. Persistent workspace `kanzo-multirepo-manifest` was acquired by task #140 on the event path; its checkout is clean at the pinned SHA.
 - Task #140 run `820b4b3c857b` failed before source work: Hermes sent `reasoning.effort=high` to LiteLLM model group `coder`, which returned HTTP 400 `UnsupportedParamsError` because `supports_reasoning` is not declared. No Langfuse root trace was produced. Project coding route changed to verified `iq_3s/high`; no automatic retry occurred. #140 is now Todo waiting on human approval card #141; completing #141 will unblock the event worker.
+
+## Follow-up evidence (2026-11-18, merged workspace cleanup review)
+
+- Review branch fix/conditional-merged-branch-cleanup adds compare-and-delete using Git force-with-lease, so a remote branch that moves after merge verification is preserved. Merged workspaces are also blocked from new leases while cleanup is pending; cleanup can resume after worker restart.
+- Local commits: 9651a7f and 36134fa. Worker suite: 106 tests passed. git diff --check passed; changed Python files are LF in both index and worktree.
+- This review branch has not been pushed or deployed. The live cluster remains on the previously verified revision; a real merged-PR cleanup canary is still open.

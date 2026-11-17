@@ -202,7 +202,13 @@ $account = "$env:USERDOMAIN\$env:USERNAME"
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$serverPath`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $account
 $principal = New-ScheduledTaskPrincipal -UserId $account -LogonType Interactive -RunLevel Highest
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+$settings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -RestartCount 10 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $taskName
 
 $deadline = (Get-Date).AddSeconds(20)

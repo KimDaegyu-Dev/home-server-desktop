@@ -107,5 +107,5 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 ## Follow-up evidence (2026-11-18, merged workspace cleanup review)
 
 - Review branch fix/conditional-merged-branch-cleanup adds compare-and-delete using Git force-with-lease, so a remote branch that moves after merge verification is preserved. Merged workspaces are also blocked from new leases while cleanup is pending; cleanup can resume after worker restart.
-- Local commits: 9651a7f and 36134fa. Worker suite: 106 tests passed. git diff --check passed; changed Python files are LF in both index and worktree.
+- Implementation commits: 9651a7f, 36134fa, and 2515c53. Worker suite: 106 tests passed. git diff --check passed; changed Python files are LF in both index and worktree.
 - Draft PR #1 is open at https://github.com/KimDaegyu-Dev/home-server-desktop/pull/1. It has not been merged or deployed. The live cluster remains on the previously verified revision; a real merged-PR cleanup canary is still open.

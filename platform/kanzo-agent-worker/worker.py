@@ -2826,6 +2826,43 @@ class Worker:
         client.heartbeat(lease)
 
 
+    def _preflight_git_push(self, task: Task, checkout: Path, active: dict[str, Any] | None = None) -> None:
+        """Check branch publication access before spending tokens on a writable code run."""
+        token = self.env.get("GITHUB_TOKEN", "")
+        if not token:
+            raise WorkerError("검토용 브랜치를 게시할 GitHub 토큰이 없습니다. Hermes 실행 전에 중단했습니다.")
+        branch = (active or {}).get("branch", "")
+        if not branch:
+            branch_result = self._run_active_command(
+                ["git", "-C", str(checkout), "branch", "--show-current"], active, timeout=30,
+            )
+            branch = branch_result.stdout.strip()
+        if not branch:
+            raise WorkerError("GitHub push 사전 점검을 위해 현재 브랜치를 확인할 수 없습니다.")
+
+        askpass = self.workspace / f"git-askpass-preflight-{uuid.uuid4().hex}.sh"
+        askpass.write_text('#!/bin/sh\nprintf "%s\\n" "$KANZO_GIT_TOKEN"\n', encoding="utf-8")
+        askpass.chmod(0o700)
+        git_env = dict(self._hermes_env())
+        git_env["KANZO_GIT_TOKEN"] = token
+        git_env["GH_TOKEN"] = token
+        git_env["GIT_ASKPASS"] = str(askpass)
+        git_env["GIT_TERMINAL_PROMPT"] = "0"
+        try:
+            result = self._run_active_command(
+                ["git", "-C", str(checkout), "push", "--dry-run", "origin", f"HEAD:refs/heads/{branch}"],
+                active, env=git_env, timeout=60,
+            )
+        finally:
+            askpass.unlink(missing_ok=True)
+        if result.returncode:
+            detail = self._redact_sensitive_output((result.stderr or result.stdout)[-800:])
+            raise WorkerError(
+                f"GitHub denied branch push preflight for {task.task_id}; Hermes was not started. "
+                "Check that Vault GITHUB_TOKEN grants repository Contents: write and that "
+                f"repository rules permit this branch. Details: {detail}"
+            )
+
     def _publish_draft_pr(self, task: Task, checkout: Path, summary: str, active: dict[str, Any] | None = None) -> str:
         token = self.env.get("GITHUB_TOKEN", "")
         if not token:
@@ -3169,6 +3206,8 @@ class Worker:
                 "read_only": bool(task.route and task.route.read_only),
                 "profile": active.get("profile", "researcher"),
             })
+            if task.is_code and not (task.route and task.route.read_only):
+                self._preflight_git_push(task, checkout, active)
             self._prepare_sandbox(task, checkout, source_sha, active)
             self.ledger.transition(run_id, "running")
             result = self._run_hermes(task, task.is_code, checkout, active)

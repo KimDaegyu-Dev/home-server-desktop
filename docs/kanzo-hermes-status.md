@@ -80,3 +80,4 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Worker suite after metrics changes: 95 passed, 3 skipped. Worker Kustomize render, launcher shell syntax, and `git diff --check` passed. Kanzo patch byte check remains CRLF=0 and NUL=0.
 - The metrics rollout is live at revision `46c6f3f`: ArgoCD Synced/Healthy, dispatcher 2/2 Ready, `kanzo-workspace-dashboard` present in the monitoring namespace. Live `/metrics` showed runner `k3s/linux`, Executor ready=1, workspace registry ready=1, writer leases=0, and dirty workspaces=0. Active task gauge was 0 before rollout.
 - Grafana's Prometheus datasource returned the live `kanzo_worker_runner_info`, `kanzo_worker_workspace_registry_ready`, and all bounded `kanzo_worker_workspaces{state}` series for the new dispatcher pod.
+- Grafana API confirms dashboard UID `kanzo-workspace-operations` is discovered with all six expected workspace/runner panels.

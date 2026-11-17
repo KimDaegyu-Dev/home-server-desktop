@@ -7,6 +7,7 @@ resources:
   - broker-ingress.yaml
   - broker-deployment.yaml
   - broker-storage.yaml
+  - broker-service-monitor.yaml
   - sandbox-network-policy.yaml
   - sandbox-limits.yaml
 configMapGenerator:

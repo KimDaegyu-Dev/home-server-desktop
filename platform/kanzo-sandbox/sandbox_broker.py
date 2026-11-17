@@ -336,6 +336,11 @@ class BrokerStore:
                     PRIMARY KEY(task_id,run_id),
                     FOREIGN KEY(task_id,run_id) REFERENCES runs(task_id,run_id)
                 );
+                CREATE TABLE IF NOT EXISTS runner_heartbeats (
+                    runner_id TEXT PRIMARY KEY,
+                    runner_os TEXT NOT NULL CHECK(runner_os IN ('linux','wsl')),
+                    last_seen INTEGER NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS runs_expiry_idx ON runs(state, expires_at);
             """)
             columns = {row["name"] for row in db.execute("PRAGMA table_info(runs)")}
@@ -348,6 +353,46 @@ class BrokerStore:
                 db.execute("ALTER TABLE runs ADD COLUMN source_git_sha TEXT NOT NULL DEFAULT ''")
             if "lease_nonce" not in columns:
                 db.execute("ALTER TABLE runs ADD COLUMN lease_nonce TEXT NOT NULL DEFAULT ''")
+
+    def register_runner(self, runner_id: str, runner_os: str, *, now: int | None = None) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", runner_id):
+            raise BrokerError(400, "invalid_runner_id")
+        if runner_os not in {"linux", "wsl"}:
+            raise BrokerError(400, "invalid_runner_os")
+        seen_at = _now() if now is None else now
+        with self.session() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM runner_heartbeats WHERE last_seen < ?", (seen_at - 30 * 24 * 60 * 60,))
+            known = db.execute("SELECT 1 FROM runner_heartbeats WHERE runner_id=?", (runner_id,)).fetchone()
+            count = int(db.execute("SELECT count(*) FROM runner_heartbeats").fetchone()[0])
+            if not known and count >= 64:
+                db.execute("ROLLBACK")
+                raise BrokerError(429, "runner_registry_full")
+            db.execute(
+                """INSERT INTO runner_heartbeats(runner_id,runner_os,last_seen) VALUES(?,?,?)
+                   ON CONFLICT(runner_id) DO UPDATE SET runner_os=excluded.runner_os,last_seen=excluded.last_seen""",
+                (runner_id, runner_os, seen_at),
+            )
+            db.execute("COMMIT")
+        return {"runner_id": runner_id, "runner_os": runner_os, "last_seen": seen_at}
+
+    def runner_metrics(self, *, now: int | None = None, online_for: int = 90) -> str:
+        current = _now() if now is None else now
+        with self.session() as db:
+            rows = db.execute(
+                "SELECT runner_id,runner_os,last_seen FROM runner_heartbeats ORDER BY runner_id"
+            ).fetchall()
+        lines = [
+            "# HELP kanzo_runner_up Whether a runner has sent a recent authenticated heartbeat.",
+            "# TYPE kanzo_runner_up gauge",
+            "# HELP kanzo_runner_last_seen_timestamp_seconds Unix timestamp of the last authenticated runner heartbeat.",
+            "# TYPE kanzo_runner_last_seen_timestamp_seconds gauge",
+        ]
+        for row in rows:
+            labels = f'runner_id="{row["runner_id"]}",runner_os="{row["runner_os"]}"'
+            lines.append(f"kanzo_runner_up{{{labels}}} {int(current - row['last_seen'] <= online_for)}")
+            lines.append(f"kanzo_runner_last_seen_timestamp_seconds{{{labels}}} {row['last_seen']}")
+        return "\n".join(lines) + "\n"
 
     def prepare(self, task_id: str, run_id: str, archive_sha: str, source_git_sha: str, read_only: bool,
                 archive: bytes) -> dict[str, Any]:
@@ -834,6 +879,15 @@ class BrokerHandler(BaseHTTPRequestHandler):
     def _error(self, error: BrokerError) -> None:
         self._json(error.status, {"error": error.code})
 
+    def _text(self, status: int, body: str, content_type: str = "text/plain; version=0.0.4; charset=utf-8") -> None:
+        raw = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(raw)
+
     def _auth(self, expected: str) -> None:
         header = self.headers.get("Authorization", "")
         scheme, _, supplied = header.partition(" ")
@@ -872,7 +926,15 @@ class BrokerHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         try:
             path = urllib.parse.urlsplit(self.path).path
-            if path == "/v1/runs/prepare":
+            if path == "/v1/runners/heartbeat":
+                self._worker_auth()
+                payload = self._json_body()
+                runner_id = payload.get("runner_id")
+                runner_os = payload.get("runner_os")
+                if not isinstance(runner_id, str) or not isinstance(runner_os, str):
+                    raise BrokerError(400, "runner_identity_required")
+                self._json(200, self.store.register_runner(runner_id, runner_os))
+            elif path == "/v1/runs/prepare":
                 self._worker_auth()
                 self._prepare()
             elif path == "/v1/runs/bind-session":
@@ -1083,6 +1145,9 @@ class BrokerHandler(BaseHTTPRequestHandler):
             path = urllib.parse.urlsplit(self.path).path
             if path == "/healthz":
                 self._json(200, {"status": "ok", "execution": "per-run-pod"})
+                return
+            if path == "/metrics":
+                self._text(200, self.store.runner_metrics())
                 return
             prefix = "/v1/runs/source/"
             if path.startswith(prefix):

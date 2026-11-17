@@ -749,6 +749,7 @@ class Worker:
             "sandbox_cpu": {"count": {}, "sum": {}, "buckets": {}},
             "sandbox_memory_peak": {"count": {}, "sum": {}, "buckets": {}},
             "executor_ready": 0 if self.env.get("KANZO_EXECUTOR_API_URL", "").strip() else 1,
+            "runner_heartbeat_ok": 0,
         }
         self.heartbeat_path = self.state_dir / "worker-heartbeat"
         self.wake_queue: queue.Queue[str] = queue.Queue(maxsize=1)
@@ -1197,6 +1198,9 @@ class Worker:
                     "# HELP kanzo_worker_executor_ready Whether the configured resident Executor API is ready for claims.",
                     "# TYPE kanzo_worker_executor_ready gauge",
                     f"kanzo_worker_executor_ready {worker.metrics.get('executor_ready', 1)}",
+                    "# HELP kanzo_worker_runner_heartbeat_ok Whether this worker's last broker heartbeat succeeded.",
+                    "# TYPE kanzo_worker_runner_heartbeat_ok gauge",
+                    f"kanzo_worker_runner_heartbeat_ok {worker.metrics.get('runner_heartbeat_ok', 0)}",
                 ]
                 registry = getattr(worker, "_workspace_registry", None)
                 registry_ready = 1
@@ -3339,6 +3343,11 @@ class Worker:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.start_metrics_server()
+        threading.Thread(
+            target=self._runner_heartbeat_loop,
+            daemon=True,
+            name=f"runner-heartbeat-{self.runner_id}",
+        ).start()
         try:
             self.wake_queue.put_nowait("startup")
         except queue.Full:
@@ -3371,6 +3380,24 @@ class Worker:
                 return 0
         LOG.info("Worker drained; exiting after active task finished")
         return 0
+
+    def _runner_heartbeat_loop(self) -> None:
+        interval = max(15, min(300, int(self.env.get("KANZO_RUNNER_HEARTBEAT_SECONDS", "30"))))
+        failures = 0
+        while not self.shutdown_requested.is_set():
+            try:
+                BrokerClient().heartbeat_runner(self.runner_id, self.runner_os)
+                self.metrics["runner_heartbeat_ok"] = 1
+                failures = 0
+            except Exception as exc:
+                self.metrics["runner_heartbeat_ok"] = 0
+                failures += 1
+                if failures == 1 or failures % 20 == 0:
+                    LOG.warning(
+                        "Runner heartbeat to Kanzo broker failed (%s; consecutive failures: %d)",
+                        type(exc).__name__, failures,
+                    )
+            self.shutdown_requested.wait(interval)
 
     def request_shutdown(self, signum: int | None = None) -> None:
         """Stop taking work and let the current task finish before exiting."""

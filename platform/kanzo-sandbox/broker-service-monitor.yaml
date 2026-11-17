@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kanzo-runner-heartbeats
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      - mcp
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kanzo-sandbox-broker
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

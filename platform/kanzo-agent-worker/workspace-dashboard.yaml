@@ -58,8 +58,8 @@ data:
           "gridPos": {"h": 6, "w": 12, "x": 12, "y": 8},
           "id": 5,
           "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}},
-          "targets": [{"expr": "kanzo_worker_runner_info", "legendFormat": "{{runner_id}} / {{runner_os}}", "refId": "A"}],
-          "title": "Scraped worker runners",
+          "targets": [{"expr": "kanzo_runner_up", "legendFormat": "{{runner_id}} / {{runner_os}}", "refId": "A"}],
+          "title": "Runner connectivity (1 = online, 0 = offline)",
           "type": "timeseries"
         },
         {

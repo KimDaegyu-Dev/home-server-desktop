@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -68,6 +69,17 @@ class BrokerClient:
         source_id = hashlib.sha1(b"kanzo-empty-source-v1").hexdigest()
         digest = hashlib.sha256(archive).hexdigest()
         return self._prepare_archive(task_id, run_id, source_id, read_only, archive, digest)
+
+    def heartbeat_runner(self, runner_id: str, runner_os: str) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", runner_id):
+            raise BrokerClientError("runner id is invalid")
+        if runner_os not in {"linux", "wsl"}:
+            raise BrokerClientError("runner OS is invalid")
+        return self._post_json(
+            "/v1/runners/heartbeat",
+            {"runner_id": runner_id, "runner_os": runner_os},
+            timeout=10,
+        )
 
     def _prepare_archive(self, task_id: str, run_id: str, source_sha: str, read_only: bool,
                          archive: bytes, digest: str) -> dict[str, Any]:

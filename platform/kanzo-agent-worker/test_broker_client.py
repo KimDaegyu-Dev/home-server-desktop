@@ -28,6 +28,16 @@ class BrokerClientEndpointTests(unittest.TestCase):
             with self.assertRaises(BrokerClientError):
                 BrokerClient("https://example.com", "x" * 32)
 
+    def test_runner_heartbeat_sends_only_bounded_identity(self) -> None:
+        client = BrokerClient("http://kanzo-sandbox-broker.mcp.svc:8080", "x" * 32)
+        with patch.object(client, "_post_json", return_value={"runner_id": "k3s"}) as post:
+            self.assertEqual(client.heartbeat_runner("k3s", "linux"), {"runner_id": "k3s"})
+        post.assert_called_once_with(
+            "/v1/runners/heartbeat", {"runner_id": "k3s", "runner_os": "linux"}, timeout=10
+        )
+        with self.assertRaises(BrokerClientError):
+            client.heartbeat_runner("../bad", "linux")
+
 
 if __name__ == "__main__":
     unittest.main()

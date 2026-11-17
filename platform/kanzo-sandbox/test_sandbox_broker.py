@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import tempfile
+import json
+import threading
+import urllib.error
+import urllib.request
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -152,6 +156,58 @@ class BrokerChildSessionTests(unittest.TestCase):
         with self.assertRaises(sandbox_broker.BrokerError) as caught:
             self.store.authorize_session(self.root_session)
         self.assertEqual(caught.exception.code, "session_mapping_ambiguous")
+
+
+class RunnerHeartbeatTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        with patch("sandbox_broker.KubernetesAPI"):
+            self.store = sandbox_broker.BrokerStore(root, root / "broker.sqlite3", b"k" * 32)
+
+    def test_runner_metrics_transition_from_online_to_offline(self) -> None:
+        self.store.register_runner("wsl-home", "wsl", now=1000)
+        live = self.store.runner_metrics(now=1089)
+        stale = self.store.runner_metrics(now=1091)
+        self.assertIn('kanzo_runner_up{runner_id="wsl-home",runner_os="wsl"} 1', live)
+        self.assertIn('kanzo_runner_up{runner_id="wsl-home",runner_os="wsl"} 0', stale)
+        self.assertIn('kanzo_runner_last_seen_timestamp_seconds{runner_id="wsl-home",runner_os="wsl"} 1000', stale)
+
+    def test_runner_identity_is_bounded_and_os_is_validated(self) -> None:
+        with self.assertRaises(sandbox_broker.BrokerError):
+            self.store.register_runner("../unsafe", "wsl", now=1000)
+        with self.assertRaises(sandbox_broker.BrokerError):
+            self.store.register_runner("wsl-home", "windows", now=1000)
+
+    def test_http_heartbeat_requires_worker_token_and_metrics_are_readable(self) -> None:
+        worker_token = "worker-token-" + "w" * 32
+        server = sandbox_broker.BrokerServer(("127.0.0.1", 0), self.store, worker_token, "g" * 48)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_port}"
+        body = json.dumps({"runner_id": "wsl-home", "runner_os": "wsl"}).encode()
+
+        unauthorized = urllib.request.Request(
+            base + "/v1/runners/heartbeat", data=body,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(unauthorized, timeout=2)
+        self.assertEqual(caught.exception.code, 401)
+
+        authorized = urllib.request.Request(
+            base + "/v1/runners/heartbeat", data=body,
+            headers={"Authorization": f"Bearer {worker_token}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(authorized, timeout=2) as response:
+            self.assertEqual(response.status, 200)
+        with urllib.request.urlopen(base + "/metrics", timeout=2) as response:
+            metrics = response.read().decode()
+        self.assertIn('kanzo_runner_up{runner_id="wsl-home",runner_os="wsl"} 1', metrics)
 
 
 if __name__ == "__main__":

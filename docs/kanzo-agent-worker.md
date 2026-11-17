@@ -86,5 +86,6 @@ The worker exports low-cardinality Prometheus metrics for operations:
 - `kanzo_worker_workspace_registry_ready` reports whether the persistent registry can be read.
 - `kanzo_worker_workspaces{state}` reports workspace counts by lifecycle state, including retained tombstones.
 - `kanzo_worker_workspace_leases` and `kanzo_worker_workspace_dirty` report active writer leases and dirty workspaces.
+- The worker sends a broker-authenticated runner heartbeat every 30 seconds. The broker exports `kanzo_runner_up{runner_id,runner_os}` and `kanzo_runner_last_seen_timestamp_seconds`; `up=0` means no heartbeat was received within 90 seconds. The runner registry is capped at 64 identities and prunes entries older than 30 days when a heartbeat arrives.
 
-The `Kanzo Workspace Operations` Grafana dashboard uses these metrics. It deliberately avoids workspace IDs as labels to keep Prometheus cardinality bounded. A host runner currently binds metrics to localhost, so its process identity is not scraped by the cluster Prometheus until a dedicated authenticated metrics path is designed.
+The `Kanzo Workspace Operations` Grafana dashboard uses these metrics. It deliberately avoids workspace IDs as labels to keep Prometheus cardinality bounded. Host runner process metrics remain loopback-only; runner connectivity is reported through the authenticated broker heartbeat instead.

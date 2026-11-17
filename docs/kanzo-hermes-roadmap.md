@@ -55,6 +55,7 @@ Kanzo 이벤트는 깨우기 신호이고 Kanzo 카드와 workspace registry가 
 - Workspace별 안정 경로를 재사용하고, 같은 Workspace의 태스크는 순차적으로 같은 브랜치에서 진행한다. 독립 태스크는 별도 Workspace를 사용한다.
 - claim에서 workspace lease를 획득하고 종료 시 해제한다. 비정상 종료 뒤에는 lease 만료만으로 dirty workspace를 덮지 못하게 process 및 Git 상태를 reconciliation한다.
 - 태스크 상태와 commit/PR 링크를 Kanzo에 기록한다. waiting/review로 가도 workspace는 유지한다.
+- 배포 시 `local-path`의 `WaitForFirstConsumer` PVC와 첫 consumer Deployment를 같은 Argo CD sync wave에 둔다. Worker ConfigMap에 추가한 Python 모듈은 개별 `subPath` volume mount에도 등록한다.
 
 완료 조건: 연결된 태스크들이 같은 Workspace를 순차 공유하고, 별도 태스크는 같은 checkout을 동시에 수정할 수 없다. Pod 재시작 후에도 파일·Git 상태가 유지된다.
 

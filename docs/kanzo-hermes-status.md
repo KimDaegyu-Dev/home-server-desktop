@@ -6,19 +6,19 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 
 - 새 로드맵으로 기존 로드맵을 대체했다. 최신 합의는 태스크마다 worktree를 만들지 않고, 하나의 지속형 Workspace를 여러 연결 태스크가 순차 공유하는 것이다. Workspace는 절대경로와 runner/OS를 기록하고, PR 병합 및 연결 태스크 종료가 검증되면 작업 파일과 브랜치를 자동 삭제한다.
 - Kanzo 변경은 private downstream 저장소에서 유지하고 공식 Kanzo 저장소를 `upstream` remote로 연결한다. 병합된 Workspace의 원격 브랜치와 로컬 파일은 정리 조건이 충족되면 삭제하며, 별도 workspace archive 없이 tombstone metadata만 남긴다.
-- 배포된 worker는 Kanzo task마다 `gh repo clone`으로 새 checkout을 만들고 run 종료 때 이를 지운다. Pod workspace는 `emptyDir`이며 dispatcher ledger만 별도 PVC에 저장된다. 사람 대기 후 재실행은 prompt와 Kanzo 댓글에서 시작하고 미커밋 파일은 보존되지 않는다.
-- 배포된 worker의 확인된 버그: 프로젝트 카탈로그의 repo만 `Task.route`로 전달하고 태스크 본문의 repo override는 읽지 않는다. 따라서 task가 다른 repo를 명시해도 카탈로그 기본 repo를 checkout한다. 수정은 로컬 작업 트리에 있지만 아직 배포되지 않았다.
-- 배포된 worker의 확인된 한계: 프로젝트 route에 source ref가 없고 clone의 기본 revision을 쓴다. 실제 checkout SHA는 ledger에 기록하지만 사용자가 지정한 ref와의 일치 여부는 보장하지 않는다. ref 지원 수정은 로컬 작업 트리에 있지만 아직 배포되지 않았다.
-- 현재 워커는 단일 dispatcher 안에서 task를 순차 claim한다. persistent workspace로 전환할 때도 이를 이용해 기본 동시 writer를 1로 유지하되, 별도 lease/재시작 reconciliation은 추가해야 한다.
+- 현재 배포는 GitOps revision `6891d36ee9a1edf3322eb645923fbf5113929744` 기준으로 Argo CD `kanzo`와 `kanzo-agent-worker`가 모두 Synced/Healthy다. Kanzo 이미지는 `localhost/home-server/kanzo:0.4.2-agent.4`이며 dispatcher는 ConfigMap 코드와 `/workspace`의 persistent PVC를 사용한다.
+- task-level repo/ref override와 pinned checkout SHA 기록이 배포됐다. task 본문 structured `agent_config`의 `repo`, `ref`, `workspace_id`를 프로젝트 기본값에 병합한다.
+- dispatcher의 공유 Workspace registry는 `/opt/worker-state/state/workspace-registry.sqlite3`에 생성됐고 `/workspace` PVC `kanzo-agent-workspaces`는 32Gi RWO Bound다. Worker Pod는 2/2 Running, `kanzo_worker_task_active`는 0이다.
+- 현재 dispatcher 한 개가 task를 순차 claim하고 Workspace별 SQLite lease도 적용한다. 재시작 뒤 이전 run이 소유하던 lease만 `conflict`로 풀며 checkout 파일은 보존한다.
 - 로컬 호스트 경로는 Kanzo에 alias가 아닌 사용자가 지정한 절대경로로 저장·표시한다. Windows와 WSL은 별도 runner namespace이며, 실행 전에 경로와 Git root를 검증한다. `C:\` 전체를 Pod에 mount하지 않고 host runner를 사용한다.
 
 ## 단계 진행
 
 | 단계 | 상태 | 근거/다음 작업 |
 |---|---|---|
-| 0. 소스 라우팅 정확성 | 구현 완료, 배포 대기 | worker가 task-level repo/ref를 프로젝트 기본값과 병합하고 지정 ref를 checkout해 SHA를 기록한다. Kanzo 카탈로그 폼/MCP `AgentConfig`에 source ref 필드를 추가했다. 코드 검증은 통과했으며 GitOps 반영과 live rollout, Babmukdang source 정합 확인이 남았다. |
-| 1. 공유 가능한 지속형 Git Workspace | 로컬 구현·검증 완료, 배포 대기 | Workspace ID/다중 task 연결/단일 writer lease를 SQLite registry에 기록하고 `/workspace` PVC에서 안정 checkout을 재사용하도록 구현했다. 재시작 시 장부에서 workspace_id를 찾아 중단된 run의 stale lease만 해제하고 파일은 보존한다. 새 `workspace_registry.py` ConfigMap과 32Gi 요청 PVC를 Kustomize에 연결했다. |
-| 2. 정지·재개·병합 후 정리 | 로컬 구현 중, 배포 대기 | waiting/review/취소 중 Workspace를 보존하고 같은 브랜치에서 이어간다. merge와 연결 task 완료 및 clean head를 확인한 뒤 tombstone을 먼저 기록해, branch/file 정리 중 dispatcher 재시작 시 다음 주기에 이어서 정리하게 했다. 실클러스터 lifecycle 검증은 남았다. |
+| 0. 소스 라우팅 정확성 | 구현·배포 완료, 프로젝트 canary 대기 | task-level repo/ref override, source SHA ledger 기록, Kanzo `AgentConfig` 필드가 revision `6891d36`에 배포됐다. Babmukdang 실제 task가 선택한 source와 expected ref가 맞는지 live canary 검증은 남았다. |
+| 1. 공유 가능한 지속형 Git Workspace | 구현·배포 완료, task canary 대기 | SQLite registry, 여러 task 연결, 단일 writer lease와 안정 checkout 재사용을 배포했다. `/workspace` PVC가 Bound이고 DB 파일이 생성됐다. 여러 task의 실제 순차 공유/Pod 재시작 뒤 파일 유지 acceptance는 live canary로 확인해야 한다. |
+| 2. 정지·재개·병합 후 정리 | 구현·배포 완료, merge lifecycle canary 대기 | waiting/review/취소 중 Workspace 보존, same branch 재개, stale lease 복구, verified merge state 기록 후 branch/file 삭제 코드를 배포했다. 실제 merged PR·완료 task를 통한 자동 정리 acceptance는 아직 실행하지 않았다. |
 | 3. Windows/WSL 로컬 저장소 | 설계 확정 | 절대경로 + OS/runner 종류를 Kanzo에 저장하고, host runner가 workspace별 worktree를 관리한다. 인증 outbound 연결과 원본 dirty 보호가 필요하다. |
 | 4. 다중 저장소·운영 검증 | 대기 | source manifest, 부분 성공 추적, 용량/lease/복구/자동 정리 관측을 추가한다. |
 
@@ -30,8 +30,10 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Kanzo routing patch의 카탈로그 폼과 `AgentConfig` schema에 source ref를 추가했다. Kanzo task-level structured config에서도 `repo`/`source_ref`를 유지할 수 있다.
 - 설계 결정(2026-11-17): 절대경로를 Kanzo에 직접 저장·표시하고 OS/runner namespace를 함께 둔다. Workspace는 여러 태스크가 공유할 수 있으며, 같은 workspace의 writer는 순차 실행한다. 병합 전/미완료 연결 task가 있으면 유지하고, PR merge와 clean 조건이 모두 검증된 뒤 파일·브랜치를 자동 삭제하며 메타데이터만 남긴다.
 - 구현: persistent workspace cleanup은 PR merge와 모든 linked task의 `done`, workspace lease 해제, 로컬 HEAD가 PR head와 동일, clean worktree를 요구한다. 검증된 merge state를 branch/file 삭제 전에 저장하여 중단 뒤 멱등적으로 재개한다. 이미 원격 branch가 사라진 경우도 완료할 수 있다. Dispatcher 재시작 시 살아남은 lease는 중단된 run ID와 일치하는 경우에만 `conflict`로 풀고 checkout을 보존한다.
-- 검증: `python -m unittest discover -s . -p 'test_*.py'` (`platform/kanzo-agent-worker`) — 87 tests passed, 3 skipped. `kubectl kustomize platform/kanzo-agent-worker` 렌더링 성공. Kanzo v0.4.2 pinned commit(`14247076a3e976178f3a50094912d15d1a4f7462`)에 routing patch와 MCP annotations patch를 순서대로 실제 적용해 성공했다. `git diff --check` — content errors 없음(Windows working-copy LF/CRLF 경고 출력).
-- 아직 GitOps에 push하거나 클러스터에 배포하지 않았다. 현재 `home-server-desktop`의 `origin`은 public GitHub repository여서 이 미검토 변경을 push하지 않았다. WSL의 현재 사용자로 `k3s kubectl`을 호출하면 `/etc/rancher/k3s/k3s.yaml` 권한 거부가 나서 Argo CD/PVC live 상태를 확인하지 못했다. 2026-11-17 Prometheus 조회에서 노드 `/` 여유 공간은 약 827 GiB, `kanzo-agent-worker-state` kubelet volume metric은 capacity 약 1007 GiB / used 128 GiB / available 827 GiB였다. 단 PVC manifest 요청은 1 GiB이고 `local-path`의 metric은 실제 PVC quota가 아니라 backing filesystem 통계를 반영하는 것으로 보이므로, 이 수치를 PVC 보장 용량으로 간주하지 않는다.
+- 검증: `python -m unittest discover -s . -p 'test_*.py'` (`platform/kanzo-agent-worker`) — 87 tests passed, 3 skipped. Worker와 Kanzo Kustomize 렌더링, pinned Kanzo v0.4.2 routing/MCP patches 적용, Rust release build, K3s image import 성공. Kanzo `0.4.2-agent.4` 이미지가 배포됐고, Argo 앱 둘 다 revision `6891d36`에서 Healthy다.
+- live 검증: worker Pod 2/2 Running, workspace registry SQLite 파일 4096 bytes 생성, PVC 32Gi RWO Bound, `kanzo_worker_task_active=0`. Kanzo catalog의 Doing 프로젝트는 `#22` Hermes Harness Lab과 `#123` Babmukdang뿐이다. `test-1`에는 Todo task가 없어서 기존 사용자 업무를 건드리지 않으려고 실행 canary를 만들지 않았다. 따라서 actual linked-task reuse와 merged-PR cleanup은 아직 end-to-end 검증하지 않았다.
+- 배포 중 발견·수정: `local-path`는 `WaitForFirstConsumer`이므로 PVC와 dispatcher Deployment를 같은 Argo sync wave `1`에 두어야 한다. 추가된 `workspace_registry.py`도 ConfigMap뿐 아니라 개별 `subPath` mount에 등록해야 한다. routing patch의 CRLF와 중복 workspace UI/schema hunks는 WSL `git apply`/Rust build를 깨뜨렸고, patch를 pinned upstream diff에서 재생성하고 LF로 고친 뒤 build가 통과했다. `.gitattributes`에 `*.patch text eol=lf`를 추가했고 반복 방지 절차를 ai-memory profile에 저장했다.
+- GitOps 변경은 public `home-server-desktop`의 `main`에 push했다. Kanzo private downstream repo와 `upstream` remote는 아직 생성하지 않았고 현재 image build는 pinned public v0.4.2에 tracked patch를 적용하는 방식이다. `kanzo-agent-workspaces`의 32Gi는 PVC 요청 용량이며 local-path의 hard quota로 검증되지 않았다. 기존 `kanzo-agent-worker-state` metric은 backing filesystem 통계(capacity 약 1007 GiB / used 128 GiB / available 827 GiB)를 보여 PVC 요청량과 구분해야 한다.
 - 작업 전 live 상태를 확인해 기존 태스크나 실행을 임의로 재시작하지 않는다. 실행 중인 run이 있으면 source routing 변경은 적용하지 않고 기록한다.
 
 ## 검증 기록
@@ -42,10 +44,11 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 | 2026-11-17 | worker workspace 배포 설정 정적 확인 | `/workspace`는 `emptyDir`; task 완료 경로에서 checkout 제거 확인 |
 | 2026-11-17 | source route override/ref regression suite | 78 passed, 3 skipped |
 | 2026-11-17 | Kanzo routing patch parser / whitespace check | valid; `git diff --check` clean |
-| 2026-11-17 | Kanzo v0.4.2 pinned source patch application | routing patch applied; following MCP annotations patch applies cleanly |
+| 2026-11-17 | Kanzo v0.4.2 pinned source patch application and build | both patches applied; Rust release image `0.4.2-agent.4` built and imported |
 | 2026-11-17 | Persistent Workspace registry and cleanup recovery | 87 passed, 3 skipped; stale lease and merge-before-delete recovery covered; Kustomize render successful |
+| 2026-11-17 | GitOps rollout | revision `6891d36` Synced/Healthy; Kanzo and worker apps healthy; 32Gi workspace PVC Bound; worker 2/2 Running; registry DB created |
 | 2026-11-17 | Prometheus disk/PVC metric | node filesystem available ~827 GiB; local-path PVC metric has same backing-filesystem headroom and is not treated as a PVC quota |
-| 2026-11-17 | Kanzo doing cards | catalog projects `#22` and `#123` are doing; no other doing cards were returned. Active executor ledger was not inspected. |
+| 2026-11-17 | Kanzo doing cards and worker activity | catalog projects `#22` and `#123` are doing; no other doing cards were returned. Worker active gauge was `0`; execution ledger rows were not queried. |
 
 ## 변경 기록 규칙
 

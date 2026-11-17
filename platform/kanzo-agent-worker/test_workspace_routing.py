@@ -5,6 +5,7 @@ import tempfile
 import subprocess
 import threading
 from pathlib import Path
+from unittest.mock import patch
 
 from worker import Task, Worker
 from worker import (
@@ -60,6 +61,45 @@ class WorkspaceRoutingTests(unittest.TestCase):
         self.assertEqual(task_route.repo, "org/default-repo")
         self.assertEqual(task_route.source_ref, "main")
         self.assertIsNone(task_route.workspace_id)
+
+    def test_k3s_worker_leaves_wsl_project_queued_when_runner_is_offline(self) -> None:
+        state_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(state_dir.cleanup)
+        env = {
+            "KANZO_ENABLED": "true",
+            "MCPPROXY_KANZO_AGENT_TOKEN": "token",
+            "KANZO_CATALOG_PROJECT": "kanzo-project-catalog",
+            "KANZO_RUNNER_ID": "k3s",
+            "KANZO_WORKER_STATE_DIR": state_dir.name,
+        }
+        worker = Worker(env)
+        calls = []
+        statuses = {"demo#8": "todo"}
+
+        def kanzo_call(tool, args):
+            calls.append((tool, args))
+            if tool == "list_tasks":
+                return "kanzo-project-catalog#1 [doing] demo {project-catalog}"
+            if tool == "get_task":
+                return (
+                    'agent_config: {"slug":"demo","repo":"org/repo",'
+                    '"model_lane":"coding","read_only":false,"source_kind":"local",'
+                    '"source_path":"/home/eorbr/repo","runner_id":"wsl-home","runner_os":"wsl"}'
+                )
+            raise AssertionError(f"Unexpected Kanzo tool {tool}")
+
+        worker._call = kanzo_call
+        fake_client = type("FakeClient", (), {"__init__": lambda self, *args: None, "connect": lambda self: None})
+        try:
+            with patch("worker.McpClient", fake_client):
+                self.assertFalse(worker.process_one())
+            self.assertEqual(statuses["demo#8"], "todo")
+            self.assertNotIn("next_task", [tool for tool, _ in calls])
+            self.assertNotIn("update_task", [tool for tool, _ in calls])
+        finally:
+            worker.ledger.close()
+            if worker._workspace_registry is not None:
+                worker._workspace_registry.close()
 
     def test_catalog_local_source_keeps_absolute_path_and_runner_identity(self) -> None:
         route = parse_project_route(

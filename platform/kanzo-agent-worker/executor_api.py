@@ -231,6 +231,17 @@ class Store:
                        (time.time(), task, run))
             return row
 
+    def cancel_unsubmitted(self, task: str, run: str, session: str) -> bool:
+        """Atomically prevent prompt.submit only while no admission has started."""
+        with self.lock, self.connection() as db:
+            cur = db.execute(
+                "UPDATE runs SET submit_state='cancelled',updated=? "
+                "WHERE task_id=? AND run_id=? AND session_id=? "
+                "AND submit_state='not_started' AND admission_id IS NULL",
+                (time.time(), task, run, session),
+            )
+            return cur.rowcount == 1
+
     def save_admission(self, task: str, run: str, session: str, admission: str) -> None:
         with self.lock, self.connection() as db:
             cur = db.execute("UPDATE runs SET admission_id=?,submit_state='admitted',updated=? WHERE task_id=? AND run_id=? AND session_id=? AND submit_state='submitting'",
@@ -847,7 +858,19 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(409, "cancel_identity_mismatch")
         admission = row["admission_id"]
         if not _valid_identity(admission, 256):
-            raise ApiError(409, "cancel_admission_not_recorded")
+            if row["submit_state"] == "cancelled":
+                self._send_json(200, {"accepted": True, "action": "already_terminal", "reason": "no_admission"})
+                return
+            if row["submit_state"] == "not_started" and self.store.cancel_unsubmitted(task, run, session):
+                self._send_json(200, {"accepted": True, "action": "not_started", "reason": "no_admission"})
+                return
+            row = self.store.get(task, run)
+            if row and row["submit_state"] == "cancelled" and not row["admission_id"]:
+                self._send_json(200, {"accepted": True, "action": "already_terminal", "reason": "no_admission"})
+                return
+            if not row or not _valid_identity(row["admission_id"], 256):
+                raise ApiError(409, "cancel_admission_not_recorded")
+            admission = row["admission_id"]
         # If the worker has not consumed the execution receipt yet, use the
         # generation already persisted by this API. The exact admission ID
         # still prevents cancelling any other turn in the session.

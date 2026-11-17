@@ -130,6 +130,93 @@ class CancellationLookupTests(unittest.TestCase):
 
 
 class CancellationAndClaimRecoveryTests(unittest.TestCase):
+    def test_worker_restart_settles_remote_turn_before_reviewing_or_releasing_run(self) -> None:
+        with tempfile.TemporaryDirectory() as state_dir:
+            env = {
+                "KANZO_WORKER_STATE_DIR": state_dir,
+                "KANZO_ENABLED": "true",
+                "MCPPROXY_KANZO_AGENT_TOKEN": "token",
+                "KANZO_EXECUTOR_API_URL": "http://executor.test",
+                "KANZO_EXECUTOR_API_TOKEN": "x" * 32,
+            }
+            worker = Worker(env)
+            worker.ledger.start("project-a#7", "run-1")
+            worker.ledger.transition("run-1", "preparing")
+            worker.ledger.transition("run-1", "running")
+            worker.ledger.record_fields("run-1", {
+                "gateway_session_id": "session-1",
+                "prompt_admission_id": "admission-1",
+                "execution_generation": 4,
+                "profile": "builder",
+            })
+            calls = []
+
+            class FakeExecutor:
+                def __init__(self, *_args):
+                    pass
+
+                def cancel(self, **kwargs):
+                    calls.append(("cancel", kwargs))
+                    return {"accepted": True}
+
+            def kanzo_call(tool, args):
+                calls.append((tool, args))
+                if tool == "get_task":
+                    return "status: doing\nhuman: false"
+                if tool == "update_task":
+                    return "moved to review"
+                raise AssertionError(f"Unexpected Kanzo tool {tool}")
+
+            worker._call = kanzo_call
+            worker._comment = lambda *_args: calls.append(("comment", {}))
+            with patch("worker.ExecutorClient", FakeExecutor):
+                worker._reconcile_ledger()
+
+            self.assertTrue(worker._ledger_reconciled)
+            self.assertEqual(calls[0][0], "cancel")
+            self.assertEqual(calls[0][1]["session_id"], "session-1")
+            self.assertEqual(calls[0][1]["admission_id"], "admission-1")
+            self.assertLess(calls.index(("cancel", calls[0][1])), next(i for i, item in enumerate(calls) if item[0] == "update_task"))
+            self.assertEqual(worker.ledger.get("run-1")["state"], "review")
+            worker.ledger.close()
+
+    def test_worker_restart_keeps_orphaned_run_when_remote_settlement_is_unconfirmed(self) -> None:
+        with tempfile.TemporaryDirectory() as state_dir:
+            env = {
+                "KANZO_WORKER_STATE_DIR": state_dir,
+                "KANZO_EXECUTOR_API_URL": "http://executor.test",
+                "KANZO_EXECUTOR_API_TOKEN": "x" * 32,
+            }
+            worker = Worker(env)
+            worker.ledger.start("project-a#7", "run-1")
+            worker.ledger.transition("run-1", "preparing")
+            worker.ledger.transition("run-1", "running")
+            worker.ledger.record_fields("run-1", {
+                "gateway_session_id": "session-1",
+                "prompt_admission_id": "admission-1",
+            })
+            calls = []
+
+            class FakeExecutor:
+                def __init__(self, *_args):
+                    pass
+
+                def cancel(self, **_kwargs):
+                    raise RuntimeError("executor cannot confirm terminal state")
+
+            worker._call = lambda *args: calls.append(args)
+            with patch("worker.ExecutorClient", FakeExecutor):
+                worker._reconcile_ledger()
+
+            self.assertFalse(worker._ledger_reconciled)
+            self.assertEqual(worker.ledger.get("run-1")["state"], "orphaned")
+            self.assertEqual(calls, [])
+            fake_client = type("FakeClient", (), {"__init__": lambda self, *args: None, "connect": lambda self: None})
+            with patch("worker.McpClient", fake_client), patch("worker.ExecutorClient", FakeExecutor):
+                self.assertFalse(worker.process_one())
+            self.assertEqual(calls, [])
+            worker.ledger.close()
+
     def test_worker_restart_recovers_claim_committed_before_response_was_lost(self) -> None:
         with tempfile.TemporaryDirectory() as state_dir:
             env = {

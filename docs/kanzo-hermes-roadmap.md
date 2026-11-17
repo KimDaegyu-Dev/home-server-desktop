@@ -39,7 +39,7 @@ Kanzo 이벤트는 깨우기 신호이고 Kanzo 카드와 workspace registry가 
 
 ## 단계
 
-### 0. 소스 라우팅의 정확성 — 진행 중
+### 0. 소스 라우팅의 정확성 — 구현·배포·local-source canary 완료
 
 - 프로젝트 카드의 기본 저장소와 ref를 파싱하고 검증한다.
 - 태스크 카드의 저장소/ref override를 프로젝트 기본값과 병합한다.

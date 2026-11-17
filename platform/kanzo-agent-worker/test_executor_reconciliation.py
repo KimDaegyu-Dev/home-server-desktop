@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from executor_api import Store, _reconcile_startup
+from executor_api import ApiError, Store, _reconcile_startup
 
 
 class ReconciliationWakeTests(unittest.TestCase):
@@ -67,6 +67,37 @@ class ReconciliationWakeTests(unittest.TestCase):
                 self.assertIn("reconcile", args)
                 self.assertNotIn("prompt.submit", args)
                 self.assertNotIn("--query-file", args)
+            finally:
+                store.close()
+
+    def test_unsubmitted_run_cancellation_wins_atomically_against_prompt_submit(self) -> None:
+        wakeup = threading.Event()
+        with tempfile.TemporaryDirectory() as temp:
+            store = Store(Path(temp), wakeup)
+            try:
+                payload = {"provider": "openai-api", "model": "test-model", "reasoning": "high", "tool_policy": "standard"}
+                store.begin_create("project#1", "run-1", "researcher", "digest", payload)
+                store.finish_create("project#1", "run-1", "session-1", 1)
+
+                self.assertTrue(store.cancel_unsubmitted("project#1", "run-1", "session-1"))
+                self.assertEqual(store.get("project#1", "run-1")["submit_state"], "cancelled")
+                with self.assertRaises(ApiError):
+                    store.begin_submit("project#1", "run-1")
+            finally:
+                store.close()
+
+    def test_unsubmitted_cancellation_cannot_overwrite_a_started_submit(self) -> None:
+        wakeup = threading.Event()
+        with tempfile.TemporaryDirectory() as temp:
+            store = Store(Path(temp), wakeup)
+            try:
+                payload = {"provider": "openai-api", "model": "test-model", "reasoning": "high", "tool_policy": "standard"}
+                store.begin_create("project#1", "run-1", "researcher", "digest", payload)
+                store.finish_create("project#1", "run-1", "session-1", 1)
+                store.begin_submit("project#1", "run-1")
+
+                self.assertFalse(store.cancel_unsubmitted("project#1", "run-1", "session-1"))
+                self.assertEqual(store.get("project#1", "run-1")["submit_state"], "submitting")
             finally:
                 store.close()
 

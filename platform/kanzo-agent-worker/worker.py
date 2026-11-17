@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import json
+import base64
 import hashlib
+import json
 import logging
 import math
 import os
@@ -13,6 +14,7 @@ import re
 import signal
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import textwrap
@@ -79,6 +81,55 @@ class RemoteCancellationUnconfirmed(WorkerError):
 
 class McpError(WorkerError):
     pass
+
+
+def exact_branch_ref_sha(refs: Any, expected_ref: str) -> str | None:
+    """Return the SHA for one exact GitHub ref, or None when it is absent."""
+    if not isinstance(refs, list):
+        return ""
+    for item in refs:
+        if not isinstance(item, dict) or item.get("ref") != expected_ref:
+            continue
+        obj = item.get("object")
+        sha = obj.get("sha") if isinstance(obj, dict) else None
+        return sha.lower() if isinstance(sha, str) and re.fullmatch(r"[a-fA-F0-9]{40}", sha) else ""
+    return None
+
+
+def delete_remote_branch_with_lease(
+    remote_url: str, branch: str, expected_sha: str, env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """Delete a remote branch only if its current tip is still the verified SHA."""
+    if not re.fullmatch(r"[a-zA-Z0-9._/-]{1,200}", branch) or branch.startswith("/") or ".." in branch:
+        raise ValueError("invalid branch name")
+    if not re.fullmatch(r"[a-fA-F0-9]{40}", expected_sha):
+        raise ValueError("invalid expected branch SHA")
+    auth_env = dict(env)
+    token = auth_env.get("GH_TOKEN") or auth_env.get("GITHUB_TOKEN")
+    if token:
+        auth_env["GIT_CONFIG_COUNT"] = "1"
+        auth_env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
+        encoded = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+        auth_env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {encoded}"
+    with tempfile.TemporaryDirectory(prefix="kanzo-branch-cleanup-") as temporary:
+        git_dir = Path(temporary) / "repo.git"
+        initialized = subprocess.run(
+            ["git", "init", "--bare", str(git_dir)], capture_output=True, text=True, timeout=30, check=False,
+        )
+        if initialized.returncode:
+            return initialized
+        added = subprocess.run(
+            ["git", "--git-dir", str(git_dir), "remote", "add", "origin", remote_url],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if added.returncode:
+            return added
+        return subprocess.run(
+            ["git", "--git-dir", str(git_dir), "push",
+             f"--force-with-lease=refs/heads/{branch}:{expected_sha}",
+             "origin", f":refs/heads/{branch}"],
+            env=auth_env, capture_output=True, text=True, timeout=120, check=False,
+        )
 
 
 def _sse_json(body: str) -> dict[str, Any]:
@@ -292,10 +343,18 @@ ALLOWED_PROFILES = {"researcher", "builder", "reviewer"}
 
 def parse_project_route(title: str, description: str) -> ProjectRoute:
     fields: dict[str, str] = {}
-    structured = re.search(r"^agent_config:\s*(\{.*\})\s*$", description, re.IGNORECASE | re.MULTILINE)
-    if structured:
+    # Kanzo can append an updated structured config to a catalog card's
+    # description instead of replacing the older line. The newest explicit
+    # config is authoritative; selecting the first one can silently route a
+    # task to an obsolete model/provider after a settings change.
+    structured_configs = re.findall(
+        r"^agent_config:\s*(.*?)\s*$",
+        description,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if structured_configs:
         try:
-            config = json.loads(structured.group(1))
+            config = json.loads(structured_configs[-1])
             if isinstance(config, dict) and config.get("slug"):
                 fields = {key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in config.items()}
         except json.JSONDecodeError as exc:
@@ -793,10 +852,56 @@ class Worker:
             self._workspace_registry = WorkspaceRegistry(self.state_dir / "workspace-registry.sqlite3")
         return self._workspace_registry
 
+    def _settle_interrupted_execution(self, run_id: str, task_id: str, fields: dict[str, Any]) -> bool:
+        """Stop or prove terminal the exact remote turn before releasing its workspace."""
+        session_id = fields.get("gateway_session_id")
+        if session_id is None:
+            return True
+        if not isinstance(session_id, str) or not session_id:
+            return False
+        admission_id = fields.get("prompt_admission_id")
+        if admission_id is not None and (not isinstance(admission_id, str) or not admission_id):
+            return False
+        generation = fields.get("execution_generation")
+        if generation is not None and (type(generation) is not int or generation < 0):
+            return False
+        if self.env.get("KANZO_EXECUTOR_API_URL", "").strip():
+            try:
+                executor = ExecutorClient(
+                    self.env.get("KANZO_EXECUTOR_API_URL", ""),
+                    self.env.get("KANZO_EXECUTOR_API_TOKEN", ""),
+                )
+                receipt = executor.cancel(
+                    task_id=task_id, run_id=run_id, session_id=session_id,
+                    admission_id=admission_id, execution_generation=generation,
+                )
+            except Exception as exc:
+                LOG.warning("Could not settle interrupted executor run %s (%s)", run_id, type(exc).__name__)
+                return False
+            if receipt.get("accepted") is not True:
+                LOG.warning("Executor did not confirm interrupted run %s as terminal", run_id)
+                return False
+        else:
+            active = {
+                "task_id": task_id, "run_id": run_id, "gateway_session_id": session_id,
+                "prompt_admission_id": admission_id, "execution_generation": generation,
+                "execution_generation_authoritative": generation is not None,
+                "executor_kind": "hermes_gateway_cli", "profile": fields.get("profile", "researcher"),
+            }
+            if not self._interrupt_gateway_session(active):
+                return False
+        try:
+            self.ledger.record_fields(run_id, {"gateway_interrupt_accepted": True})
+        except Exception:
+            LOG.exception("Could not persist restart interrupt receipt for run %s", run_id)
+            return False
+        return True
+
     def _reconcile_ledger(self) -> None:
-        """Route an interrupted run to human review before claiming more work."""
+        """Stop orphaned remote turns before moving work to human review."""
         if self._ledger_reconciled:
             return
+        all_reconciled = True
         for run in self.ledger.list_unfinished():
             run_id = run["run_id"]
             task_id = run["task_id"]
@@ -805,6 +910,10 @@ class Worker:
                     "orphan_reason": "worker restarted before a terminal outcome was recorded",
                 })
             fields = run.get("fields") if isinstance(run.get("fields"), dict) else {}
+            if not self._settle_interrupted_execution(run_id, task_id, fields):
+                all_reconciled = False
+                LOG.warning("Keeping interrupted run %s and its workspace lease until remote execution is settled", run_id)
+                continue
             self._recover_interrupted_workspace_lease(run_id, fields)
             self._record_langfuse_reconciliation(
                 run_id, fields.get("gateway_session_id"), run.get("created_at")
@@ -861,7 +970,7 @@ class Worker:
                 "kanzo_status_at_reconciliation": state or "unknown",
             })
             LOG.warning("Interrupted run %s for %s routed to human review", run_id, task_id)
-        self._ledger_reconciled = True
+        self._ledger_reconciled = all_reconciled
 
     def _recover_interrupted_workspace_lease(self, run_id: str, fields: dict[str, Any]) -> None:
         """Release only this interrupted run's lease while preserving its checkout."""
@@ -996,14 +1105,25 @@ class Worker:
             if not isinstance(refs_data, list):
                 LOG.warning("GitHub returned unexpected branch data for workspace %s", workspace["workspace_id"])
                 continue
-            exact_ref_exists = any(isinstance(ref, dict) and ref.get("ref") == branch_ref for ref in refs_data)
-            if exact_ref_exists:
-                deleted_branch = subprocess.run(
-                    ["gh", "api", "--method", "DELETE", f"repos/{repo}/git/refs/heads/{branch}"],
-                    env=auth_env, capture_output=True, text=True, timeout=120, check=False,
+            remote_branch_sha = exact_branch_ref_sha(refs_data, branch_ref)
+            if remote_branch_sha == "":
+                LOG.warning("Could not verify exact remote branch SHA for workspace %s", workspace["workspace_id"])
+                continue
+            if remote_branch_sha is not None and remote_branch_sha != head_sha:
+                LOG.warning(
+                    "Preserving workspace %s because remote branch moved after the verified merge",
+                    workspace["workspace_id"],
+                )
+                continue
+            if remote_branch_sha is not None:
+                deleted_branch = delete_remote_branch_with_lease(
+                    f"https://github.com/{repo}.git", branch, head_sha, auth_env,
                 )
                 if deleted_branch.returncode:
-                    LOG.warning("Could not delete merged branch for workspace %s", workspace["workspace_id"])
+                    LOG.warning(
+                        "Could not conditionally delete merged branch for workspace %s; preserving checkout",
+                        workspace["workspace_id"],
+                    )
                     continue
             try:
                 if checkout.exists():
@@ -2706,6 +2826,43 @@ class Worker:
         client.heartbeat(lease)
 
 
+    def _preflight_git_push(self, task: Task, checkout: Path, active: dict[str, Any] | None = None) -> None:
+        """Check branch publication access before spending tokens on a writable code run."""
+        token = self.env.get("GITHUB_TOKEN", "")
+        if not token:
+            raise WorkerError("검토용 브랜치를 게시할 GitHub 토큰이 없습니다. Hermes 실행 전에 중단했습니다.")
+        branch = (active or {}).get("branch", "")
+        if not branch:
+            branch_result = self._run_active_command(
+                ["git", "-C", str(checkout), "branch", "--show-current"], active, timeout=30,
+            )
+            branch = branch_result.stdout.strip()
+        if not branch:
+            raise WorkerError("GitHub push 사전 점검을 위해 현재 브랜치를 확인할 수 없습니다.")
+
+        askpass = self.workspace / f"git-askpass-preflight-{uuid.uuid4().hex}.sh"
+        askpass.write_text('#!/bin/sh\nprintf "%s\\n" "$KANZO_GIT_TOKEN"\n', encoding="utf-8")
+        askpass.chmod(0o700)
+        git_env = dict(self._hermes_env())
+        git_env["KANZO_GIT_TOKEN"] = token
+        git_env["GH_TOKEN"] = token
+        git_env["GIT_ASKPASS"] = str(askpass)
+        git_env["GIT_TERMINAL_PROMPT"] = "0"
+        try:
+            result = self._run_active_command(
+                ["git", "-C", str(checkout), "push", "--dry-run", "origin", f"HEAD:refs/heads/{branch}"],
+                active, env=git_env, timeout=60,
+            )
+        finally:
+            askpass.unlink(missing_ok=True)
+        if result.returncode:
+            detail = self._redact_sensitive_output((result.stderr or result.stdout)[-800:])
+            raise WorkerError(
+                f"GitHub denied branch push preflight for {task.task_id}; Hermes was not started. "
+                "Check that Vault GITHUB_TOKEN grants repository Contents: write and that "
+                f"repository rules permit this branch. Details: {detail}"
+            )
+
     def _publish_draft_pr(self, task: Task, checkout: Path, summary: str, active: dict[str, Any] | None = None) -> str:
         token = self.env.get("GITHUB_TOKEN", "")
         if not token:
@@ -2820,6 +2977,8 @@ class Worker:
         self.client = McpClient(self.mcp_url, self.token)
         self.client.connect()
         self._reconcile_ledger()
+        if not self._ledger_reconciled:
+            return False
         self._reconcile_workspace_cleanup()
         if not self._executor_ready_for_claim():
             return False
@@ -3045,7 +3204,10 @@ class Worker:
                 "branch": active.get("branch"),
                 "workspace_id": active.get("workspace_id"),
                 "read_only": bool(task.route and task.route.read_only),
+                "profile": active.get("profile", "researcher"),
             })
+            if task.is_code and not (task.route and task.route.read_only):
+                self._preflight_git_push(task, checkout, active)
             self._prepare_sandbox(task, checkout, source_sha, active)
             self.ledger.transition(run_id, "running")
             result = self._run_hermes(task, task.is_code, checkout, active)

@@ -27,6 +27,10 @@ class WorkspaceDeletedError(WorkspaceRegistryError):
     """A tombstoned workspace ID cannot be reused."""
 
 
+class WorkspaceMergedError(WorkspaceRegistryError):
+    """A merged workspace is awaiting cleanup and cannot be resumed."""
+
+
 _WORKSPACE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _STATES = frozenset({"leased", "ready", "paused", "waiting", "review", "merged", "deleted", "conflict"})
 
@@ -142,6 +146,8 @@ class WorkspaceRegistry:
                     existing = self._decode(row)
                     if existing["state"] == "deleted":
                         raise WorkspaceDeletedError(f"Workspace {workspace_id!r} was deleted and cannot be reused")
+                    if existing["state"] == "merged":
+                        raise WorkspaceMergedError(f"Workspace {workspace_id!r} is merged and awaiting cleanup")
                     identity = (existing["project"], existing["source_repo"], existing["source_ref"])
                     requested = (project, source_repo, source_ref)
                     if identity != requested:

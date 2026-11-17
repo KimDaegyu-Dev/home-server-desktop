@@ -7,6 +7,7 @@ from pathlib import Path
 from workspace_registry import (
     WorkspaceBusyError,
     WorkspaceDeletedError,
+    WorkspaceMergedError,
     WorkspaceRegistry,
     WorkspaceSourceMismatchError,
 )
@@ -77,6 +78,8 @@ class WorkspaceRegistryTests(unittest.TestCase):
         self.assertEqual(merged["state"], "merged")
         self.assertEqual(merged["head_sha"], "b" * 40)
         self.assertEqual(self.registry.list()[0]["workspace_id"], "shared")
+        with self.assertRaises(WorkspaceMergedError):
+            self.acquire(task_id="repo#2", run_id="run-2")
         deleted = self.registry.mark_deleted("shared", head_sha="b" * 40)
         self.assertEqual(deleted["state"], "deleted")
         self.assertEqual(self.registry.list(), [])

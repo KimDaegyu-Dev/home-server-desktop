@@ -648,7 +648,7 @@ def select_task_prompt_context(details: str, *, max_comments: int = 8, max_comme
     return f"{description}\n\nRecent comments from other authors:\n{rendered}"
 
 
-def task_prompt(task: Task, code: bool, source_sha: str | None = None) -> str:
+def task_prompt(task: Task, code: bool, source_sha: str | None = None, workspace_id: str | None = None) -> str:
     if task.is_tool_free:
         return f"""You are handling one bounded Kanzo task with no tools enabled.
 
@@ -660,12 +660,27 @@ Task details:
 </kanzo-task>
 
 Use only the supplied task text. Do not request tools, research, delegate, create subtasks, propose backlog work, update memory, or claim external checks. Give the shortest answer that satisfies the task. If the task requires an exact human-facing response, keep that exact response as the answer body, then append the required worker outcome and summary markers on separate lines; those protocol markers are not part of the human-facing response. End with exactly one `KANZO_WORKER_OUTCOME: done` or `KANZO_WORKER_OUTCOME: review` line, then one concise `KANZO_WORKER_SUMMARY: ...` line."""
-    scope = (
-        "Work only in the current repository. Make the requested changes and run relevant checks. "
-        "Do not push, create a PR, merge, deploy, modify cluster state, or access credentials; the worker handles GitHub operations."
-        if code else
-        "Use only the task context and the permitted read-only MCP tools. Do not change cluster state, credentials, or unrelated files."
-    )
+    if code and task.route and task.route.read_only:
+        scope = (
+            "Inspect only the supplied read-only repository snapshot. Do not edit files or claim changes were made. "
+            "The sandbox intentionally omits `.git`; do not run Git commands. Use only the task context and permitted read-only tools."
+        )
+    elif code and workspace_id:
+        scope = (
+            f"Work only in persistent Kanzo Workspace `{workspace_id}`. This task's later runs and other tasks explicitly "
+            "sharing this workspace reuse the same checkout sequentially. Inspect existing files and continue from them; "
+            "do not reset, replace, or assume a clean checkout. The sandbox intentionally omits `.git`; do not run Git "
+            "commands or manipulate Git metadata. The worker handles commit, push, and draft PR creation after a successful run. "
+            "Make the requested changes and run relevant checks. Do not merge, deploy, modify cluster state, or access credentials."
+        )
+    elif code:
+        scope = (
+            "Work only in this task-scoped repository checkout. The sandbox intentionally omits `.git`; do not run Git "
+            "commands or manipulate Git metadata. Make the requested changes and run relevant checks. Do not push, create a PR, "
+            "merge, deploy, modify cluster state, or access credentials; the worker handles GitHub operations."
+        )
+    else:
+        scope = "Use only the task context and the permitted read-only MCP tools. Do not change cluster state, credentials, or unrelated files."
     source_context = (
         f"Prepared repository revision (git HEAD): {source_sha}. Treat this SHA as the source revision for this run. "
         "The Graphify index may represent another revision; do not claim it matches unless independently verified.\n\n"
@@ -689,7 +704,7 @@ When the investigation is complete, call `skill_view(name="productivity/human-ag
 
 Only propose Kanzo backlog items for concrete, evidence-backed follow-up work outside this task's scope. Do not create cards for work needed to finish this task; do that work or report the blocker. Before proposing, search only relevant task titles in this project for duplicates; do not load the whole backlog. Include the finding, expected outcome, and testable acceptance criteria in each description. Do not impose a proposal count cap. Emit each proposal as one line of JSON: `KANZO_BACKLOG: {{"title":"...","description":"Evidence: ...\nOutcome: ...\nAcceptance: ...","human":false,"waits_on":[]}}`. Use `human:true` only for a concrete decision or action that only the user can perform; otherwise use `human:false`. The worker creates proposals in Kanzo's `backlog` column. A user may mark a rejected proposal `declined`, add a short reason, and move it to `done`; do not reject or archive proposals yourself.
 
-If an explicit human decision, approval, credential setup, or external action is required before this task can continue, stop before dependent changes and choose `review`. Before creating a human-action card, check current task comments and available runtime/deployment state; verify the action is not already satisfied. Emit one line per distinct required action; title must be 1-180 characters and description 1-4000 characters. Keep titles short and descriptions concrete. Use the form `KANZO_HUMAN_ACTION: {{"title":"...","description":"..."}}`. Never include secret values. The worker creates user-owned action cards and links this agent task so it waits for them. After the user completes every linked action card, the event-driven worker will run this task again from its beginning; this checkout is ephemeral, so do not rely on uncommitted work surviving the handoff. Do not emit this marker merely because the result needs ordinary review or evidence is incomplete. If no human action is clearly necessary, use `review` without this marker. Do not retry a failed task automatically.
+If an explicit human decision, approval, credential setup, or external action is required before this task can continue, stop before dependent changes and choose `review`. Before creating a human-action card, check current task comments and available runtime/deployment state; verify the action is not already satisfied. Emit one line per distinct required action; title must be 1-180 characters and description 1-4000 characters. Keep titles short and descriptions concrete. Use the form `KANZO_HUMAN_ACTION: {{"title":"...","description":"..."}}`. Never include secret values. The worker creates user-owned action cards and links this agent task so it waits for them. After the user completes every linked action card, the event-driven worker will run this task again from its beginning; when a persistent Workspace is configured, the worker preserves its checkpoint and reuses it. Inspect the current files and continue without resetting or overwriting them. Do not emit this marker merely because the result needs ordinary review or evidence is incomplete. If no human action is clearly necessary, use `review` without this marker. Do not retry a failed task automatically.
 
 End your response with exactly one line `KANZO_WORKER_OUTCOME: done` or `KANZO_WORKER_OUTCOME: review`, followed by one concise line `KANZO_WORKER_SUMMARY: ...`, then any `KANZO_HUMAN_ACTION` or `KANZO_BACKLOG` JSON marker lines. Choose `review` when evidence is incomplete, a required reviewer is blocked, or human judgment is needed. The worker will publish your result and apply the parent status only after this Hermes process exits successfully.
 
@@ -1916,7 +1931,33 @@ class Worker:
             active["cancel_resolution"].clear()
         self._raise_if_cancelled(active)
 
-    def _record_cancelled_run(self, task_id: str, run_id: str) -> None:
+    def _preserve_cancelled_workspace_checkpoint(
+        self, task: Task, checkout: Path, active: dict[str, Any]
+    ) -> str:
+        """Transfer a confirmed cancelled writer's sandbox snapshot before finalizing its lease."""
+        if not active.get("workspace_acquired") or not active.get("workspace_id"):
+            return ""
+        if task.route and task.route.read_only:
+            return ""
+        if active.get("remote_execution_uncertain"):
+            return " The remote run is unconfirmed; its sandbox snapshot was not applied. The workspace remains quarantined."
+        client = active.get("broker_client")
+        lease = active.get("broker_lease")
+        session_id = active.get("gateway_session_id")
+        apply_changes = getattr(client, "apply_changes", None)
+        if not isinstance(lease, dict) or not isinstance(session_id, str) or not callable(apply_changes):
+            return " No active sandbox snapshot was available to transfer."
+        try:
+            transfer = apply_changes(lease, session_id, checkout)
+        except Exception:
+            LOG.exception("Could not preserve cancelled workspace checkpoint for %s", task.task_id)
+            return " The existing workspace was preserved, but untransferred sandbox edits may be missing."
+        written = int(transfer.get("files_written", 0))
+        deleted = int(transfer.get("files_deleted", 0))
+        active["sandbox_change_count"] = written + deleted
+        return f" Persistent workspace checkpoint captured ({written} files written, {deleted} deleted)."
+
+    def _record_cancelled_run(self, task_id: str, run_id: str, checkpoint_note: str = "") -> None:
         # The user's review/human state is already the durable cancellation signal.
         # Never write a status here: a later user change or a completed run must win.
         try:
@@ -1926,7 +1967,7 @@ class Worker:
             suffix = "The task remains in review with human=true." if state == "review" and human else (
                 f"The task changed to {state or 'an unknown state'} during cancellation; its latest Kanzo state was preserved."
             )
-            self._comment(task_id, f"Run `{run_id}` was cancelled after the review + human=true signal. No commit, PR, or automatic retry was created. {suffix}")
+            self._comment(task_id, f"Run `{run_id}` was cancelled after the review + human=true signal. No commit, push, PR, or automatic retry was created. {suffix}{checkpoint_note}")
         except Exception:
             LOG.exception("Could not record cancellation for %s/%s", task_id, run_id)
 
@@ -2425,7 +2466,7 @@ class Worker:
 
         if provider not in ("openai-api", "openai_compatible") and not self._auth_ready(provider, profile):
             raise WorkerError(f"Hermes is not authenticated for provider {provider}.")
-        prompt = task_prompt(task, code, active.get("source_sha") if active else None)
+        prompt = task_prompt(task, code, active.get("source_sha") if active else None, active.get("workspace_id") if active else None)
         lane = route.model_lane if route else ("coding" if code else "analysis")
         reasoning = route.reason if route else ("high" if code else "xhigh")
         prompt = f"Selected Hermes profile: {profile}.\n\n" + prompt
@@ -3359,7 +3400,8 @@ class Worker:
                     task_id, run_id, "cancelled",
                     "Run cancelled after the user moved the Kanzo task to review with human=true. No automatic retry was started.",
                 )
-                self._record_cancelled_run(task_id, run_id)
+                checkpoint_note = self._preserve_cancelled_workspace_checkpoint(task, checkout, active)
+                self._record_cancelled_run(task_id, run_id, checkpoint_note)
                 self.ledger.transition(run_id, "cancelled", {"reason": "Kanzo review + human=true cancellation signal"})
                 self.ledger.mark_publication(run_id, "cancel_notice")
                 self.metrics["tasks"][f"{'code' if task.is_code else 'noncode'}|cancelled"] = self.metrics["tasks"].get(f"{'code' if task.is_code else 'noncode'}|cancelled", 0) + 1

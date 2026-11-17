@@ -69,6 +69,38 @@ class WorkerReportingPromptTests(unittest.TestCase):
             "Read-only checks passed; workspace writes were correctly rejected.",
         )
 
+    def test_writable_persistent_workspace_prompt_explains_resume_and_git_boundary(self) -> None:
+        route = ProjectRoute(
+            slug="demo", repo="owner/repo", model_lane="coding", provider="openai-api",
+            model="iq_3s", reason="high", profile="builder", read_only=False,
+        )
+        task = Task(
+            task_id="demo#8", project="demo", status="doing", title="Continue implementation",
+            tags=("code",), details="Continue the shared change.", route=route,
+        )
+        prompt = task_prompt(task, code=True, workspace_id="shared-change")
+
+        self.assertIn("persistent Kanzo Workspace `shared-change`", prompt)
+        self.assertIn("reuse the same checkout sequentially", prompt)
+        self.assertIn("do not run Git commands", prompt)
+        self.assertIn("worker preserves its checkpoint", prompt)
+        self.assertNotIn("this checkout is ephemeral", prompt)
+
+    def test_readonly_code_prompt_forbids_edits_and_git_commands(self) -> None:
+        route = ProjectRoute(
+            slug="demo", repo="owner/repo", model_lane="coding", provider="openai-api",
+            model="iq_3s", reason="high", profile="researcher", read_only=True,
+        )
+        task = Task(
+            task_id="demo#9", project="demo", status="doing", title="Inspect source",
+            tags=("code",), details="Inspect only.", route=route,
+        )
+        prompt = task_prompt(task, code=True)
+
+        self.assertIn("read-only repository snapshot", prompt)
+        self.assertIn("Do not edit files", prompt)
+        self.assertIn("do not run Git commands", prompt)
+
     def test_readonly_footer_filter_preserves_real_or_unrelated_failures(self) -> None:
         external_path = (
             "Result.\n\nFile-mutation verifier: 1 file edit(s) FAILED this turn\n"

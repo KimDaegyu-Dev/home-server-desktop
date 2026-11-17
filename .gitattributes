@@ -1,1 +1,2 @@
 *.patch text eol=lf
+platform/kanzo-agent-worker/launch-wsl-runner.sh text eol=lf

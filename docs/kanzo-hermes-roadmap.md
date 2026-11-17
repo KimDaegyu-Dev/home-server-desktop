@@ -13,6 +13,7 @@ Git은 코드 변경의 기본 계약으로 유지한다. 기본 소스 공급�
 - Kanzo 프로젝트 카탈로그는 활성화와 기본 실행 정책을 소유한다. 프로젝트별 배포는 만들지 않는다.
 - Kanzo 커스터마이징은 사용자가 관리하는 private downstream 저장소에서 유지하고, 공식 저장소는 `upstream` remote로 연결한다. 변경은 downstream에서 추적하고 필요한 upstream 변경만 선택적으로 가져와 충돌과 업데이트를 관리한다.
 - 각 Workspace는 `source kind + repository 또는 절대경로 + runner/OS + ref + resolved SHA`를 시작 전에 기록하고, 출처가 검증되지 않으면 모델을 호출하지 않는다.
+- 샌드박스 `/workspace`에는 검증된 소스 스냅샷만 전달하고 `.git` 메타데이터는 노출하지 않는다. 실행 직전 checkout에서 확인한 commit SHA는 `KANZO_SOURCE_GIT_SHA`로 runner 명령에 전달해 근거를 남긴다.
 - 태스크의 소스 설정은 프로젝트 기본값을 상속하고 명시된 `repo`/`ref`만 덮어쓴다. 여러 저장소가 필요한 작업은 나중에 태스크에 저장소 목록과 역할을 지정하는 명시적 manifest로 확장한다.
 - Workspace는 안정적인 ID와 절대경로를 가진다. 여러 태스크가 하나의 Workspace에 연결될 수 있고, Workspace 하나에는 writer lease 하나만 허용한다. 실행 ID마다 새 checkout을 만들지 않는다.
 - 같은 변경 흐름에 속한 태스크만 Workspace를 명시적으로 공유하고 순차 실행한다. 독립 병렬 작업은 별도 Workspace와 브랜치를 사용한다.

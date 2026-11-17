@@ -1,4 +1,5 @@
 .gitattributes text eol=lf
+docs/kanzo-hermes-*.md text eol=lf
 *.patch text eol=lf
 platform/kanzo-sandbox/*.py text eol=lf
 platform/kanzo-agent-worker/launch-wsl-runner.sh text eol=lf

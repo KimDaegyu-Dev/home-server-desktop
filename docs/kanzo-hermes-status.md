@@ -16,10 +16,10 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 
 | 단계 | 상태 | 근거/다음 작업 |
 |---|---|---|
-| 0. 소스 라우팅 정확성 | 구현·배포 완료, 프로젝트 canary 대기 | task-level repo/ref override, source SHA ledger 기록, Kanzo `AgentConfig` 필드가 revision `6891d36`에 배포됐다. Babmukdang 실제 task가 선택한 source와 expected ref가 맞는지 live canary 검증은 남았다. |
+| 0. 소스 라우팅 정확성 | 구현·배포·local-source canary 완료 | task-level repo/ref override, source SHA ledger 기록, Kanzo `AgentConfig` 필드를 배포했고 Babmukdang WSL local-source canary에서 저장소·고정 SHA·runner를 대조했다. |
 | 1. 공유 가능한 지속형 Git Workspace | 구현·배포 완료, task canary 대기 | SQLite registry, 여러 task 연결, 단일 writer lease와 안정 checkout 재사용을 배포했다. `/workspace` PVC가 Bound이고 DB 파일이 생성됐다. 여러 task의 실제 순차 공유/Pod 재시작 뒤 파일 유지 acceptance는 live canary로 확인해야 한다. |
 | 2. 정지·재개·병합 후 정리 | 구현·배포 완료, merge lifecycle canary 대기 | waiting/review/취소 중 Workspace 보존, same branch 재개, stale lease 복구, verified merge state 기록 후 branch/file 삭제 코드를 배포했다. 실제 merged PR·완료 task를 통한 자동 정리 acceptance는 아직 실행하지 않았다. |
-| 3. Windows/WSL 로컬 저장소 | 설계 확정 | 절대경로 + OS/runner 종류를 Kanzo에 저장하고, host runner가 workspace별 worktree를 관리한다. 인증 outbound 연결과 원본 dirty 보호가 필요하다. |
+| 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료 | 절대경로 + OS/runner 종류를 Kanzo에 저장하고 host runner가 workspace별 worktree를 관리한다. WSL route, 이벤트 claim, source SHA 전달, read-only snapshot 검증 완료. checkpoint/resume와 runner 중단 복구는 남았다. |
 | 4. 다중 저장소·운영 검증 | 대기 | source manifest, 부분 성공 추적, 용량/lease/복구/자동 정리 관측을 추가한다. |
 
 ## 이번 구현 세션
@@ -71,7 +71,7 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Verification: worker unit suite 94 passed / 3 skipped; worker and sandbox Kustomize renders succeeded; launcher `bash -n` passed; local executor service and external `https://hermes-executor.tail5389e9.ts.net/readyz` both returned `{"status":"ready"}`; broker HTTPS health endpoint returned `{"status":"ok","execution":"per-run-pod"}`.
 - The first external Executor readiness request returned 502. Tailscale proxy logs showed connection refused because `kanzo-agent-executor-ingress` allowed only dispatcher traffic on port 8766 and Tailscale traffic on 9119. Adding port 8766 for Tailscale-managed pods fixed it; the external readiness request now returns HTTP 200.
 - Patch byte check: `kanzo-local-runner-fields.patch` has 0 CRLF sequences and 0 NUL bytes. The new local-source linked-workspace integration verifies that repeated task runs reuse one dirty checkout/branch while leaving the configured source root clean.
-- Still pending: run a real, user-approved WSL/local-source Kanzo task end to end, verify checkpoint/resume and event wake-up on that runner, and complete the remaining Phase 4 multi-repo/operations evidence. No task was claimed or modified during this rollout.
+- At the time of this rollout, WSL canary execution and event wake-up were still pending; see the later canary evidence below.
 
 ## Follow-up evidence (2026-11-18, operations metrics)
 
@@ -88,4 +88,12 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Worker suite: 96 passed, 3 skipped; sandbox broker suite: 11 passed. Worker and sandbox Kustomize renders succeeded, and `git diff --check` passed. Changes were committed and pushed as `2e54302`.
 - Live rollout verified: `kanzo-agent-worker` and `kanzo-sandbox` are Synced/Healthy; dispatcher is 2/2 Running. Broker `/metrics` reports `runner_id="k3s", runner_os="linux"` with `kanzo_runner_up=1`; a direct Prometheus query returns the same series with value `1` from the broker ServiceMonitor.
 - During rollout the old dispatcher reported `kanzo_worker_task_active=0`. It drained and exited without force deletion; the replacement worker became healthy. This confirms safe rollout for an idle worker, not yet a rollout during an active task.
-- WSL runner is still not launched. The Babmukdang source remains dirty and behind origin, so it cannot serve as a local-source canary until a clean source is available. Multi-repository execution and end-to-end WSL checkpoint/resume remain open Phase 4 evidence.
+- At the time of this runner-heartbeat check, WSL was not launched and the main Babmukdang checkout was dirty. A clean isolated WSL worktree was later used for the local-source canary below. Multi-repository execution and end-to-end WSL checkpoint/resume remain open.
+
+## Follow-up evidence (2026-11-18, WSL local-source canary)
+
+- GitOps commit `849fab3` passes the source checkout's verified commit as non-secret `KANZO_SOURCE_GIT_SHA` to sandbox terminal commands. `/workspace` remains a read-only snapshot without `.git`; the sandbox Apps are Synced/Healthy at this revision.
+- WSL runner claimed `babmukdang#136` through the event path (run `5b8f84b8f117`). It reported the expected SHA `a51a7a539d98bd17142bec752e61de8c58bf75ed`, confirmed the mount was read-only, and found identical pre/post SHA-256 manifests for all 245 files. No files or tests were changed/run. The source worktree remained clean.
+- RunLedger recorded one ended Langfuse root trace (`a1e407ec4d0ee4029ba35a8964ab197a`). The report's test command was corrected from the checked-in CI workflow to `npm ci && npm test -- --passWithNoTests --forceExit`; this command was not run in the canary.
+- Read-only tasks intentionally finish in `review`; the evidence was reviewed, the result was approved, and #136 moved to `done`. Human action #138 is also done. The temporary source worktree was removed after verifying it was clean, and project catalog #123 was restored to the normal Git source defaults.
+- Still open: Phase 1 multi-task shared-workspace/Pod-restart canary; Phase 2 merged-PR cleanup canary; Phase 3 WSL checkpoint/resume and runner-offline recovery; Phase 4 multi-repository manifest and operational evidence.

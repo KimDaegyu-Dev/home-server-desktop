@@ -20,7 +20,7 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 | 1. 공유 가능한 지속형 Git Workspace | 구현·배포 완료, task canary 대기 | SQLite registry, 여러 task 연결, 단일 writer lease와 안정 checkout 재사용을 배포했다. `/workspace` PVC가 Bound이고 DB 파일이 생성됐다. 여러 task의 실제 순차 공유/Pod 재시작 뒤 파일 유지 acceptance는 live canary로 확인해야 한다. |
 | 2. 정지·재개·병합 후 정리 | 구현·배포 완료, merge lifecycle canary 대기 | waiting/review/취소 중 Workspace 보존, same branch 재개, stale lease 복구, verified merge state 기록 후 branch/file 삭제 코드를 배포했다. 실제 merged PR·완료 task를 통한 자동 정리 acceptance는 아직 실행하지 않았다. |
 | 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료 | 절대경로 + OS/runner 종류를 Kanzo에 저장하고 host runner가 workspace별 worktree를 관리한다. WSL route, 이벤트 claim, source SHA 전달, read-only snapshot 검증 완료. checkpoint/resume와 runner 중단 복구는 남았다. |
-| 4. 다중 저장소·운영 검증 | 대기 | source manifest, 부분 성공 추적, 용량/lease/복구/자동 정리 관측을 추가한다. |
+| 4. 다중 저장소·운영 검증 | 구현 태스크 준비, 재개 대기 | source manifest 구현을 Kanzo #140으로 시작했으나 `coder`의 unsupported reasoning-effort 오류로 코드 실행 전에 review로 종료됐다. 프로젝트 기본 coding model은 `iq_3s/high`로 수정했다. 자동 재시도 없이 사람의 재개 결정이 필요하다. |
 
 ## 이번 구현 세션
 
@@ -97,3 +97,9 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - RunLedger recorded one ended Langfuse root trace (`a1e407ec4d0ee4029ba35a8964ab197a`). The report's test command was corrected from the checked-in CI workflow to `npm ci && npm test -- --passWithNoTests --forceExit`; this command was not run in the canary.
 - Read-only tasks intentionally finish in `review`; the evidence was reviewed, the result was approved, and #136 moved to `done`. Human action #138 is also done. The temporary source worktree was removed after verifying it was clean, and project catalog #123 was restored to the normal Git source defaults.
 - Still open: Phase 1 multi-task shared-workspace/Pod-restart canary; Phase 2 merged-PR cleanup canary; Phase 3 WSL checkpoint/resume and runner-offline recovery; Phase 4 multi-repository manifest and operational evidence.
+
+## Follow-up evidence (2026-11-18, WSL source hygiene and model route)
+
+- Windows Git `core.autocrlf=true` left the mounted `C:\Github\home-server-desktop` worktree looking CRLF-dirty to WSL (index LF, worktree CRLF across many files). It was not used as a local source. A clean WSL ext4 clone at `/home/eorbr/kanzo-sources/home-server-desktop` is pinned to `84e7150194691ff75b5afd1bcc69b5d1ec731e67`; `git status` is clean and the origin matches GitHub.
+- Kanzo project #139 and Kanzo project slug `home-server-desktop` were created for the remaining implementation. Persistent workspace `kanzo-multirepo-manifest` was acquired by task #140 on the event path; its checkout is clean at the pinned SHA.
+- Task #140 run `820b4b3c857b` failed before source work: Hermes sent `reasoning.effort=high` to LiteLLM model group `coder`, which returned HTTP 400 `UnsupportedParamsError` because `supports_reasoning` is not declared. No Langfuse root trace was produced. Project coding route changed to verified `iq_3s/high`; task remains in review and was not retried, per the no-automatic-retry policy.

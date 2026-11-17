@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import json
+import base64
 import hashlib
+import json
 import logging
 import math
 import os
@@ -13,6 +14,7 @@ import re
 import signal
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import textwrap
@@ -79,6 +81,55 @@ class RemoteCancellationUnconfirmed(WorkerError):
 
 class McpError(WorkerError):
     pass
+
+
+def exact_branch_ref_sha(refs: Any, expected_ref: str) -> str | None:
+    """Return the SHA for one exact GitHub ref, or None when it is absent."""
+    if not isinstance(refs, list):
+        return ""
+    for item in refs:
+        if not isinstance(item, dict) or item.get("ref") != expected_ref:
+            continue
+        obj = item.get("object")
+        sha = obj.get("sha") if isinstance(obj, dict) else None
+        return sha.lower() if isinstance(sha, str) and re.fullmatch(r"[a-fA-F0-9]{40}", sha) else ""
+    return None
+
+
+def delete_remote_branch_with_lease(
+    remote_url: str, branch: str, expected_sha: str, env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """Delete a remote branch only if its current tip is still the verified SHA."""
+    if not re.fullmatch(r"[a-zA-Z0-9._/-]{1,200}", branch) or branch.startswith("/") or ".." in branch:
+        raise ValueError("invalid branch name")
+    if not re.fullmatch(r"[a-fA-F0-9]{40}", expected_sha):
+        raise ValueError("invalid expected branch SHA")
+    auth_env = dict(env)
+    token = auth_env.get("GH_TOKEN") or auth_env.get("GITHUB_TOKEN")
+    if token:
+        auth_env["GIT_CONFIG_COUNT"] = "1"
+        auth_env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
+        encoded = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+        auth_env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {encoded}"
+    with tempfile.TemporaryDirectory(prefix="kanzo-branch-cleanup-") as temporary:
+        git_dir = Path(temporary) / "repo.git"
+        initialized = subprocess.run(
+            ["git", "init", "--bare", str(git_dir)], capture_output=True, text=True, timeout=30, check=False,
+        )
+        if initialized.returncode:
+            return initialized
+        added = subprocess.run(
+            ["git", "--git-dir", str(git_dir), "remote", "add", "origin", remote_url],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if added.returncode:
+            return added
+        return subprocess.run(
+            ["git", "--git-dir", str(git_dir), "push",
+             f"--force-with-lease=refs/heads/{branch}:{expected_sha}",
+             "origin", f":refs/heads/{branch}"],
+            env=auth_env, capture_output=True, text=True, timeout=120, check=False,
+        )
 
 
 def _sse_json(body: str) -> dict[str, Any]:
@@ -996,14 +1047,25 @@ class Worker:
             if not isinstance(refs_data, list):
                 LOG.warning("GitHub returned unexpected branch data for workspace %s", workspace["workspace_id"])
                 continue
-            exact_ref_exists = any(isinstance(ref, dict) and ref.get("ref") == branch_ref for ref in refs_data)
-            if exact_ref_exists:
-                deleted_branch = subprocess.run(
-                    ["gh", "api", "--method", "DELETE", f"repos/{repo}/git/refs/heads/{branch}"],
-                    env=auth_env, capture_output=True, text=True, timeout=120, check=False,
+            remote_branch_sha = exact_branch_ref_sha(refs_data, branch_ref)
+            if remote_branch_sha == "":
+                LOG.warning("Could not verify exact remote branch SHA for workspace %s", workspace["workspace_id"])
+                continue
+            if remote_branch_sha is not None and remote_branch_sha != head_sha:
+                LOG.warning(
+                    "Preserving workspace %s because remote branch moved after the verified merge",
+                    workspace["workspace_id"],
+                )
+                continue
+            if remote_branch_sha is not None:
+                deleted_branch = delete_remote_branch_with_lease(
+                    f"https://github.com/{repo}.git", branch, head_sha, auth_env,
                 )
                 if deleted_branch.returncode:
-                    LOG.warning("Could not delete merged branch for workspace %s", workspace["workspace_id"])
+                    LOG.warning(
+                        "Could not conditionally delete merged branch for workspace %s; preserving checkout",
+                        workspace["workspace_id"],
+                    )
                     continue
             try:
                 if checkout.exists():

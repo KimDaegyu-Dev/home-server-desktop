@@ -30,10 +30,10 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Kanzo routing patch의 카탈로그 폼과 `AgentConfig` schema에 source ref를 추가했다. Kanzo task-level structured config에서도 `repo`/`source_ref`를 유지할 수 있다.
 - 설계 결정(2026-11-17): 절대경로를 Kanzo에 직접 저장·표시하고 OS/runner namespace를 함께 둔다. Workspace는 여러 태스크가 공유할 수 있으며, 같은 workspace의 writer는 순차 실행한다. 병합 전/미완료 연결 task가 있으면 유지하고, PR merge와 clean 조건이 모두 검증된 뒤 파일·브랜치를 자동 삭제하며 메타데이터만 남긴다.
 - 구현: persistent workspace cleanup은 PR merge와 모든 linked task의 `done`, workspace lease 해제, 로컬 HEAD가 PR head와 동일, clean worktree를 요구한다. 검증된 merge state를 branch/file 삭제 전에 저장하여 중단 뒤 멱등적으로 재개한다. 이미 원격 branch가 사라진 경우도 완료할 수 있다. Dispatcher 재시작 시 살아남은 lease는 중단된 run ID와 일치하는 경우에만 `conflict`로 풀고 checkout을 보존한다.
-- 검증: `python -m unittest discover -s . -p 'test_*.py'` (`platform/kanzo-agent-worker`) — 87 tests passed, 3 skipped. Worker와 Kanzo Kustomize 렌더링, pinned Kanzo v0.4.2 routing/MCP patches 적용, Rust release build, K3s image import 성공. Kanzo `0.4.2-agent.4` 이미지가 배포됐고, Argo 앱 둘 다 revision `6891d36`에서 Healthy다.
+- 검증: `python -m unittest discover -s . -p 'test_*.py'` (`platform/kanzo-agent-worker`) — 88 tests passed, 3 skipped. Worker와 Kanzo Kustomize 렌더링, pinned Kanzo v0.4.2 routing/MCP patches 적용, Rust release build, K3s image import 성공. Kanzo `0.4.2-agent.4` 이미지가 배포됐고, Argo 앱 둘 다 revision `6891d36`에서 Healthy다.
 - live 검증: worker Pod 2/2 Running, workspace registry SQLite 파일 4096 bytes 생성, PVC 32Gi RWO Bound, `kanzo_worker_task_active=0`. Kanzo catalog의 Doing 프로젝트는 `#22` Hermes Harness Lab과 `#123` Babmukdang뿐이다. `test-1`에는 Todo task가 없어서 기존 사용자 업무를 건드리지 않으려고 실행 canary를 만들지 않았다. 따라서 actual linked-task reuse와 merged-PR cleanup은 아직 end-to-end 검증하지 않았다.
 - 배포 중 발견·수정: `local-path`는 `WaitForFirstConsumer`이므로 PVC와 dispatcher Deployment를 같은 Argo sync wave `1`에 두어야 한다. 추가된 `workspace_registry.py`도 ConfigMap뿐 아니라 개별 `subPath` mount에 등록해야 한다. routing patch의 CRLF와 중복 workspace UI/schema hunks는 WSL `git apply`/Rust build를 깨뜨렸고, patch를 pinned upstream diff에서 재생성하고 LF로 고친 뒤 build가 통과했다. `.gitattributes`에 `*.patch text eol=lf`를 추가했고 반복 방지 절차를 ai-memory profile에 저장했다.
-- GitOps 변경은 public `home-server-desktop`의 `main`에 push했다. Kanzo private downstream repo와 `upstream` remote는 아직 생성하지 않았고 현재 image build는 pinned public v0.4.2에 tracked patch를 적용하는 방식이다. `kanzo-agent-workspaces`의 32Gi는 PVC 요청 용량이며 local-path의 hard quota로 검증되지 않았다. 기존 `kanzo-agent-worker-state` metric은 backing filesystem 통계(capacity 약 1007 GiB / used 128 GiB / available 827 GiB)를 보여 PVC 요청량과 구분해야 한다.
+- GitOps changes are pushed to public `home-server-desktop` main. Created private downstream `https://github.com/KimDaegyu-Dev/kanzo-downstream`; configured its local clone with private `origin` and official `emanuele-em/kanzo` as `upstream`; pushed custom changes as `2c4bb60`. The live Kanzo image remains `0.4.2-agent.4`, built from pinned public v0.4.2 plus tracked GitOps patches. The 32Gi workspace PVC is a request, not a local-path hard quota. Existing worker-state metrics report backing filesystem capacity (~1007 GiB / used 128 GiB / available 827 GiB).
 - 작업 전 live 상태를 확인해 기존 태스크나 실행을 임의로 재시작하지 않는다. 실행 중인 run이 있으면 source routing 변경은 적용하지 않고 기록한다.
 
 ## 검증 기록
@@ -55,3 +55,9 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - 단계 경계가 바뀌거나 검증 결과/배포 revision이 생길 때만 이 문서를 갱신한다.
 - 구현되지 않은 설계는 완료로 표시하지 않는다.
 - 테스트는 실행한 정확한 명령과 결과를, rollout은 GitOps revision 및 Argo CD 상태를 기록한다.
+
+## Follow-up evidence (2026-11-17)
+
+- Worker suite: 88 passed, 3 skipped.
+- A local bare-Git integration test confirms linked tasks reuse the same dirty checkout and branch, preserving tracked edits and an untracked checkpoint. This does not replace a live PVC/Pod restart canary.
+- Private Kanzo downstream created and pushed at commit `2c4bb60`; remote topology verified.

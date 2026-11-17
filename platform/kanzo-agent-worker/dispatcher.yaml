@@ -162,6 +162,10 @@ spec:
               subPath: workspace_transfer.py
               readOnly: true
             - name: worker-code
+              mountPath: /opt/kanzo-agent/workspace_registry.py
+              subPath: workspace_registry.py
+              readOnly: true
+            - name: worker-code
               mountPath: /opt/kanzo-agent/kanzo_terminal_provider.py
               subPath: kanzo_terminal_provider.py
               readOnly: true

@@ -1,47 +1,54 @@
-# Kanzo / Hermes 진행 상태
+# Kanzo / Hermes 설계 구현 상태
 
-설계 SSOT는 [Kanzo / Hermes 로드맵](kanzo-hermes-roadmap.md)이다. 이 문서는 현재 배포 상태와 아직 필요한 검증만 요약하며, 근거와 실행 이력은 [증거 로그](kanzo-hermes-evidence-log.md)에 기록한다.
+SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문서는 구현·검증·배포 진행만 기록한다. 배포된 워커 동작은 [워커 안내](kanzo-agent-worker.md)를 참조한다.
 
-## 현재 상태 — 2026-11-16
+## 현재 상태 — 2026-11-17
 
-- GitOps revision `0cf7a0e43ea52ed01b6fb8dbc949c582311529d7` is deployed; Argo CD is Synced/Healthy. Executor is 3/3 and Dispatcher is 2/2 Ready with zero container restarts. Worker code is split into Dispatcher and Executor ConfigMaps; future prompt-only edits no longer roll the shared Gateway.
-- The Hermes Dashboard previously reported `gateway_running=false` while the Gateway process and heartbeat were healthy: its separate container could not see the Gateway PID, and no cross-container health URL was configured. Enabling the Pod shared PID namespace fixed the live `/api/status` response: `gateway_running=true`, `gateway_state=running`, `overall=ok`, 0 active agents and 0 active sessions. Gateway PID 54 is visible from the Dashboard container. No LLM task was active during rollout.
-- Persistent `gateway.log` retains the SIGTERM drain summaries that an earlier audit believed were lost. Runs #107, #108, and #110 each show `timed_out=False` and `active_at_start=1 → active_now=0`; #110's 05:43:24Z summary aligns with run `9f23ddeaa142` and took 69.49s. This verifies graceful drain. It does not simulate a forced kill.
-- Hermes가 Kanzo broker terminal 명령의 응답을 받지 못했을 때, provider가 일반 예외를 Hermes에 던져 같은 명령이 자동 재실행될 수 있는 경로를 막았다. 원격 실행 전의 입력 거부와 설정 오류도 `not_started` 결과로 반환해 불필요한 재시도를 막는다. broker start 응답이 유실된 경우는 실행 상태를 `unknown`으로 알리고, poll 오류는 가능한 경우 해당 실행만 취소하거나 이미 완료된 결과를 회수한다. 자동 재시도는 하지 않으며, 상태를 확인한 뒤 사람이 판단하도록 결과에 안내한다.
-- 변경 commit `f05edac`. 전체 worker 테스트는 WSL/Linux 58/58 통과, Windows 58개 중 55개 통과와 POSIX 전용 3개 skip이다. 실행 중 Hermes Gateway의 실제 `_run_foreground` 래퍼 프로브에서 모의 broker 실패 결과와 `env.execute` 1회 호출을 확인했다. 최신 배포 Pod에는 broker 오류와 사전 거부의 비재시도 코드가 있고 report skill도 설치돼 있다. Python compile과 `git diff --check`도 통과했다. 짧은 이벤트 wake canary `hermes-harness-lab#115`는 SSE 뒤 실제 run `fe8c9c250a2c`을 시작해 `EVENT_WAKE_OK`를 반환했고 ledger는 completed였다. 카드가 Review로 남은 원인은 outcome marker 누락이며, 재실행하지 않았다. 그 응답 형식을 구분하도록 prompt/test를 보완했다. report 품질 측정용 모델 canary는 실행하지 않았다.
-- 사용자가 제공한 `human-agent-report` 스킬은 persistent Hermes 홈과 worker skill ConfigMap에 설치돼 있고, 실제 #42 trace에서 `skill_view` 호출 3회를 확인했다. 다만 결과 보고가 3,538자였고 이미 반영된 설정을 사람 조치로 잘못 요청했다. 워커 지침을 한 번의 최종 로드, 1,200자 이내의 통상 보고, 완료된 조치 확인, 좁은 MCPProxy 검색으로 바꿨다. 변경 `70fdae4`는 배포됐고 전체 worker suite 74개 중 71 통과, Windows 전용 3개 skip이다. 이전 토큰 추정치는 Langfuse Observations API로 아래에서 교정했다. 개선 효과는 다음 자연 작업에서 비교해야 한다.
-- SearXNG wiring task `hermes-harness-lab#42` and human-action #118 are done. All four active Hermes profiles select `searxng` and have the in-cluster `SEARXNG_URL`; the Gateway's JSON endpoint returned HTTP 200 and 31 results. The installed researcher SearXNG provider returned 3 results on two consecutive identical calls with no error or rescue metadata. The natural run also recorded two successful `web_search` tool spans. Hermes 0.23.1 emits `served_by` only for a different keyless fallback vendor, so a successful configured primary omits that field; provider configuration, direct provider calls, and absence of fallback warnings provide the attribution evidence. The original run row remains `waiting` because it ended before the operator verification; its ledger now records a separate `external_resolution` linking the done Kanzo card to the verified configuration without rewriting the run outcome or replaying the task.
-- Langfuse v4 Observations API audit of pre-optimization run `4a4499fdc001` found 54 observations and 21 generations. It reports 819,322 input tokens including 715,149 cache-read tokens (104,173 uncached), 25,596 output tokens, and 19,033 reasoning-output tokens. The earlier 566,076 input estimate is superseded by this API result. These are token counts, not billed cost. The 3,538-character report also requested a human action already satisfied by GitOps. The concise one-load prompt is deployed; compare it with a later natural task before claiming savings.
-- Read-only reconciliation matched Langfuse traces to ledger sessions for #29's accepted run, #31's accepted run, #42, #106, #107, #108, #110, #115, #119, #120, and #121; the cancelled #31 run also has a trace. Manual `external_resolution` records connect the done Kanzo cards to accepted runs #29/#31/#106 while preserving worker ledger states `review`/`waiting`; #42 already had this record. #115 remains Review because its worker outcome marker is missing; #107/#108 remain Review after incomplete/ambiguous execution. The latest read-only audit covers 63 RunLedger rows: 59 have exactly one ended trace, two #29 sessions are `not_found` because researcher Langfuse credentials were missing at run start, and two are `unavailable` (#31 failed before session creation; #97 was claimed in `canary` and not executed). All 61 referenced result artifacts exist and match their ledger SHA-256; the two absent artifacts are expected for cancelled #31 and unexecuted #97. No run is active or orphaned. Run-to-card outcome and acceptance-comment reconciliation remains open.
-- The failed read-only drain run #107 is a token-waste case: 26 generations, 1,018,347 input tokens including 976,344 cache-read (42,003 uncached), 32,982 output tokens including 8,779 reasoning tokens. It ended ambiguous and remains Review. Cached input dominates the count, so these totals do not equal billed usage; the 26-generation loop and long output still justify keeping future observability canaries short and avoiding repeated prose-heavy tests.
-- `af7f087`에서 Hermes PM의 지속 환경을 시작 시 검사·조정하도록 했다. Langfuse 플러그인 소스가 PM stamp 생성 후 바뀌었는데 다음 Gateway 시작 때 환경을 다시 맞추지 않아 `venv: out of sync with uv.lock` 경고가 재발했다. 새 init 단계는 이전 Gateway 소유권이 해제된 뒤 실행되며, 이 잠금 불일치에 한해서만 명시적 동기화를 하고 재검사한다. 라이브 rollout에서 동기화가 수행됐고 `activate()`와 `drift()`가 깨끗하며 `hermes --help`에서도 경고가 사라졌다. 전체 worker 테스트 62개 통과(Windows POSIX 전용 3개 skip), Argo CD Synced/Healthy다.
-- 보고 규칙 변경 뒤 별도의 품질 canary는 비용을 고려해 수행하지 않았다. 앞선 단순 보고 canary 두 건이 각각 11회/27 observations, 15회/44 observations를 썼다. 그러므로 비용 절감은 설계상 줄였지만 운영 평균 감소량을 측정했다고 주장하지 않는다.
-- Langfuse 사용자 연결은 canary `test-1#112`에서 확인됐다. 단일 trace의 27개 observation 모두 pseudonymous `userId=kanzo-owner`를 기록했다. 보고 canary #112/#114는 보관 완료, 중복 제안 #113은 `declined` 이유와 함께 보관했다.
-- report canary 결과의 사람 검토, #107–#110 등 기존 Review 카드의 판단은 사용자 몫으로 남겨 두었다. backlog #48/#49는 사용자 승인 전 Todo로 옮기지 않았다.
+- 새 로드맵으로 기존 로드맵을 대체했다. 최신 합의는 태스크마다 worktree를 만들지 않고, 하나의 지속형 Workspace를 여러 연결 태스크가 순차 공유하는 것이다. Workspace는 절대경로와 runner/OS를 기록하고, PR 병합 및 연결 태스크 종료가 검증되면 작업 파일과 브랜치를 자동 삭제한다.
+- Kanzo 변경은 private downstream 저장소에서 유지하고 공식 Kanzo 저장소를 `upstream` remote로 연결한다. 병합된 Workspace의 원격 브랜치와 로컬 파일은 정리 조건이 충족되면 삭제하며, 별도 workspace archive 없이 tombstone metadata만 남긴다.
+- 배포된 worker는 Kanzo task마다 `gh repo clone`으로 새 checkout을 만들고 run 종료 때 이를 지운다. Pod workspace는 `emptyDir`이며 dispatcher ledger만 별도 PVC에 저장된다. 사람 대기 후 재실행은 prompt와 Kanzo 댓글에서 시작하고 미커밋 파일은 보존되지 않는다.
+- 배포된 worker의 확인된 버그: 프로젝트 카탈로그의 repo만 `Task.route`로 전달하고 태스크 본문의 repo override는 읽지 않는다. 따라서 task가 다른 repo를 명시해도 카탈로그 기본 repo를 checkout한다. 수정은 로컬 작업 트리에 있지만 아직 배포되지 않았다.
+- 배포된 worker의 확인된 한계: 프로젝트 route에 source ref가 없고 clone의 기본 revision을 쓴다. 실제 checkout SHA는 ledger에 기록하지만 사용자가 지정한 ref와의 일치 여부는 보장하지 않는다. ref 지원 수정은 로컬 작업 트리에 있지만 아직 배포되지 않았다.
+- 현재 워커는 단일 dispatcher 안에서 task를 순차 claim한다. persistent workspace로 전환할 때도 이를 이용해 기본 동시 writer를 1로 유지하되, 별도 lease/재시작 reconciliation은 추가해야 한다.
+- 로컬 호스트 경로는 Kanzo에 alias가 아닌 사용자가 지정한 절대경로로 저장·표시한다. Windows와 WSL은 별도 runner namespace이며, 실행 전에 경로와 Git root를 검증한다. `C:\` 전체를 Pod에 mount하지 않고 host runner를 사용한다.
 
-- The #47 resource-baseline run failed after 40 model calls because a `KANZO_HUMAN_ACTION` title exceeded the parser's 180-character bound, which the prompt did not state. Logs show 1,865,026 input tokens (1,542,539 cache-read) and 44,741 output tokens; these are usage counts, not cost. The prompt now states the enforced title/description limits; Argo CD applied `bb6e0eb` (Synced/Healthy), the new dispatcher pod is 2/2 Ready, and the live worker code contains the constraints. No model canary ran.
+## 단계 진행
 
-## 남은 작업
+| 단계 | 상태 | 근거/다음 작업 |
+|---|---|---|
+| 0. 소스 라우팅 정확성 | 구현 완료, 배포 대기 | worker가 task-level repo/ref를 프로젝트 기본값과 병합하고 지정 ref를 checkout해 SHA를 기록한다. Kanzo 카탈로그 폼/MCP `AgentConfig`에 source ref 필드를 추가했다. 코드 검증은 통과했으며 GitOps 반영과 live rollout, Babmukdang source 정합 확인이 남았다. |
+| 1. 공유 가능한 지속형 Git Workspace | 로컬 구현·검증 완료, 배포 대기 | Workspace ID/다중 task 연결/단일 writer lease를 SQLite registry에 기록하고 `/workspace` PVC에서 안정 checkout을 재사용하도록 구현했다. 재시작 시 장부에서 workspace_id를 찾아 중단된 run의 stale lease만 해제하고 파일은 보존한다. 새 `workspace_registry.py` ConfigMap과 32Gi 요청 PVC를 Kustomize에 연결했다. |
+| 2. 정지·재개·병합 후 정리 | 로컬 구현 중, 배포 대기 | waiting/review/취소 중 Workspace를 보존하고 같은 브랜치에서 이어간다. merge와 연결 task 완료 및 clean head를 확인한 뒤 tombstone을 먼저 기록해, branch/file 정리 중 dispatcher 재시작 시 다음 주기에 이어서 정리하게 했다. 실클러스터 lifecycle 검증은 남았다. |
+| 3. Windows/WSL 로컬 저장소 | 설계 확정 | 절대경로 + OS/runner 종류를 Kanzo에 저장하고, host runner가 workspace별 worktree를 관리한다. 인증 outbound 연결과 원본 dirty 보호가 필요하다. |
+| 4. 다중 저장소·운영 검증 | 대기 | source manifest, 부분 성공 추적, 용량/lease/복구/자동 정리 관측을 추가한다. |
 
-1. Graceful SIGTERM drain 중 active turn이 끝나고 결과가 게시되는 흐름은 #110에서 확인됐다. 공유 `gateway.log`에서 #107/#108/#110의 `timed_out=False`, active 1→0을 찾았고, #110은 Gateway 종료 로그·executor admission/ledger·Langfuse·SHA 검증된 산출물·run-tagged Kanzo 댓글이 연결된다. #110 콘텐츠 자체는 timeout 설명 오류 때문에 Review이며, lifecycle 성공과 내용 정확도는 별개다. 추가 #120 canary에서 실제 `sleep` 자식이 실행 중인 상태로 `review + human=true` 취소를 보내 같은 run이 취소되고 runner Pod가 사라지는 것을 확인했다. 강제 kill/timeout 복구와 취소 중 별도 Desktop 대화 유지 여부는 아직 검증하지 않았다.
-2. ReadOnly 메모리·회고의 실제 회수를 검증한다. #79는 Executor 재시작 뒤 기존 broker sandbox 메모리를 Hermes가 자동 주입해 실제 답변에 사용한 것을 확인했다(8 observations). OMH의 명시적 recall 검색은 그 항목을 찾지 못했으므로 의미 검색 성공으로 간주하지 않는다. #82에서는 임시 메모리와 skill이 재시작 뒤 남는 것을 확인한 후 둘 다 제거하고 원래 메모리 문구를 복구했다. 다만 작업 지시를 어기고 메모리 일부를 바꾸는 문제가 발생했고, 별도 임시 backlog #83은 사용자 검토 대상으로 남겼다. 현재 researcher `MEMORY.md`는 2,156/2,200자여서 추가 persistence canary는 여유 공간과 #83 검토 전 보류한다. 남은 검증은 제한적인 메모리에서 사실을 선택적으로 회수하는 흐름과 ReadOnly 작업 뒤 skill 변경이 보존되는지 확인하는 것이다. 별도 ReadOnly HOME을 쓰는 구형 동기화 코드는 중첩 `memories/MEMORY.md`를 놓치던 문제를 `9563e7e`에서 고쳤지만, 해당 구형 Deployment는 replicas=0이다. 현재 활성 broker 경로는 상주 executor의 프로필 HOME을 사용한다.
-3. ReadOnly 위임 경계의 남은 부분을 검증한다. #88은 위임 자식의 `/workspace` 쓰기에서 커널 `EROFS`와 `/scratch` 쓰기 성공을 확인했고, #106은 자식 두 명을 순차 위임한 뒤 부모 terminal/file 검색이 계속 성공했다. 아직 repo checkout을 둔 전체 terminal/file/execute_code/delegate 경로 대조와 trusted telemetry의 child identity/transcript 상관관계가 남아 있다. #89/#90은 backlog에 있으며 사용자가 직접 검토한다.
-4. 성공·실패·취소·timeout의 Kanzo 카드, executor ledger, 산출물, Langfuse를 대조하고 generation 중복 방지 및 delegate trace 연결을 확인한다. 여러 terminal run과 #110의 end-to-end mapping을 검증했고, #29/#31/#106의 외부 수동 결정을 worker outcome과 분리해 ledger에 기록했다. #29 초기 실패 세션은 Langfuse에서 계속 `not_found`이며, 취소·timeout·산출물 및 delegate trace의 전체 대조는 남아 있다. backlog #48/#49는 사용자가 직접 검토한다.
-5. 같은 작업 범위의 one-shot/resident 실행을 비교해 cold/warm 지연, 입력·출력 토큰, CPU·메모리·GPU, 회고 재사용 효과를 측정한다. #119는 marker-only, #121은 terminal 1회와 report skill 1회로 end-to-end를 확인했다. #121 trace는 3 generations / 2 tools / 6 observations, 54,101 total token usage(47,735 cache-read)였다. 짧은 작업치고 입력 반복이 크므로 tool schema/tag 범위를 줄이는 최적화가 남았고, 이 표본들은 one-shot/resident 비교가 아니다. #119는 과거 #76–#78보다 자동 주입 memory snapshot이 1,052자 커서 matched 비교가 아니다. 세 번의 matched 후속 표본과 one-shot 비교가 남아 있다.
-6. 새 one-load reporting prompt의 가독성·사실 구분은 #121 합성 end-to-end 결과 댓글(2,045 bytes)에서 확인했다. 짧고 범위를 지킨 한국어 보고였고, 사람 검토 뒤 Done 처리됐다. 다만 실제 프로젝트 작업의 자연 댓글이 아니며 이전 21-generation 기준선(819,322 input incl. cache / 25,596 output)과 직접 비교되지 않아 평균 사용량 감소는 미검증이다.
-7. Hermes offline prompt-builder measurements for researcher/builder/reviewer after Kanban schema deferral: 21 direct tools and 41,232-41,235 schema bytes, versus the 65,955-byte baseline. This removes about 24.7 KB (37.5%) of tool schemas while keeping all 15 Kanban tools searchable. Skill indexes are 15.7-15.9 KB. These are assembled byte counts, not provider token accounting. Langfuse v2 now provides exact usage for #76–#78 (3,056 input tokens each) and #119 (3,432 input, 3,501 total); the latter's memory snapshot differs, so it does not isolate schema deferral or prove token savings.
+## 이번 구현 세션
 
-완료 표시는 로드맵 각 acceptance와 배포 증거를 확인한 뒤 갱신한다.
+- 시작 revision: `6a22398` (`main`, 작업 트리 clean).
+- 새 로드맵과 상태 문서를 작성했다.
+- 구현: `worker.py`에서 구조화 task `agent_config` 또는 legacy `repo:`/`ref:` 줄의 override를 허용하고 프로젝트 설정과 병합한다. 저장소 식별자/ref는 검증하며, checkout된 기준 SHA와 source repo/ref를 RunLedger에 기록한다. 요청한 ref가 저장소에서 commit으로 해석되지 않으면 Hermes 실행 전에 실패한다.
+- Kanzo routing patch의 카탈로그 폼과 `AgentConfig` schema에 source ref를 추가했다. Kanzo task-level structured config에서도 `repo`/`source_ref`를 유지할 수 있다.
+- 설계 결정(2026-11-17): 절대경로를 Kanzo에 직접 저장·표시하고 OS/runner namespace를 함께 둔다. Workspace는 여러 태스크가 공유할 수 있으며, 같은 workspace의 writer는 순차 실행한다. 병합 전/미완료 연결 task가 있으면 유지하고, PR merge와 clean 조건이 모두 검증된 뒤 파일·브랜치를 자동 삭제하며 메타데이터만 남긴다.
+- 구현: persistent workspace cleanup은 PR merge와 모든 linked task의 `done`, workspace lease 해제, 로컬 HEAD가 PR head와 동일, clean worktree를 요구한다. 검증된 merge state를 branch/file 삭제 전에 저장하여 중단 뒤 멱등적으로 재개한다. 이미 원격 branch가 사라진 경우도 완료할 수 있다. Dispatcher 재시작 시 살아남은 lease는 중단된 run ID와 일치하는 경우에만 `conflict`로 풀고 checkout을 보존한다.
+- 검증: `python -m unittest discover -s . -p 'test_*.py'` (`platform/kanzo-agent-worker`) — 87 tests passed, 3 skipped. `kubectl kustomize platform/kanzo-agent-worker` 렌더링 성공. Kanzo v0.4.2 pinned commit(`14247076a3e976178f3a50094912d15d1a4f7462`)에 routing patch와 MCP annotations patch를 순서대로 실제 적용해 성공했다. `git diff --check` — content errors 없음(Windows working-copy LF/CRLF 경고 출력).
+- 아직 GitOps에 push하거나 클러스터에 배포하지 않았다. 현재 `home-server-desktop`의 `origin`은 public GitHub repository여서 이 미검토 변경을 push하지 않았다. WSL의 현재 사용자로 `k3s kubectl`을 호출하면 `/etc/rancher/k3s/k3s.yaml` 권한 거부가 나서 Argo CD/PVC live 상태를 확인하지 못했다. 2026-11-17 Prometheus 조회에서 노드 `/` 여유 공간은 약 827 GiB, `kanzo-agent-worker-state` kubelet volume metric은 capacity 약 1007 GiB / used 128 GiB / available 827 GiB였다. 단 PVC manifest 요청은 1 GiB이고 `local-path`의 metric은 실제 PVC quota가 아니라 backing filesystem 통계를 반영하는 것으로 보이므로, 이 수치를 PVC 보장 용량으로 간주하지 않는다.
+- 작업 전 live 상태를 확인해 기존 태스크나 실행을 임의로 재시작하지 않는다. 실행 중인 run이 있으면 source routing 변경은 적용하지 않고 기록한다.
 
+## 검증 기록
 
-## 전체 흐름 검증
+| 날짜 | 검증 | 결과 |
+|---|---|---|
+| 2026-11-17 | worker route 전달 경로 정적 확인 | task-level repo override 미지원, project route만 전달됨을 확인 |
+| 2026-11-17 | worker workspace 배포 설정 정적 확인 | `/workspace`는 `emptyDir`; task 완료 경로에서 checkout 제거 확인 |
+| 2026-11-17 | source route override/ref regression suite | 78 passed, 3 skipped |
+| 2026-11-17 | Kanzo routing patch parser / whitespace check | valid; `git diff --check` clean |
+| 2026-11-17 | Kanzo v0.4.2 pinned source patch application | routing patch applied; following MCP annotations patch applies cleanly |
+| 2026-11-17 | Persistent Workspace registry and cleanup recovery | 87 passed, 3 skipped; stale lease and merge-before-delete recovery covered; Kustomize render successful |
+| 2026-11-17 | Prometheus disk/PVC metric | node filesystem available ~827 GiB; local-path PVC metric has same backing-filesystem headroom and is not treated as a PVC quota |
+| 2026-11-17 | Kanzo doing cards | catalog projects `#22` and `#123` are doing; no other doing cards were returned. Active executor ledger was not inspected. |
 
-- Delegation cap: `delegation.oneshot_max_children=0` now means no total child-count cap for a one-shot Hermes run in persistent default/researcher/builder/reviewer configs. Per-call/concurrent execution slots and provider/resource ceilings remain. The GitOps seed config carries the same default.
-- Babmukdang setup: active catalog card #123 uses Backend as the project default and read-only iq_3s researcher routing. Five source-verification candidates #124–#128 are in Backlog; they are not eligible for execution until promoted to Todo.
+## 변경 기록 규칙
 
-- 위임 및 DAG 확인: #122에서 독립 leaf A/B가 실제 23.625초 겹쳐 실행됐고, 두 작업 종료 뒤 부모가 `DAG_VERIFY_OK` fan-in 검증을 수행했다. 단일 ended Langfuse trace에 두 child span이 연결되고 artifact SHA가 RunLedger와 일치해 Done 처리했다. trace는 29 observations / 11 generations, 실행은 약 4분 47초였다. 이는 동시 위임과 의존 순서를 입증하지만 작은 canary치고 orchestration 호출이 많아 사용량 최적화는 별도 과제다.
-- 제한: 이번 Kanzo worker 도구 목록에는 `omh_dag`, `omh_delegate_route`, `omh_run_summary`가 없었고 durable DAG record도 생성되지 않았다. one-shot child 한도 2개라 C는 부모에서 확인했다. 따라서 2개 병렬 leaf + 부모 fan-in은 검증됐지만, 전용 OMH DAG 기록/제어와 C까지 자식에게 위임하는 3-child graph는 미검증이며 현재 설정상 불가능하다.
-
-- 2026-11-16 #121에서 대표 happy path를 끝까지 확인했다: Kanzo Todo 이벤트 → Dispatcher claim → 상주 Hermes Gateway/session → 격리 runner → terminal 및 `human-agent-report` skill → Langfuse trace → SHA 검증 artifact → run-tagged Kanzo 댓글 → ReadOnly Review/human gate → 운영자 확인 후 Done. #120에서는 실행 중 자식 프로세스가 있을 때 `review + human=true`가 해당 run과 runner Pod를 취소하는 것도 확인했다.
-- 따라서 현재는 이 대표 경로를 이용해 일을 맡길 수 있는 상태다. 전체 로드맵은 완료가 아니다. 우선순위 잔여는 ReadOnly 메모리·스킬 변경의 다음 실행/재시작 후 지속성, delegated child의 broker 격리와 추적, timeout/강제 종료 및 동시 실행 시나리오, 전체 RunLedger↔Langfuse↔artifact↔Kanzo 최종 상태 대조, matched 성능/사용량 측정이다.
-- Phase 4는 이전 증거 로그에서 수락 완료로 기록됐다. Phase 5도 end-to-end tracing 검증으로 닫혔다. Phase 2는 지속성/학습 보존이 남아 미완료다. Phase 6은 위 lifecycle·성능·지속성 수락 기준이 남아 미완료다. Phase 1과 3의 구현은 배포되어 있으나 모든 설계 acceptance를 한 번에 대조한 명시적 종료 감사가 없어 완료로 단정하지 않는다.
+- 단계 경계가 바뀌거나 검증 결과/배포 revision이 생길 때만 이 문서를 갱신한다.
+- 구현되지 않은 설계는 완료로 표시하지 않는다.
+- 테스트는 실행한 정확한 명령과 결과를, rollout은 GitOps revision 및 Argo CD 상태를 기록한다.

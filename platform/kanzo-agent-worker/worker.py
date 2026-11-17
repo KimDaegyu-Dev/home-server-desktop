@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import math
 import os
@@ -18,7 +19,7 @@ import textwrap
 import urllib.error
 import urllib.request
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,6 +30,7 @@ from broker_client import BrokerClient
 from executor_client import ExecutorClient
 from langfuse_reconcile import reconcile_session
 from run_ledger import RunLedger
+from workspace_registry import WorkspaceRegistry, WorkspaceRegistryError, validate_workspace_id
 
 
 LOG = logging.getLogger("kanzo-agent-worker")
@@ -246,6 +248,8 @@ class ProjectRoute:
     reason: str
     profile: str
     read_only: bool
+    source_ref: str | None = None
+    workspace_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -295,7 +299,7 @@ def parse_project_route(title: str, description: str) -> ProjectRoute:
         repo = ""
     elif repo:
         repo = repo.removeprefix("https://github.com/").removesuffix(".git").strip("/")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or any(part in {".", ".."} for part in repo.split("/")):
             raise WorkerError(f"Catalog card {slug} has invalid repo.")
     elif "repo" not in fields:
         raise WorkerError(f"Catalog card {slug} requires repo: none or owner/name.")
@@ -308,7 +312,65 @@ def parse_project_route(title: str, description: str) -> ProjectRoute:
     reason = fields.get("reason", "high").lower()
     if reason not in ALLOWED_REASONING:
         raise WorkerError(f"Catalog card {slug} has invalid reason.")
-    return ProjectRoute(slug, repo or None, lane, provider or default_provider, model or default_model, reason, profile, read_only == "true")
+    source_ref = fields.get("ref", fields.get("source_ref", "")).strip() or None
+    if source_ref and not valid_source_ref(source_ref):
+        raise WorkerError(f"Catalog card {slug} has invalid ref.")
+    return ProjectRoute(slug, repo or None, lane, provider or default_provider, model or default_model, reason, profile, read_only == "true", source_ref)
+
+
+def valid_source_ref(value: str) -> bool:
+    """Reject option-like or malformed refs before passing them to Git."""
+    if not value or len(value) > 255 or value.startswith("-") or any(char.isspace() for char in value):
+        return False
+    if re.fullmatch(r"(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})", value):
+        return True
+    if value.startswith("refs/") or value.endswith(".lock") or ".." in value or "@{" in value:
+        return False
+    if any(char in value for char in ("~", "^", ":", "?", "*", "[", "\\", " ")):
+        return False
+    return all(part and part not in {".", ".."} for part in value.split("/"))
+
+
+def apply_task_source_overrides(route: ProjectRoute, details: str) -> ProjectRoute:
+    """Apply a task's explicit source/workspace settings to project defaults."""
+    fields: dict[str, str] = {}
+    task_body = TASK_COMMENTS_HEADER_RE.split(details, maxsplit=1)[0]
+    structured = re.search(r"^agent_config:\s*(\{[^\r\n]*\})\s*$", task_body, re.IGNORECASE | re.MULTILINE)
+    if structured:
+        try:
+            config = json.loads(structured.group(1))
+        except json.JSONDecodeError as exc:
+            raise WorkerError(f"Task has invalid structured agent configuration: {exc}") from exc
+        if not isinstance(config, dict):
+            raise WorkerError("Task agent_config must be a JSON object.")
+        fields = {str(key).lower(): str(value) for key, value in config.items()}
+    else:
+        for line in task_body.splitlines():
+            match = re.match(r"^\s*(repo|ref|source_ref|workspace_id)\s*:\s*(.*?)\s*$", line, re.IGNORECASE)
+            if match:
+                fields[match.group(1).lower()] = match.group(2)
+
+    repo = route.repo
+    if "repo" in fields:
+        value = fields["repo"].strip()
+        if value.lower() == "none":
+            repo = None
+        else:
+            value = value.removeprefix("https://github.com/").removesuffix(".git").strip("/")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) or any(part in {".", ".."} for part in value.split("/")):
+                raise WorkerError("Task has invalid repo override; expected owner/name or none.")
+            repo = value
+
+    source_ref = fields.get("ref", fields.get("source_ref", "")).strip() or route.source_ref
+    if source_ref and not valid_source_ref(source_ref):
+        raise WorkerError("Task has invalid ref override.")
+    workspace_id = fields.get("workspace_id", "").strip() or route.workspace_id
+    if workspace_id:
+        try:
+            validate_workspace_id(workspace_id)
+        except WorkspaceRegistryError as exc:
+            raise WorkerError(f"Task has invalid workspace_id: {exc}") from exc
+    return replace(route, repo=repo, source_ref=source_ref, workspace_id=workspace_id)
 
 
 def parse_catalog_cards(text: str) -> list[ProjectRoute]:
@@ -662,7 +724,16 @@ class Worker:
         self.shutdown_requested = threading.Event()
         self.ledger = RunLedger(self.state_dir / "run-ledger.sqlite3")
         self.artifacts = ArtifactStore(self.state_dir / "artifacts")
+        self._workspace_registry: WorkspaceRegistry | None = None
         self._ledger_reconciled = False
+
+    @property
+    def workspace_registry(self) -> WorkspaceRegistry:
+        # Most dispatcher unit paths and non-code workloads never use a
+        # persistent checkout. Open SQLite only when that feature is needed.
+        if self._workspace_registry is None:
+            self._workspace_registry = WorkspaceRegistry(self.state_dir / "workspace-registry.sqlite3")
+        return self._workspace_registry
 
     def _reconcile_ledger(self) -> None:
         """Route an interrupted run to human review before claiming more work."""
@@ -676,6 +747,7 @@ class Worker:
                     "orphan_reason": "worker restarted before a terminal outcome was recorded",
                 })
             fields = run.get("fields") if isinstance(run.get("fields"), dict) else {}
+            self._recover_interrupted_workspace_lease(run_id, fields)
             self._record_langfuse_reconciliation(
                 run_id, fields.get("gateway_session_id"), run.get("created_at")
             )
@@ -732,6 +804,156 @@ class Worker:
             })
             LOG.warning("Interrupted run %s for %s routed to human review", run_id, task_id)
         self._ledger_reconciled = True
+
+    def _recover_interrupted_workspace_lease(self, run_id: str, fields: dict[str, Any]) -> None:
+        """Release only this interrupted run's lease while preserving its checkout."""
+        workspace_id = fields.get("workspace_id")
+        if not isinstance(workspace_id, str) or not workspace_id:
+            return
+        try:
+            workspace = self.workspace_registry.get(workspace_id)
+            if workspace is None or workspace.get("lease_run_id") != run_id:
+                return
+            checkout = Path(workspace["workspace_path"])
+            if checkout.is_symlink() or checkout.parent.resolve() != self.workspace.resolve():
+                LOG.error("Keeping interrupted workspace lease %s due to unexpected path", workspace_id)
+                return
+            head_sha = None
+            dirty = True
+            if checkout.exists() and (checkout / ".git").exists():
+                head = subprocess.run(
+                    ["git", "-C", str(checkout), "rev-parse", "--verify", "HEAD"],
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                status = subprocess.run(
+                    ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=all"],
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                if head.returncode == 0 and re.fullmatch(r"[a-f0-9]{40}\s*", head.stdout):
+                    head_sha = head.stdout.strip()
+                if status.returncode == 0:
+                    dirty = bool(status.stdout.strip())
+            self.workspace_registry.release(
+                workspace_id, run_id, state="conflict", head_sha=head_sha, dirty=dirty,
+            )
+            LOG.warning("Released stale workspace lease %s from interrupted run %s; files preserved", workspace_id, run_id)
+        except Exception:
+            LOG.exception("Could not recover workspace lease for interrupted run %s", run_id)
+
+    def _reconcile_workspace_cleanup(self) -> None:
+        """Delete a merged workspace only after every linked Kanzo task is done."""
+        token = self.env.get("GITHUB_TOKEN", "")
+        if not token:
+            return
+        for workspace in self.workspace_registry.list():
+            if workspace.get("lease_run_id") or not workspace.get("pull_request"):
+                continue
+            if workspace.get("state") not in {"review", "ready", "waiting", "paused", "merged"}:
+                continue
+            linked_tasks = workspace.get("linked_tasks", [])
+            if not linked_tasks:
+                continue
+            try:
+                if not all(status_from_details(self._call("get_task", {"id": task_id})) == "done" for task_id in linked_tasks):
+                    continue
+            except Exception as exc:
+                LOG.warning("Could not verify linked tasks for workspace %s (%s)", workspace["workspace_id"], type(exc).__name__)
+                continue
+
+            checkout = Path(workspace["workspace_path"])
+            if checkout.is_symlink() or checkout.parent.resolve() != self.workspace.resolve():
+                LOG.error("Refusing cleanup for workspace %s with an unexpected path", workspace["workspace_id"])
+                continue
+            checkout_exists = checkout.exists()
+            if checkout_exists and not (checkout / ".git").exists():
+                LOG.error("Refusing cleanup for workspace %s without a Git checkout", workspace["workspace_id"])
+                continue
+            if not checkout_exists and workspace.get("state") != "merged":
+                LOG.error("Refusing cleanup for workspace %s because its checkout disappeared before merge was recorded", workspace["workspace_id"])
+                continue
+            repo = workspace["source_repo"]
+            branch = workspace["branch"]
+            auth_env = self._hermes_env()
+            auth_env["GH_TOKEN"] = token
+            pr = subprocess.run(
+                ["gh", "pr", "view", workspace["pull_request"], "--repo", repo,
+                 "--json", "state,mergedAt,headRefName,headRefOid"],
+                cwd=self.workspace, env=auth_env, capture_output=True, text=True, timeout=90, check=False,
+            )
+            if pr.returncode:
+                LOG.warning("Could not verify merge for workspace %s", workspace["workspace_id"])
+                continue
+            try:
+                pr_data = json.loads(pr.stdout)
+            except json.JSONDecodeError:
+                LOG.warning("GitHub returned invalid PR data for workspace %s", workspace["workspace_id"])
+                continue
+            if (
+                not isinstance(pr_data, dict)
+                or pr_data.get("state") != "MERGED"
+                or not pr_data.get("mergedAt")
+                or pr_data.get("headRefName") != branch
+            ):
+                continue
+            head_sha = pr_data.get("headRefOid")
+            if checkout_exists:
+                local_head = subprocess.run(
+                    ["git", "-C", str(checkout), "rev-parse", "--verify", "HEAD"],
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                status = subprocess.run(
+                    ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=all"],
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                if (
+                    local_head.returncode
+                    or local_head.stdout.strip() != head_sha
+                    or status.returncode
+                    or status.stdout.strip()
+                ):
+                    LOG.error("Workspace %s is dirty or differs from merged PR head; preserving it", workspace["workspace_id"])
+                    continue
+
+            # Persist the verified merge before destructive cleanup so a restart
+            # can safely resume if branch deletion or directory removal fails.
+            try:
+                self.workspace_registry.mark_merged(workspace["workspace_id"], head_sha=head_sha)
+            except Exception:
+                LOG.exception("Could not record verified merge for workspace %s", workspace["workspace_id"])
+                continue
+
+            branch_ref = f"refs/heads/{branch}"
+            remote_refs = subprocess.run(
+                ["gh", "api", f"repos/{repo}/git/matching-refs/heads/{branch}"],
+                env=auth_env, capture_output=True, text=True, timeout=90, check=False,
+            )
+            if remote_refs.returncode:
+                LOG.warning("Could not inspect remote branch for workspace %s", workspace["workspace_id"])
+                continue
+            try:
+                refs_data = json.loads(remote_refs.stdout)
+            except json.JSONDecodeError:
+                LOG.warning("GitHub returned invalid branch data for workspace %s", workspace["workspace_id"])
+                continue
+            if not isinstance(refs_data, list):
+                LOG.warning("GitHub returned unexpected branch data for workspace %s", workspace["workspace_id"])
+                continue
+            exact_ref_exists = any(isinstance(ref, dict) and ref.get("ref") == branch_ref for ref in refs_data)
+            if exact_ref_exists:
+                deleted_branch = subprocess.run(
+                    ["gh", "api", "--method", "DELETE", f"repos/{repo}/git/refs/heads/{branch}"],
+                    env=auth_env, capture_output=True, text=True, timeout=120, check=False,
+                )
+                if deleted_branch.returncode:
+                    LOG.warning("Could not delete merged branch for workspace %s", workspace["workspace_id"])
+                    continue
+            try:
+                if checkout.exists():
+                    shutil.rmtree(checkout)
+                self.workspace_registry.mark_deleted(workspace["workspace_id"], head_sha=head_sha)
+                LOG.info("Deleted merged workspace %s after verifying linked tasks and clean head", workspace["workspace_id"])
+            except Exception:
+                LOG.exception("Could not finish cleanup for merged workspace %s", workspace["workspace_id"])
 
     def _persist_run_diagnostic(self, task_id: str, run_id: str, outcome: str, message: str) -> None:
         """Persist a safe terminal note when Hermes produced no durable result."""
@@ -1784,32 +2006,132 @@ class Worker:
             raise WorkerError("Kanzo project or task ID contains unsupported path characters.")
         run_id = active.get("run_id") if active else None
         run_suffix = f"-{run_id}" if isinstance(run_id, str) and re.fullmatch(r"[a-f0-9]{12}", run_id) else ""
-        checkout = (self.workspace / f"{task.project}-{task.task_id.split('#')[-1]}{run_suffix}").resolve()
+        persistent = bool(
+            create_branch and task.is_code and task.route and task.route.repo and not task.route.read_only
+        )
+        workspace_id = None
+        branch = ""
+        if persistent:
+            workspace_id = task.route.workspace_id or f"task-{task.project}-{task.task_id.split('#')[-1]}"
+            try:
+                validate_workspace_id(workspace_id)
+            except WorkspaceRegistryError as exc:
+                raise WorkerError(f"Invalid workspace identity: {exc}") from exc
+            path_key = hashlib.sha256(workspace_id.encode("utf-8")).hexdigest()[:24]
+            checkout = (self.workspace / f"ws-{path_key}").resolve()
+            branch = f"kanzo/workspaces/{workspace_id}"
+        else:
+            checkout = (self.workspace / f"{task.project}-{task.task_id.split('#')[-1]}{run_suffix}").resolve()
         if self.workspace.resolve() not in checkout.parents:
             raise WorkerError("Resolved checkout path escapes the workspace.")
         if active is not None:
             active["checkout"] = checkout
+        source_ref = task.route.source_ref if task.route else None
+        if persistent:
+            route = task.route
+            assert route is not None
+            self.workspace_registry.acquire(
+                workspace_id=workspace_id,
+                project=task.project,
+                task_id=task.task_id,
+                run_id=run_id or "",
+                source_repo=repo,
+                source_ref=source_ref or "",
+                workspace_path=str(checkout),
+                branch=branch,
+            )
+            if active is not None:
+                active["workspace_id"] = workspace_id
+                active["workspace_acquired"] = True
+                active["branch"] = branch
+            if run_id:
+                self.ledger.record_fields(run_id, {
+                    "workspace_id": workspace_id,
+                    "checkout": str(checkout),
+                    "branch": branch,
+                })
         if checkout.exists():
-            shutil.rmtree(checkout)
+            if not persistent:
+                shutil.rmtree(checkout)
+            else:
+                if not (checkout / ".git").exists():
+                    raise WorkerError(f"Persistent workspace {workspace_id!r} exists but is not a Git checkout.")
+                remote = self._run_active_command(
+                    ["git", "-C", str(checkout), "remote", "get-url", "origin"], active, timeout=30,
+                )
+                if remote.returncode or not self._remote_matches_repo(remote.stdout.strip(), repo):
+                    raise WorkerError(f"Persistent workspace {workspace_id!r} origin does not match {repo}.")
+                current_branch = self._run_active_command(
+                    ["git", "-C", str(checkout), "branch", "--show-current"], active, timeout=30,
+                )
+                if current_branch.returncode or current_branch.stdout.strip() != branch:
+                    raise WorkerError(
+                        f"Persistent workspace {workspace_id!r} is on {current_branch.stdout.strip()!r}; expected {branch!r}."
+                    )
+                revision = self._run_active_command(
+                    ["git", "-C", str(checkout), "rev-parse", "--verify", "HEAD"], active, timeout=30,
+                )
+                if revision.returncode or not re.fullmatch(r"[a-f0-9]{40}\s*", revision.stdout):
+                    raise WorkerError(f"Persistent workspace {workspace_id!r} has an invalid HEAD revision.")
+                if active is not None:
+                    active["source_sha"] = revision.stdout.strip()
+                return checkout
         auth_env = self._hermes_env()
         auth_env["GH_TOKEN"] = token
         result = self._run_active_command(["gh", "repo", "clone", repo, str(checkout)], active, timeout=180, env=auth_env)
         if result.returncode:
             raise WorkerError(f"GitHub 저장소를 가져오지 못했습니다: {result.stdout[-1000:]}")
+        if source_ref:
+            candidates = [source_ref]
+            if not re.fullmatch(r"(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})", source_ref):
+                candidates.extend((f"refs/remotes/origin/{source_ref}", f"refs/tags/{source_ref}"))
+            resolved_sha = ""
+            for candidate in candidates:
+                resolved = self._run_active_command(
+                    ["git", "-C", str(checkout), "rev-parse", "--verify", "--quiet", "--end-of-options", f"{candidate}^{{commit}}"],
+                    active, timeout=30,
+                )
+                if resolved.returncode == 0 and re.fullmatch(r"[a-f0-9]{40}\s*", resolved.stdout):
+                    resolved_sha = resolved.stdout.strip()
+                    break
+            if not resolved_sha:
+                raise WorkerError(f"Configured source ref {source_ref!r} does not resolve to a commit in {repo}.")
+            checked_out = self._run_active_command(
+                ["git", "-C", str(checkout), "checkout", "--detach", resolved_sha], active, timeout=120,
+            )
+            if checked_out.returncode:
+                raise WorkerError(f"Could not check out configured source ref {source_ref!r}: {checked_out.stderr[-1000:]}")
+            if active is not None:
+                active["source_ref"] = source_ref
         revision = self._run_active_command(["git", "-C", str(checkout), "rev-parse", "--verify", "HEAD"], active, timeout=30)
         if revision.returncode or not re.fullmatch(r"[a-f0-9]{40}\s*", revision.stdout):
             raise WorkerError("Could not identify the prepared repository revision.")
         if active is not None:
             active["source_sha"] = revision.stdout.strip()
         if create_branch:
-            branch_key = re.sub(r"[^a-zA-Z0-9._/-]+", "-", task.task_id.lower())
-            branch = f"kanzo/{branch_key}/{run_id}" if run_suffix else f"kanzo/{branch_key}"
-            checked_out = self._run_active_command(["git", "-C", str(checkout), "checkout", "-b", branch], active, timeout=120)
+            if not persistent:
+                branch_key = re.sub(r"[^a-zA-Z0-9._/-]+", "-", task.task_id.lower())
+                branch = f"kanzo/{branch_key}/{run_id}" if run_suffix else f"kanzo/{branch_key}"
+            remote_branch = self._run_active_command(
+                ["git", "-C", str(checkout), "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}"],
+                active, timeout=30,
+            ) if persistent else None
+            if remote_branch is not None and remote_branch.returncode == 0:
+                checked_out = self._run_active_command(
+                    ["git", "-C", str(checkout), "checkout", "-b", branch, f"origin/{branch}"], active, timeout=120,
+                )
+            else:
+                checked_out = self._run_active_command(["git", "-C", str(checkout), "checkout", "-b", branch], active, timeout=120)
             if checked_out.returncode:
                 raise WorkerError(f"git checkout failed: {checked_out.stderr[-1000:]}")
             if active is not None:
                 active["branch"] = branch
         return checkout
+
+    @staticmethod
+    def _remote_matches_repo(remote: str, repo: str) -> bool:
+        normalized = remote.strip().removesuffix(".git").rstrip("/")
+        return normalized.endswith(f"/{repo}") or normalized.endswith(f":{repo}")
 
     def _run_hermes(self, task: Task, code: bool, cwd: Path, active: dict[str, Any] | None = None) -> str:
         self._raise_if_cancelled(active)
@@ -2274,23 +2596,56 @@ class Worker:
         finally:
             askpass.unlink(missing_ok=True)
         if active and active["cancelled"].is_set():
-            self._remove_published_branch(checkout, git_env)
+            if not active.get("workspace_id"):
+                self._remove_published_branch(checkout, git_env)
             raise TaskCancelled(f"Run {active['run_id']} was cancelled during branch publication; the branch was removed.")
         if push.returncode:
             raise WorkerError(f"GitHub 브랜치 push 실패: {push.stderr[-1000:]}")
+        branch_result = self._run_active_command(
+            ["git", "-C", str(checkout), "branch", "--show-current"], active, timeout=30,
+        )
+        if branch_result.returncode or not branch_result.stdout.strip():
+            raise WorkerError("Could not identify the published branch.")
+        branch = branch_result.stdout.strip()
+        existing = self._run_active_command(
+            ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,url"],
+            active, cwd=checkout, env=auth_env, timeout=120,
+        )
+        if existing.returncode:
+            raise WorkerError(f"Could not inspect existing draft PRs: {existing.stderr[-1000:]}")
+        try:
+            open_prs = json.loads(existing.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise WorkerError("GitHub returned invalid JSON while checking existing workspace PRs.") from exc
+        if not isinstance(open_prs, list):
+            raise WorkerError("GitHub returned an invalid open PR list for this workspace branch.")
+        if len(open_prs) > 1:
+            raise WorkerError(f"Workspace branch {branch!r} has multiple open pull requests; refusing to choose one.")
+        if open_prs:
+            pr = open_prs[0]
+            number, url = pr.get("number"), pr.get("url")
+            if not isinstance(number, int) or not isinstance(url, str) or not url.startswith("https://github.com/"):
+                raise WorkerError("GitHub returned an invalid existing pull request record.")
+            updated = self._run_active_command(
+                ["gh", "pr", "edit", str(number), "--title", task.title[:200], "--body", (summary or "Automated implementation; see linked Kanzo tasks for context.")[:5000]],
+                active, cwd=checkout, env=auth_env, timeout=120,
+            )
+            if updated.returncode:
+                raise WorkerError(f"Could not update workspace draft PR #{number}: {updated.stderr[-1000:]}")
+            return url
         pr = self._run_active_command(
             [
                 "gh", "pr", "create", "--draft", "--title", task.title[:200],
-                "--body", (summary or "Automated implementation; see task discussion for context.")[:5000],
-                "--head", subprocess.run(["git", "-C", str(checkout), "branch", "--show-current"], capture_output=True, text=True, check=True).stdout.strip(),
+                "--body", (summary or "Automated implementation; see linked Kanzo tasks for context.")[:5000],
+                "--head", branch,
             ],
             active, cwd=checkout, env=auth_env, timeout=120,
         )
         if active and active["cancelled"].is_set():
-            branch = subprocess.run(["git", "-C", str(checkout), "branch", "--show-current"], capture_output=True, text=True, check=False).stdout.strip()
-            if branch:
-                subprocess.run(["gh", "pr", "close", branch, "--delete-branch"], cwd=checkout, env=auth_env, capture_output=True, text=True, timeout=60, check=False)
-            self._remove_published_branch(checkout, git_env)
+            if not active.get("workspace_id"):
+                if branch:
+                    subprocess.run(["gh", "pr", "close", branch, "--delete-branch"], cwd=checkout, env=auth_env, capture_output=True, text=True, timeout=60, check=False)
+                self._remove_published_branch(checkout, git_env)
             raise TaskCancelled(f"Run {active['run_id']} was cancelled while creating its draft PR; published artifacts were cleaned up.")
         if pr.returncode:
             raise WorkerError(f"초안 PR 생성 실패: {pr.stderr[-1000:]}")
@@ -2315,6 +2670,7 @@ class Worker:
         self.client = McpClient(self.mcp_url, self.token)
         self.client.connect()
         self._reconcile_ledger()
+        self._reconcile_workspace_cleanup()
         if not self._executor_ready_for_claim():
             return False
         # Doing catalog cards are the sole project activation switch.
@@ -2431,7 +2787,9 @@ class Worker:
         try:
             details = self._call("get_task", {"id": task_id})
             project = task_id.rsplit("#", 1)[0]
-            task = Task(task_id, project, status, title_line, parse_tags(title_line), details, route_by_slug.get(project))
+            project_route = route_by_slug.get(project)
+            task_route = apply_task_source_overrides(project_route, details) if project_route else None
+            task = Task(task_id, project, status, title_line, parse_tags(title_line), details, task_route)
             self._current_route = task.route
             self._comment(task_id, f"Hermes 워커가 작업을 가져왔습니다. 실행 ID: `{run_id}`\n\n작업을 확인하고 결과와 검증 내용을 댓글로 남기겠습니다.")
             self.ledger.mark_publication(run_id, "started_comment")
@@ -2524,8 +2882,11 @@ class Worker:
             ).stdout.strip() if (checkout / ".git").exists() else ""
             self.ledger.record_fields(run_id, {
                 "source_sha": source_sha or None,
+                "source_ref": task.route.source_ref if task.route else None,
+                "source_repo": task.route.repo if task.route else None,
                 "checkout": str(checkout),
                 "branch": active.get("branch"),
+                "workspace_id": active.get("workspace_id"),
                 "read_only": bool(task.route and task.route.read_only),
             })
             self._prepare_sandbox(task, checkout, source_sha, active)
@@ -2735,15 +3096,62 @@ class Worker:
                         "Sandbox cleanup did not confirm for task %s run %s (%s)",
                         task_id, run_id, type(cleanup_error).__name__,
                     )
+                    unresolved_remote = True
             if not unresolved_remote:
                 with self.active_lock:
                     if self.active_run is active:
                         self.active_run = None
-                if checkout != self.workspace and checkout.exists():
-                    shutil.rmtree(checkout, ignore_errors=True)
-                active_checkout = active.get("checkout")
-                if active_checkout and Path(active_checkout) != self.workspace and Path(active_checkout).exists():
-                    shutil.rmtree(active_checkout, ignore_errors=True)
+                if active.get("workspace_acquired"):
+                    workspace_path = Path(active.get("checkout") or checkout)
+                    final_run_for_workspace = self.ledger.get(run_id) or {}
+                    workspace_state = {
+                        "succeeded": "ready",
+                        "review": "review",
+                        "waiting": "waiting",
+                        "cancelled": "paused",
+                        "failed": "review",
+                        "orphaned": "conflict",
+                    }.get(final_run_for_workspace.get("state"), "conflict")
+                    head_sha = None
+                    dirty = True
+                    pull_request = None
+                    if workspace_path.exists() and (workspace_path / ".git").exists():
+                        head_result = subprocess.run(
+                            ["git", "-C", str(workspace_path), "rev-parse", "--verify", "HEAD"],
+                            capture_output=True, text=True, check=False,
+                        )
+                        status_result = subprocess.run(
+                            ["git", "-C", str(workspace_path), "status", "--porcelain", "--untracked-files=all"],
+                            capture_output=True, text=True, check=False,
+                        )
+                        if head_result.returncode == 0 and re.fullmatch(r"[a-f0-9]{40}\s*", head_result.stdout):
+                            head_sha = head_result.stdout.strip()
+                        if status_result.returncode == 0:
+                            dirty = bool(status_result.stdout.strip())
+                    else:
+                        workspace_state = "conflict"
+                    result = final_run_for_workspace.get("result")
+                    result_metadata = result.get("metadata", {}) if isinstance(result, dict) else {}
+                    if isinstance(result_metadata, dict):
+                        value = result_metadata.get("draft_pr")
+                        if isinstance(value, str) and value.startswith("https://github.com/"):
+                            pull_request = value
+                    try:
+                        self.workspace_registry.release(
+                            active["workspace_id"], run_id,
+                            state=workspace_state,
+                            head_sha=head_sha,
+                            pull_request=pull_request,
+                            dirty=dirty,
+                        )
+                    except Exception:
+                        LOG.exception("Could not safely release workspace lease for task %s run %s", task_id, run_id)
+                else:
+                    if checkout != self.workspace and checkout.exists():
+                        shutil.rmtree(checkout, ignore_errors=True)
+                    active_checkout = active.get("checkout")
+                    if active_checkout and Path(active_checkout) != self.workspace and Path(active_checkout).exists():
+                        shutil.rmtree(active_checkout, ignore_errors=True)
                 self.metrics["active"] = 0
             elapsed = max(0.0, time.monotonic() - task_started_at)
             kind = "code" if task.is_code else "noncode"

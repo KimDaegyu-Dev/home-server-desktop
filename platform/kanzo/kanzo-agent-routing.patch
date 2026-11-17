@@ -382,7 +382,7 @@ index a72176d..d96ff96 100644
  toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "serde"] }
  
 diff --git a/src/app.js b/src/app.js
-index ffbf7df..dc498fb 100644
+index ffbf7df..787c330 100644
 --- a/src/app.js
 +++ b/src/app.js
 @@ -16,6 +16,7 @@ if (!HTMLFormElement.prototype.requestSubmit) {
@@ -393,15 +393,16 @@ index ffbf7df..dc498fb 100644
  
  const state = {
    project: "all",
-@@ -1253,6 +1254,7 @@ async function refreshTask() {
+@@ -1253,6 +1254,8 @@ async function refreshTask() {
    // A board on an older version sends neither list.
    const { task, comments, images, waits_on = [], blocks = [] } = data;
    panelTask = task;
 +  renderAgentConfig(task);
++  renderWorkspaceConfig(task);
    panelWaits = waits_on.map(key).join(", ");
    $("#p-key").textContent = key(task);
    $("#p-key").title = tr("Copy {0}", key(task));
-@@ -1291,6 +1293,50 @@ async function refreshTask() {
+@@ -1291,6 +1294,69 @@ async function refreshTask() {
    }));
  }
  
@@ -411,11 +412,12 @@ index ffbf7df..dc498fb 100644
 +  if (section.hidden) return;
 +  const config = task.agent_config || Object.fromEntries(
 +    (task.description || "").split(/\r?\n/).map((line) => {
-+      const match = line.match(/^\s*(slug|repo|model_lane|provider|model|reason|profile|read_only)\s*:\s*(.*?)\s*$/i);
++      const match = line.match(/^\s*(slug|repo|ref|source_ref|model_lane|provider|model|reason|profile|read_only)\s*:\s*(.*?)\s*$/i);
 +      return match ? [match[1].toLowerCase(), match[2]] : null;
 +    }).filter(Boolean));
 +  const fields = [
 +    ["#p-agent-slug", config.slug || ""], ["#p-agent-repo", config.repo || ""],
++    ["#p-agent-ref", config.source_ref || config.ref || ""],
 +    ["#p-agent-lane", config.model_lane || "analysis"], ["#p-agent-profile", config.profile || "researcher"],
 +    ["#p-agent-provider", config.provider || "openai-api"], ["#p-agent-model", config.model || "iq_3s"],
 +    ["#p-agent-reason", config.reason || "high"],
@@ -434,6 +436,7 @@ index ffbf7df..dc498fb 100644
 +  const config = {
 +    slug: $("#p-agent-slug").value.trim(),
 +    repo: $("#p-agent-repo").value.trim(),
++    source_ref: $("#p-agent-ref").value.trim(),
 +    model_lane: $("#p-agent-lane").value,
 +    provider: $("#p-agent-provider").value.trim(),
 +    model: $("#p-agent-model").value.trim(),
@@ -449,11 +452,28 @@ index ffbf7df..dc498fb 100644
 +  field.addEventListener("change", saveAgentConfig);
 +}
 +
++function renderWorkspaceConfig(task) {
++  const section = $("#p-workspace-config");
++  section.hidden = task.project === AGENT_CATALOG_PROJECT;
++  if (section.hidden) return;
++  const field = $("#p-workspace-id");
++  if (document.activeElement !== field) field.value = task.agent_config?.workspace_id || "";
++}
++
++function saveWorkspaceConfig() {
++  if (!panelTask || panelTask.project === AGENT_CATALOG_PROJECT) return;
++  const config = { ...(panelTask.agent_config || {}) };
++  config.workspace_id = $("#p-workspace-id").value.trim();
++  patchTask({ agent_config: config });
++}
++
++$("#p-workspace-id").addEventListener("change", saveWorkspaceConfig);
++
  async function deleteComment(c) {
    if (!confirm(tr("Delete this comment? This cannot be undone."))) return;
    try {
 diff --git a/src/index.html b/src/index.html
-index f27d0f6..81f460e 100644
+index f27d0f6..bcbfacf 100644
 --- a/src/index.html
 +++ b/src/index.html
 @@ -383,6 +383,10 @@ html:not([data-hide~="waiting"]) .card.waiting:not(:hover) { opacity: .6; }
@@ -467,16 +487,22 @@ index f27d0f6..81f460e 100644
  .composer.dropping { background: var(--active); }
  
  .composer { position: relative; margin-top: 6px; background: var(--field); border-radius: 20px; }
-@@ -613,6 +617,20 @@ html:not(.ready) aside { visibility: hidden; }
+@@ -613,6 +617,26 @@ html:not(.ready) aside { visibility: hidden; }
        <div class="inline md desc-view" id="p-desc-view" tabindex="0" role="button" aria-label="Edit description" hidden></div>
        <div class="thumbs" id="p-images"></div>
      </div>
++    <section class="section" id="p-workspace-config" hidden>
++      <h3>Workspace</h3>
++      <p class="hint">Use the same ID for tasks that should continue in one shared worktree. Linked tasks run one at a time.</p>
++      <label>Workspace ID<input class="field" id="p-workspace-id" autocomplete="off" spellcheck="false" placeholder="feature-auth"></label>
++    </section>
 +    <section class="section" id="p-agent-config" hidden>
 +      <h3>Agent routing</h3>
 +      <p class="hint">Structured worker settings for project catalog cards.</p>
 +      <div class="routing-grid">
 +        <label>Project slug<input class="field" id="p-agent-slug" autocomplete="off" spellcheck="false" placeholder="my-project"></label>
 +        <label>Repository<input class="field" id="p-agent-repo" autocomplete="off" spellcheck="false" placeholder="owner/repository or none"></label>
++        <label>Source ref<input class="field" id="p-agent-ref" autocomplete="off" spellcheck="false" placeholder="main, release/v2, or commit SHA"></label>
 +        <label>Model lane<select class="field" id="p-agent-lane"><option value="analysis">analysis</option><option value="coding">coding</option><option value="review">review</option></select></label>
 +        <label>Hermes profile<select class="field" id="p-agent-profile"><option value="researcher">researcher</option><option value="builder">builder</option><option value="reviewer">reviewer</option></select></label>
 +        <label>Provider<input class="field" id="p-agent-provider" autocomplete="off" spellcheck="false" placeholder="openai-api"></label>
@@ -565,7 +591,7 @@ index 23ff9d8..240319b 100644
      if !own.is_empty() {
          let _ = writeln!(out, "\nImages: {}", own.join(", "));
 diff --git a/src/store.rs b/src/store.rs
-index 8205f50..c323335 100644
+index 8205f50..3fc6c14 100644
 --- a/src/store.rs
 +++ b/src/store.rs
 @@ -6,12 +6,15 @@
@@ -613,7 +639,7 @@ index 8205f50..c323335 100644
  const PROJECT_COLORS: &[&str] = &["gray", "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"];
  
  const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%SZ', 'now')";
-@@ -124,6 +146,21 @@ pub struct Task {
+@@ -124,6 +146,23 @@ pub struct Task {
      /// The tasks this one waits on that aren't done yet. Left out when there are none, as on most tasks.
      #[serde(skip_serializing_if = "Vec::is_empty")]
      pub waiting_on: Vec<i64>,
@@ -626,6 +652,8 @@ index 8205f50..c323335 100644
 +pub struct AgentConfig {
 +    pub slug: String,
 +    pub repo: String,
++    pub source_ref: String,
++    pub workspace_id: String,
 +    pub model_lane: String,
 +    pub provider: String,
 +    pub model: String,
@@ -635,7 +663,7 @@ index 8205f50..c323335 100644
  }
  
  impl Task {
-@@ -169,6 +206,7 @@ pub struct TaskPatch {
+@@ -169,6 +208,7 @@ pub struct TaskPatch {
      pub human: Option<bool>,
      /// Task keys, comma-separated; it replaces the list.
      pub waits_on: Option<String>,
@@ -643,7 +671,7 @@ index 8205f50..c323335 100644
  }
  
  const STATUSES: [&str; 4] = ["todo", "doing", "review", "done"];
-@@ -258,10 +296,15 @@ impl Store {
+@@ -258,10 +298,15 @@ impl Store {
  
      /// Immediate, so concurrent writers queue up on the busy timeout instead of failing halfway.
      fn write<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -659,7 +687,7 @@ index 8205f50..c323335 100644
                  Ok(v)
              }
              Err(e) => {
-@@ -438,9 +481,9 @@ impl Store {
+@@ -438,9 +483,9 @@ impl Store {
      pub fn unlink_repo(&self, slug: &str, repo: &str) -> Result<Project> {
          let project = self.find_project(slug)?;
          let repo = repo_from_url(repo).unwrap_or_else(|| repo.trim().to_ascii_lowercase());
@@ -672,7 +700,7 @@ index 8205f50..c323335 100644
          if removed == 0 {
              return Err(Error::NotFound(format!("repo {repo} is not linked to project {}", project.slug)));
          }
-@@ -460,7 +503,10 @@ impl Store {
+@@ -460,7 +505,10 @@ impl Store {
              return Err(Error::Invalid("project name is empty".into()));
          }
          let project = self.find_project(slug)?;
@@ -684,7 +712,7 @@ index 8205f50..c323335 100644
          self.find_project(&project.slug)
      }
  
-@@ -469,7 +515,10 @@ impl Store {
+@@ -469,7 +517,10 @@ impl Store {
              return Err(Error::Invalid(format!("unknown color {color:?}; use one of: {}", PROJECT_COLORS.join(", "))));
          }
          let project = self.find_project(slug)?;
@@ -696,7 +724,7 @@ index 8205f50..c323335 100644
          self.find_project(&project.slug)
      }
  
-@@ -511,13 +560,16 @@ impl Store {
+@@ -511,13 +562,16 @@ impl Store {
      pub fn delete_project(&self, slug: &str) -> Result<Project> {
          let project = self.find_project(slug)?;
          // Tasks and comments go with it through ON DELETE CASCADE.
@@ -715,7 +743,7 @@ index 8205f50..c323335 100644
          FROM tasks t JOIN projects p ON p.id = t.project_id";
  
      fn task_row(r: &Row) -> rusqlite::Result<Task> {
-@@ -535,6 +587,8 @@ impl Store {
+@@ -535,6 +589,8 @@ impl Store {
              updated_at: r.get(7)?,
              comments: r.get(8)?,
              waiting_on: Vec::new(),
@@ -724,7 +752,7 @@ index 8205f50..c323335 100644
          })
      }
  
-@@ -684,19 +738,34 @@ impl Store {
+@@ -684,19 +740,34 @@ impl Store {
      }
  
      // One write, or an agent could take a task before it's human, or before it waits.
@@ -763,7 +791,7 @@ index 8205f50..c323335 100644
              )?;
              let id = c.last_insert_rowid();
              if let Some(keys) = &patch.waits_on {
-@@ -756,6 +825,12 @@ impl Store {
+@@ -756,6 +827,12 @@ impl Store {
          if let Some(s) = &patch.status {
              self.check_status(s)?;
          }
@@ -776,7 +804,7 @@ index 8205f50..c323335 100644
          self.write(|c| {
              let current = self.get_task(id)?;
              // Only what the patch changes is written, and only then is the task newer.
-@@ -764,10 +839,11 @@ impl Store {
+@@ -764,10 +841,11 @@ impl Store {
                  &format!(
                      "UPDATE tasks SET title = coalesce(?1, title), project_id = coalesce(?2, project_id),
                         human = coalesce(?3, human), tags = coalesce(?4, tags),
@@ -791,7 +819,7 @@ index 8205f50..c323335 100644
                  ),
                  params![
                      title,
-@@ -776,7 +852,8 @@ impl Store {
+@@ -776,7 +854,8 @@ impl Store {
                      tags,
                      patch.description.as_deref().map(str::trim),
                      id,
@@ -801,7 +829,7 @@ index 8205f50..c323335 100644
                  ],
              )?;
              if let Some(s) = &patch.status
-@@ -928,9 +1005,45 @@ impl Store {
+@@ -928,9 +1007,45 @@ impl Store {
      }
  
      pub fn next_task_matching(&self, project_id: Option<i64>, query: &str) -> Result<Option<Task>> {
@@ -848,7 +876,7 @@ index 8205f50..c323335 100644
              let sql = format!("SELECT t.id {todo} AND NOT {WAITING} ORDER BY t.position LIMIT 1");
              let id: Option<i64> = c.query_row(&sql, rusqlite::params_from_iter(values), |r| r.get(0)).optional()?;
              if let Some(id) = id {
-@@ -939,15 +1052,31 @@ impl Store {
+@@ -939,15 +1054,31 @@ impl Store {
                      &format!("UPDATE tasks SET status = ?1, position = ?2, updated_at = {NOW} WHERE id = ?3"),
                      params![to, position, id],
                  )?;
@@ -883,7 +911,7 @@ index 8205f50..c323335 100644
          Ok(task)
      }
  
-@@ -1007,15 +1136,21 @@ impl Store {
+@@ -1007,15 +1138,21 @@ impl Store {
  
      pub fn delete_comment(&self, id: i64) -> Result<Comment> {
          let comment = self.get_comment(id)?;
@@ -908,7 +936,7 @@ index 8205f50..c323335 100644
      }
  
      pub fn list_images(&self, task_id: i64) -> Result<Vec<Image>> {
-@@ -1036,7 +1171,10 @@ impl Store {
+@@ -1036,7 +1173,10 @@ impl Store {
              .query_row(&format!("{} WHERE id = ?1", Self::IMAGE_SELECT), [id], Self::image_row)
              .optional()?
              .ok_or_else(|| Error::NotFound(format!("no image {id}")))?;
@@ -920,7 +948,7 @@ index 8205f50..c323335 100644
          Ok(image)
      }
  
-@@ -1798,6 +1936,29 @@ mod tests {
+@@ -1798,6 +1938,29 @@ mod tests {
          assert_eq!(next("  ").as_deref(), Some("Not in the epic"));
      }
  

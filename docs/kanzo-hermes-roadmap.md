@@ -1,297 +1,101 @@
-# Kanzo · Hermes 실행 구조 개선 로드맵
+# Kanzo / Hermes 작업 공간 설계 로드맵
 
-설계 SSOT: 이 문서는 목표 구조, 설계 원칙, 단계별 완료 기준을 정의한다. 구현 진행률과 검증 이력은 [별도 진행 상태 문서](kanzo-hermes-status.md)에서 관리한다.
+이 문서는 Kanzo 태스크가 원격 Git 저장소 또는 허용된 로컬 저장소를 안전하고 재개 가능하게 사용하는 방식의 SSOT다. 실행 진척과 배포 revision은 [진행 상태](kanzo-hermes-status.md)에 기록한다. 현재 배포 동작은 [워커 안내](kanzo-agent-worker.md)에 기록한다.
 
-## 목표와 판단 원칙
+## 목표
 
-Kanzo에서 승인한 작업을 Hermes가 제한된 권한으로 실행하고, 결과·근거·실행 상태를 보존한다. 사용자는 프로젝트 카탈로그와 태스크 상태로 작업을 제어하고, 프로젝트를 추가할 때 배포 작업을 하지 않는다.
+작업 공간은 태스크와 독립된 지속형 자원이다. 하나의 Workspace에 같은 변경 흐름에 속한 여러 Kanzo 태스크를 연결하고, 순서대로 같은 브랜치와 파일을 이어서 사용한다. 사용자가 태스크를 멈추거나 사람 결정을 기다리게 해도 작업 파일과 맥락을 잃지 않고 재개해야 한다. PR 병합과 연결된 태스크 종료가 검증되면 파일과 브랜치를 자동 정리하고, Kanzo에는 작은 이력만 남긴다.
 
-우선순위는 성공한 작업당 처리 시간과 모델 사용량 감소, 취소·종료의 일관성, 재현 가능한 실행 환경, 운영 복잡도 감소다. 기본 실행 구조는 상주 Hermes executor와 작업별 도구 실행 격리로 정한다. Hermes가 기억과 회고를 유지하며 여러 실행을 처리하고, 저장소·명령·파일 접근은 해당 run의 도구 환경에서 수행한다. 성능상 우위는 기존 실행 경로와 같은 범위의 성공 작업을 비교해 확인한다.
+Git은 코드 변경의 기본 계약으로 유지한다. 기본 소스 공급자는 GitHub 저장소다. 로컬 Windows/WSL 저장소도 명시적으로 등록한 경로를 대상으로 같은 태스크 소유 작업 공간 계약을 제공한다. 로컬 작업을 위해 Kubernetes Pod에 컴퓨터 전체 파일 시스템을 마운트하지 않는다.
 
-Hermes의 학습 루프 보존을 실행 구조 선택의 선행 조건으로 둔다. 회고, 메모리 축적·검색, 경험 기반 스킬 생성·개선, 세션 간 연속성을 없애거나 매번 초기화하는 최적화는 채택하지 않는다. 태스크별 Hermes Job 전환은 기본 계획에서 제외한다. 상주 프로세스에서도 작업별 권한과 취소 경계를 검증해야 하며, 같은 HOME을 무제한으로 공유하는 것만으로 이를 해결했다고 보지 않는다.
+## 설계 결정
 
-다음 사용자 정책을 유지한다.
+- Kanzo 프로젝트 카탈로그는 활성화와 기본 실행 정책을 소유한다. 프로젝트별 배포는 만들지 않는다.
+- Kanzo 커스터마이징은 사용자가 관리하는 private downstream 저장소에서 유지하고, 공식 저장소는 `upstream` remote로 연결한다. 변경은 downstream에서 추적하고 필요한 upstream 변경만 선택적으로 가져와 충돌과 업데이트를 관리한다.
+- 각 Workspace는 `source kind + repository 또는 절대경로 + runner/OS + ref + resolved SHA`를 시작 전에 기록하고, 출처가 검증되지 않으면 모델을 호출하지 않는다.
+- 태스크의 소스 설정은 프로젝트 기본값을 상속하고 명시된 `repo`/`ref`만 덮어쓴다. 여러 저장소가 필요한 작업은 나중에 태스크에 저장소 목록과 역할을 지정하는 명시적 manifest로 확장한다.
+- Workspace는 안정적인 ID와 절대경로를 가진다. 여러 태스크가 하나의 Workspace에 연결될 수 있고, Workspace 하나에는 writer lease 하나만 허용한다. 실행 ID마다 새 checkout을 만들지 않는다.
+- 같은 변경 흐름에 속한 태스크만 Workspace를 명시적으로 공유하고 순차 실행한다. 독립 병렬 작업은 별도 Workspace와 브랜치를 사용한다.
+- 중단·대기·실패·리뷰 상태에서는 작업 디렉터리와 브랜치를 보존한다. 재개 시 저장소, 브랜치, 커밋, 변경 파일, 마지막 실행과 checkpoint를 먼저 확인한다. 예상하지 못한 변경은 덮어쓰지 않고 review로 멈춘다.
+- PR 병합, 연결 태스크 종료, lease 해제, clean worktree를 모두 확인한 뒤 Workspace worktree와 브랜치를 자동 삭제한다. 시간 기반 삭제는 하지 않는다. Kanzo와 RunLedger에는 source, SHA, PR, 종료 결과를 포함한 작은 tombstone만 남긴다.
+- Workspace PR이 병합되어 정리 조건을 충족하면 해당 원격 브랜치와 로컬 Workspace 파일을 삭제한다. 별도 보관 사본은 만들지 않는다. 추적에 필요한 종료 metadata만 보존한다.
+- 로컬 소스 경로는 alias 대신 사용자가 지정한 절대경로를 그대로 Kanzo에 저장·표시한다. OS/runner 종류도 함께 기록해 Windows 경로와 WSL 경로를 혼동하지 않는다. 경로 allowlist·사용자 권한·명시적 잠금으로 접근을 제한하며, 원본 working tree와 미커밋 변경은 보존한다.
+- 로컬 호스트 저장소에 접근하기 위해 Kubernetes Pod에 `C:\` 전체를 mount하지 않는다. 호스트 runner가 절대경로 아래에서 Workspace worktree를 관리한다.
+- read-only 실행도 기존 프로젝트 및 Hermes의 메모리·회고·스킬 기능을 유지한다. 코드 저장소 mount와 write 권한만 격리한다.
 
-- 모델 호출의 공통 경로는 LiteLLM이다. 로컬 모델과 추후 인증할 Codex·Anthropic은 준비된 경로만 사용하며 조용히 다른 provider로 전환하지 않는다.
-- 기본 모델 정책은 `provider: openai-api`, `model: iq_3s`, `reason: high`, context 65,536이다. 카탈로그 override와 실제 실행 설정을 일치시킨다.
-- 카탈로그 `doing` 프로젝트의 승인된 `todo` 태스크만 처리한다. `human`·선행 관계·waiting 조건을 존중한다.
-- 실패한 실행을 자동 재시도하지 않는다. 사람이 처리해야 하는 구체적인 선행 작업은 사람 카드로 만들고, 완료 이벤트에 따라 대기 작업을 다시 실행한다. 이는 무조건적인 실패 재시도와 구별한다.
-- 에이전트의 후속 제안은 `backlog`에 둔다. 사용자가 `todo`로 승격한다. backlog 수와 stale 카드 보관 기간을 제한하지 않으며 자동 삭제·보관하지 않는다.
-- 거절된 제안은 `declined`와 짧은 이유를 남겨 추적한다. 중복 검사는 해당 프로젝트의 관련 후보를 좁혀 수행한다.
-- 비밀값은 Vault/VSO로 전달한다. Git, 카드 본문, 로그, 메모리에 비밀값을 기록하지 않는다.
-
-## 목표 구조와 책임
+## 작업 상태 흐름
 
 ```text
-Kanzo 카탈로그·태스크
-  → 변경 이벤트 수신 / 시작·재연결 시 상태 대조
-  → dispatcher + 영속 실행 장부
-  → 인증된 내부 executor API
-      → 상주 Hermes executor / 명시적인 세션·프로필 라우팅
-      → run별 도구 실행 경계 → 소스·명령·파일·검증 → 산출물 보존
-      → LiteLLM / 목적별 MCP / Hermes Langfuse 관측
-      ↔ 프로필·프로젝트의 영속 기억 / 학습 스킬 / 세션 이력 / 회고 상태
-  → 결과 게시 장부 → Kanzo 최종 상태·요약 반영
-
-Hermes Desktop → 상시 serve → 명시적으로 지정한 Hermes 상태 소유자
+Kanzo Todo -> workspace 연결/생성 -> task claim + workspace lease
+           -> source/ref 검증 -> workspace 생성 또는 재개
+           -> Hermes 실행 -> checkpoint + commit/diff/PR
+           -> Review 또는 사람 선행 작업 대기 -> 같은 workspace에서 재개
+           -> PR 병합 + 모든 연결 task 종료 확인 -> worktree/branch 삭제
+           -> Kanzo/RunLedger에 작은 종료 이력 유지
 ```
 
-| 구성요소 | 맡길 책임 |
-|---|---|
-| Kanzo | 사용자 승인, 프로젝트 활성 여부, 태스크 순서·선행 관계, 결과 열람 |
-| dispatcher | claim, 실행 소유권, 모델 자원 입장 제한, 취소, 실행 종료 확정, 결과 게시 |
-| executor API | dispatcher의 인증된 run 요청을 검증하고 Gateway 세션·제출 이벤트·정확한 취소를 중계 |
-| 상주 executor | 프로필별 기억·회고·세션 상태를 소유하며 run별 실행 컨텍스트 관리 |
-| 작업 도구 실행 경계 | 고정된 소스·권한으로 명령·파일·검증 도구를 실행하고 run별 프로세스·산출물 관리 |
-| Hermes | 도구 사용·전문가 위임·결과 제출과 함께 기존 회고·기억·스킬 학습 루프 수행 |
-| Desktop serve / Gateway | 사용자 대화·설정 관리. 자동 태스크와 세션을 구분하고 같은 프로필의 상태 소유권을 일치시킴 |
-| Langfuse | LLM·도구·위임 관측. 실행 상태의 유일한 저장소로 사용하지 않음 |
+Kanzo 이벤트는 깨우기 신호이고 Kanzo 카드와 workspace registry가 진실의 원천이다. 이벤트가 중복되거나 누락되어도 같은 태스크를 두 번 쓰지 않도록 claim과 workspace lease를 원자적으로 조정한다. 실패 자동 재시도는 하지 않는다. 사람이 문제를 해결해 Todo로 돌리면 같은 task workspace에서 명시적으로 재개한다.
 
-dispatcher는 Kanzo 부모 작업을, Hermes는 허용된 실행 내부 전문가 작업을 관리한다. 하나의 자식 작업을 여러 dispatcher가 동시에 실행시키지 않는다. Hermes Kanban을 지속적인 협업에 사용할 때는 보드 경로와 실행 소유자를 명시하고, Desktop Gateway와 executor가 같은 카드를 중복 실행하지 않게 한다.
+## 단계
 
-dispatcher와 상주 Hermes host는 배포·종료 수명을 분리하되 dispatcher가 Hermes Gateway 프로토콜이나 프로필 HOME에 직접 연결하지 않는다. Hermes v0.23.1의 canonical Gateway attach는 프로필의 로컬 control socket에서 일회용 티켓을 발급받은 다음 WebSocket에 연결한다. `HERMES_TUI_GATEWAY_URL`은 그 인증 경계를 대체하는 일반 원격 API가 아니다. Gateway와 같은 상태 소유자 안에 내부 executor API를 두고, 그 API만 로컬 티켓 발급·session 생성·prompt admission·이벤트 전달·정확한 취소를 수행한다. dispatcher에는 Gateway의 자격 증명, Hermes HOME, Kubernetes sandbox 권한을 주지 않는다.
+### 0. 소스 라우팅의 정확성 — 진행 중
 
-내부 executor API 계약은 `task_id`, `run_id`, profile, provider/model/reasoning, prompt, broker lease identity를 요청 단위로 검증한다. API는 동일 run의 중복 session/submit을 거부하고 session ID와 admission receipt를 dispatcher에 먼저 반환해 dispatcher가 영속 장부에 기록한 뒤 prompt 이벤트를 소비하게 한다. 실행 결과는 API 응답 스트림으로 전달하며, 취소 요청은 dispatcher가 영속 장부에서 읽은 session·admission·execution generation을 그대로 지정한다. executor의 API credential은 Vault/VSO에서만 주입하고, 일반 Desktop 세션에는 자동 실행 client env나 sandbox provider scope를 적용하지 않는다. API 재시작 시 실행을 자동 재제출하지 않으며 Gateway 상태와 run ledger를 대조해 사람 검토 대상으로 복구한다.
+- 프로젝트 카드의 기본 저장소와 ref를 파싱하고 검증한다.
+- 태스크 카드의 저장소/ref override를 프로젝트 기본값과 병합한다.
+- checkout 전에 원격 저장소와 ref를 확인하고 resolved SHA를 ledger와 Kanzo 댓글에 남긴다.
+- Babmukdang처럼 여러 저장소가 섞여 잘못된 저장소를 검사하던 태스크는 올바른 source/ref가 확인되기 전까지 실행하지 않는다.
 
-상주 Hermes host 한 개와 자동 태스크 슬롯 한 개로 시작한다. 역할 프로필 수만큼 host를 복제하지 않는다. 설치 버전의 multiplex·secret scope·상태 저장 동작을 검증한 뒤 프로필을 라우팅한다. Desktop과 자동 실행이 같은 프로필을 사용할 때 상태 소유자를 공유할 수 있는지 확인하고, 같은 SQLite 파일을 독립된 두 host가 직접 쓰는 구조를 피한다. serve endpoint를 분리하는 것과 Hermes 엔진을 하나 더 띄우는 것은 별개의 결정이다.
+완료 조건: task-level repo/ref가 실제 checkout과 동일하고, 잘못된 입력이나 존재하지 않는 ref는 모델 호출 전에 명확히 중단된다.
 
-로컬 모델 자원은 사용자 대화·자동 태스크·전문가 위임·회고가 함께 사용하므로 공통 입장 제어에 포함한다. 상주 host가 하나라는 이유로 모든 세션을 한 대화에 합치거나, 실행 중인 사용자 응답을 강제 중단하지 않는다.
+### 1. 공유 가능한 지속형 Git Workspace
 
-## Hermes 학습 기능 보존 계약
+- 태스크와 별도인 Workspace ID/레코드를 두고, 여러 Kanzo task가 같은 Workspace에 연결되도록 Kanzo UI와 MCP를 확장한다.
+- 현재 dispatcher의 `emptyDir` workspace를 PVC 기반 저장 공간으로 전환하고 용량·inode·가용성 지표를 추가한다.
+- source identity, 절대경로 또는 repo, runner, base SHA, branch, worktree path, linked task IDs, lease/run ID, last-known Git status를 가진 원자적 registry를 둔다.
+- Workspace별 안정 경로를 재사용하고, 같은 Workspace의 태스크는 순차적으로 같은 브랜치에서 진행한다. 독립 태스크는 별도 Workspace를 사용한다.
+- claim에서 workspace lease를 획득하고 종료 시 해제한다. 비정상 종료 뒤에는 lease 만료만으로 dirty workspace를 덮지 못하게 process 및 Git 상태를 reconciliation한다.
+- 태스크 상태와 commit/PR 링크를 Kanzo에 기록한다. waiting/review로 가도 workspace는 유지한다.
 
-실행 환경을 매번 빈 에이전트로 만드는 방식은 사용하지 않는다. 실행별로 격리하는 것은 checkout, 임시 파일, 도구 자식 프로세스와 활성 실행 식별자다. 기억·회고·학습 스킬·검색 가능한 과거 세션·인계 상태는 상주 executor가 소유하는 영속 상태이며 작업 도구 환경 정리와 함께 삭제하지 않는다.
+완료 조건: 연결된 태스크들이 같은 Workspace를 순차 공유하고, 별도 태스크는 같은 checkout을 동시에 수정할 수 없다. Pod 재시작 후에도 파일·Git 상태가 유지된다.
 
-설치된 Hermes의 `agent/background_review.py`는 턴 후 별도 agent로 기억과 스킬의 저장·갱신 여부를 검토한다. 현재 메모리 provider는 OMH다. 따라서 Hermes 도구에서 기억을 썼다는 사실, OMH가 기록을 수용했다는 사실, 다음 실행의 검색·컨텍스트에 사용됐다는 사실을 각각 확인한다. 상류 main의 기능 설명을 설치된 버전의 활성 상태로 간주하지 않는다.
+### 2. 정지·재개·검토 수명주기
 
-| 기능·상태 | 유지할 동작 | 영속화·권한 정책 |
-|---|---|---|
-| 회고·자기 개선 | 작업 경험을 바탕으로 원인·개선 방법을 정리하고 기억·스킬을 갱신 | 기존 Hermes 회고 hook과 설정을 유지하고 시작·완료·대기 상태를 추적 |
-| 메모리 | 기존 기억 검색, 확인된 사실·선호·결정·경험 저장 및 정정 | 역할·프로젝트·사용자 scope를 명시한 영속 provider 사용 |
-| 스킬 학습 | 새 스킬 생성, 사용 중 기존 학습 스킬 개선, 다음 실행에서 재사용 | 배포 기본 스킬과 별도로 쓰기 가능한 학습 스킬 저장소 제공 |
-| 세션 연속성 | 과거 세션 검색·요약·인계·지원되는 resume 기능 | 세션 ID와 run ID를 구별하고 검색 가능한 이력을 영속 상태 소유자가 보존 |
-| OMH 정리·회고 | 설치 버전의 admission·정리·dreaming 정책 유지 | 준비·승인·실제 쓰기를 구분. reminder를 자동 consolidation으로 간주하지 않음 |
-| ReadOnly 조사 | 조사 결과를 기억하고 재사용 절차를 학습 | 프로젝트 소스 쓰기는 금지하되 허용된 메모리·학습 스킬·회고 저장소에는 쓰기 허용 |
+- 사람 선행 카드가 완료되면 원 태스크는 새 run ID로 재개하지만 같은 Workspace와 branch를 사용한다.
+- run별 로그와 Kanzo 요약을 Workspace에 연결한다. 다음 실행은 마지막 checkpoint와 dirty diff를 확인한다.
+- dirty state, stale lease, 원격 branch 이동, 사용자가 수동 수정한 Workspace를 감지해 덮어쓰기 대신 review에 보낸다.
+- PR 병합 여부는 GitHub의 실제 상태로 확인한다. Kanzo 카드의 Done만으로 merge를 추정하지 않는다.
+- 병합된 PR의 head SHA, 모든 연결 task의 종료 상태, lease 해제, clean worktree를 확인한 뒤 worktree와 브랜치를 삭제하고 tombstone을 기록한다.
 
-기억 저장과 학습 스킬 갱신마다 새로운 사람 승인을 일괄 추가하지 않는다. 이미 설정된 Hermes·OMH의 승인 및 수용 규칙을 존중한다. 학습으로 생긴 변경의 출처·버전·되돌리기 경로를 기록하며, 에이전트가 역할 권한이나 배포용 플러그인 코드·클러스터 설정을 임의로 바꾸는 권한과 혼동하지 않는다.
+완료 조건: 취소, 사람 대기, 워커 재시작, review 전환에서 같은 Workspace로 안전하게 재개되고, 병합 전에는 삭제되지 않으며 완료 후에는 작업 파일과 브랜치가 정리된다.
 
-배포 기본 스킬·플러그인 코드는 버전을 고정하지만, 사용자·에이전트가 학습하는 스킬 자료는 갱신 가능해야 한다. 실행 시작 시 사용한 버전을 기록하되, Hermes가 지원하는 실행 중 스킬 개선을 막지 않는다. 동일 스킬을 동시에 바꾸는 경우 상태 소유자가 갱신을 조정하고 변경 이력을 남긴다.
+### 3. 로컬 Windows/WSL 소스 공급자
 
-배포 기본 스킬 자체를 개선하는 경로도 유지한다. 기본 배포본을 보존하면서 수정본을 영속 학습 영역에 작성하고, 설치 버전이 지원하는 우선순위·갱신 방식으로 실제 로드되게 한다. overlay나 같은 이름의 스킬 선택 규칙은 구현 전에 확인한다. 읽기 전용 기본본만 계속 선택되어 개선 내용이 무시되면 기능 보존 실패로 본다.
+- Kanzo Workspace 설정에 사용자가 선택한 저장소의 절대경로, OS/WSL 종류, runner ID, 허용 작업을 저장한다. 등록 경로가 없거나 Git root가 바뀌면 실행 전에 중단한다.
+- 호스트 runner가 Workspace lease를 받고, 지정 경로에서 Workspace별 Git worktree를 만들며 연결된 태스크가 순차 사용한다.
+- 실행 채널은 인증된 outbound 연결을 사용한다. runner는 Kanzo/MCP 작업 권한과 코드 실행 권한을 분리하고 최소 권한으로 동작한다.
+- 원본 worktree가 dirty면 자동 stash/reset하지 않는다. 필요하면 별도의 명시적 snapshot/import 흐름을 제공한다.
+- 전원 종료나 호스트 오프라인 상태는 큐 상태로 보이며 자동 반복 실행하지 않는다.
 
-상주 Hermes의 프로필 HOME과 run별 도구 환경의 HOME을 구분한다. 전자는 기억·세션·스킬을 보존하고, 후자는 제한된 명령 환경과 scratch를 제공한다. 도구 컨테이너에 원본 Hermes HOME이나 전체 자격 증명을 마운트하지 않는다. 프로필별 native 저장·검색·동시성 계약에 맞게 상주 host가 상태를 소유한다.
+완료 조건: 등록된 로컬 repo에서만 실행되고, host offline/권한 거부/충돌이 Kanzo에 명확히 보이며 사용자 원본 파일이 변경되지 않는다.
 
-작업 종료와 학습 완료는 별도로 관찰한다. 정상 종료 때 회고가 끝날 정리 시간을 주고, 길어지면 설치 버전이 지원하는 인계·재개 경로를 이용해 영속 상태 소유자가 이어서 처리한다. hook 자체의 재개를 지원하지 않으면 검토할 최소 근거와 미완료 회고 요청을 보존하고 명시적인 회고 작업으로 처리하는 방식을 검증한다. 프로세스를 죽인 뒤 회고가 자동으로 끝났다고 기록하지 않는다.
+### 4. 여러 저장소, 로컬·원격 통합과 운영 검증
 
-취소·timeout에서도 이미 저장된 학습은 보존하고 미완료 여부를 표시한다. 회고 처리 때문에 실패한 Kanzo 원 작업을 자동 재실행하거나, 취소한 원 작업의 도구 실행을 되살리지 않는다. 회고와 사용자 작업이 같은 GPU를 쓰면 동일한 모델 입장 제어에 포함하고, 회고의 대기·사용량을 별도로 측정한다. 성능 개선을 이유로 회고 예산을 0으로 설정하거나 조용히 비활성화하지 않는다.
+- 태스크 source manifest로 API/클라이언트 등 여러 repo를 각각 절대경로 또는 repo/ref/SHA로 고정한다.
+- 각 저장소의 commit/PR과 Workspace에 연결된 Kanzo 태스크 결과를 연결한다. 부분 성공은 완료로 표시하지 않는다.
+- workspace 용량, lease, runner 연결, dirty worktree, merge 검증, 자동 정리 결과를 Grafana/Kanzo에서 확인한다.
+- 백업·복구와 dispatcher 장애 복구 절차를 검증하고 GitOps를 통해 점진 배포한다.
 
-ai-memory는 검증된 장기 공유 지식의 역할을 유지한다. Hermes/OMH의 모든 대화·기억을 자동 복제하거나 양쪽에 같은 사실을 무조건 이중 기록하지 않는다. 공유할 지식에는 출처와 scope를 연결하고 native 기억의 검색·정정 경로를 유지한다.
+완료 조건: 원격 단일 repo, 로컬 단일 repo, 다중 repo 각각의 중단·재개·리뷰·병합·복구 흐름이 증거와 함께 통과한다.
 
-## 단계별 적용
+## 명시적으로 하지 않는 것
 
-단계는 순차적인 구현·검증 흐름과 각 단계의 완료 기준을 정의한다. 실제 진행 현황은 별도 상태 문서에서 관리한다.
+- 에이전트가 컴퓨터의 임의 파일에 접근하도록 허용하지 않는다.
+- 태스크마다 클러스터 서비스나 Hermes 배포를 만들지 않는다.
+- dirty workspace, 미병합 브랜치, 미완료 연결 task는 자동 삭제하지 않는다.
+- PR 병합과 연결 태스크 종료가 확인된 workspace의 파일과 브랜치는 자동 정리한다. 완료 이력만 보존한다.
+- 테스트되지 않은 완료를 선언하거나 실패한 태스크를 자동 재시도하지 않는다.
 
-### 0. 기준선과 실행 계약 확정
+## 관련 근거
 
-작업:
-
-- 실제 사용 중인 provider·model·reason·context·프로필·스킬·플러그인·도구 권한을 값 노출 없이 실행 manifest로 기록한다.
-- 대기, 준비, 모델 요청, 도구 실행, 컨텍스트 처리, 결과 저장·게시 시간을 구분한다.
-- 리소스 사용량과 CPU 제한 영향을 실행 중에 측정한다. idle 스냅샷과 requests·limits를 구별한다.
-- 작업의 소스 필요 여부, 수정 권한, 산출물, 수락 기준을 명시한다. 제목·과거 댓글의 단어로 실행 유형을 추론하는 의존성을 줄인다.
-- 설치 버전에서 회고 hook, 메모리 provider 쓰기·검색, 스킬 생성·갱신, 세션 검색·resume의 지원·활성 상태와 영속 경로를 조사한다.
-
-완료 기준:
-
-- 성공·실패 실행을 동일한 지표로 비교할 수 있고, 유효 설정의 출처와 버전을 추적할 수 있다.
-- 인증되지 않은 provider와 허용되지 않은 모델은 모델 호출 전에 명확한 원인으로 중단된다.
-- 45분 실패 실행을 정상 처리 시간 기준선으로 사용하지 않는다.
-- 현재 활성 학습 기능과 데이터 경로의 목록이 있고, 제안 구조가 이를 보존하는지 판단할 수 있다.
-
-### 1. 소스 준비·입력·산출물 수정
-
-작업:
-
-- 저장소 준비를 `is_code`와 분리한다. 소스가 필요한 조사·리뷰도 repo와 고정 commit SHA를 준비한다.
-- 실행 경로를 `project/task/run` 단위로 구분한다. Windows의 미커밋 파일은 자동 포함하지 않는다.
-- Git 객체 캐시의 fetch·정리는 준비 담당자가 소유한다. 실행 디렉터리는 분리하고, 에이전트가 공유 캐시나 공용 Git metadata를 수정하지 못하게 한다.
-- ReadOnly 소스와 쓰기 가능한 scratch·출력 경로를 나눈다. 소스에 쓰는 테스트·빌드에는 별도 작업 복제본과 명시적 권한 정책을 적용한다.
-- Graphify 분석에는 인덱스의 revision을 확인한다. checkout과 다른 revision이면 해당 한계를 결과에 표시한다.
-- 입력을 현재 요구사항·수락 기준·필요한 결정·직전 인계로 축약한다. 전체 댓글은 필요할 때 조회한다.
-- #18 유형의 인벤토리는 결정적인 수집 스크립트로 JSON을 만들고 모델이 근거를 읽어 제안한다.
-- 결과 전체를 영속 경로에 저장한 뒤 Kanzo에는 요약과 산출물 위치를 게시한다. 무조건적인 5000자 절단을 제거한다.
-
-완료 기준:
-
-- 저장소가 필요한 ReadOnly 작업도 정확한 commit의 소스 본문을 읽는다.
-- 같은 repo의 두 실행이 파일이나 branch를 덮어쓰지 않는다.
-- 성공·실패·취소 후에도 이미 보존한 산출물을 확인할 수 있다.
-- 긴 결과가 손실되지 않고 댓글 이력 증가가 다음 실행 입력을 무제한으로 키우지 않는다.
-
-### 2. 역할 프로필·실행 상태·공유 데이터 분리
-
-작업:
-
-- 역할 프로필의 설정과 영속 학습 상태를 상주 executor에 연결한다. run별 도구 HOME에는 임시 상태를 두고, 검색 가능한 세션 이력·메모리·회고·학습 스킬은 Hermes 상태 소유자를 통해 사용한다.
-- sandbox backend 선택은 프로세스 전역 `TERMINAL_ENV` 변경으로 전달하지 않는다. 상주 Gateway의 프로필별 terminal scope를 이용하고, Desktop 세션에 설정이 번지지 않도록 Kanzo 자동 작업 전용 프로필을 둔다. provider·model·reasoning은 세션 생성 요청의 실행 override로 전달한다.
-- 검증된 Hermes·OMH·플러그인 의존성을 런타임 준비 단계에서 고정한다. 태스크 시작 때 설치·복구·전체 doctor를 반복하지 않는다.
-- 배포 기본 스킬·플러그인 코드는 버전을 고정하고, 학습 스킬은 쓰기 가능한 영속 자료로 제공한다. 사용자 설정 변경은 새 실행에 반영하며 native 스킬 개선은 버전·출처를 기록해 허용한다.
-- 전체 원본 HOME의 쓰기 가능한 마운트를 제거한다. 필요한 설정·선별된 인증·공유 데이터만 전달한다.
-- Vault/VSO 키가 실제 프로필 secret scope에서 보이는지 검사한다. OAuth는 provider별 인증 프로필과 갱신 경로를 설계하며 `auth.json` 전체 복사를 일반 해법으로 삼지 않는다.
-- OMH·ai-memory의 프로젝트·사용자 scope를 명시한다. 세션 DB와 검증된 장기 지식을 같은 공유 정책으로 취급하지 않는다.
-- Hermes Kanban의 공유 보드와 dispatcher 소유권을 명시한다. 별도 HOME이 자동으로 같은 보드에 연결된다고 가정하지 않는다.
-
-완료 기준:
-
-- 동일 역할의 일반/ReadOnly 실행이 같은 설정 버전을 사용하면서 세션 상태는 구분된다.
-- ReadOnly 실행이 소스와 관리 설정을 수정할 수 없고 scratch·산출물·허용된 기억·학습 스킬·회고 작성은 가능하다.
-- 공유해야 하는 스킬·지식·보드를 의도한 범위에서 함께 사용한다.
-- SDK 누락, secret scope 누락, unattended 도구 승인 요구를 모델 호출 전에 발견한다.
-- 실행 종료·Pod 교체·ReadOnly와 일반 실행 전환 후에도 이전 학습과 세션을 검색할 수 있다. 프로필 동기화가 학습 스킬을 원본으로 덮어쓰지 않는다.
-
-### 3. 영속 실행 상태와 이벤트 처리
-
-작업:
-
-- 단일 dispatcher와 영속 실행 장부로 시작한다. 다중 replica가 필요해지기 전 새 DB 서비스를 필수로 추가하지 않는다.
-- `task_id`, `run_id`, 실행 소유권·lease, 소스 SHA, 설정 버전, 산출물 위치, 종료 이유, 결과 게시 상태를 저장한다.
-- 상태는 `queued → preparing → running → finalizing → succeeded`로 관리하고 `cancel_requested`, `cancelled`, `failed`, `timed_out`, 사람 선행 작업 대기를 구분한다.
-- Kanzo 상태는 구조화된 JSON으로 읽고, 사람용 출력 문구와 댓글을 제어 프로토콜로 사용하지 않는다.
-- 이벤트는 작업을 다시 확인하는 신호로 취급한다. 중복·합쳐진 이벤트를 허용하고, 시작·재연결 시 상태를 대조한다. 서버가 replay를 지원하면 cursor를 저장하고, 지원하지 않으면 누락 구간을 상태 대조로 보완한다.
-- Kanzo claim과 실행 장부 사이의 장애 구간을 복구할 수 있게 한다. 조건부 갱신 등 필요한 Kanzo API 지원 여부를 구현 전에 확인한다.
-- 같은 run의 결과 재게시, 오래된 run의 최종 상태 덮어쓰기, 동시에 두 실행이 같은 태스크를 소유하는 일을 막는다.
-- 사람 카드 완료 후 새 실행을 만들 때 재사용 가능한 산출물을 명시적으로 인계한다. 살아 있던 프로세스가 그대로 재개되는 것으로 표현하지 않는다.
-
-완료 기준:
-
-- 이벤트 중복·연결 재수립·dispatcher 재시작에도 작업을 놓치거나 중복 실행하지 않는다.
-- `review + human=true` 취소 신호가 정확한 활성 run에 전달되고 사용자의 최신 카드 상태를 보존한다.
-- 실행 재시도 없이 결과 게시만 재개할 수 있다.
-- 주기적인 전체 태스크 폴링 없이 이벤트 및 복구 시 상태 대조로 동작한다.
-
-### 4. 상주 Hermes executor와 작업 도구 격리
-
-작업:
-
-- dispatcher와 상주 Hermes host의 배포·종료 수명을 분리한다. 태스크마다 CLI가 별도 Gateway를 자동 생성하는 경로를 대체한다.
-- Hermes의 로컬 Gateway control socket을 dispatcher에 노출하지 않고, 인증된 내부 executor API를 통해 session 생성·prompt submit/이벤트·정확한 취소를 요청한다. API는 상주 Gateway와 프로필 상태를 소유하는 runtime 안에 두며 dispatcher는 Hermes HOME을 마운트하지 않는다.
-- API의 task/run/profile/model/sandbox lease 검증, submit receipt 선기록, 중복 요청 차단, 연결 단절 후 상태 대조 계약을 정의한다. API 재시작이나 HTTP reconnect를 모델 요청 자동 재시도로 사용하지 않는다.
-- 설치 버전의 세션 생성·프로필 라우팅·run 대상 취소 API와 도구 backend 확장 지점을 먼저 확인한다. 필요한 기능이 없으면 adapter 변경 범위를 명시한다. 지원을 확인하기 전 원격 Gateway의 도구가 컨테이너 권한을 상속한다고 가정하지 않는다.
-- Kanzo 자동 실행마다 Gateway에 새 Hermes session을 만들고 canonical `session.create` → `prompt.submit` 흐름을 사용한다. 응답의 `session_id`·`execution_generation`과 admission receipt를 `task_id`·`run_id`·lease에 연결하고, 실행 취소는 해당 generation에 `session.interrupt`를 보낸다. 큐에 대기 중인 제출만 취소할 때는 해당 admission의 `prompt.cancel`을 쓴다.
-- terminal provider에는 Gateway session key가 오며 Kanzo `run_id`가 직접 오지 않는다. dispatcher/broker가 생성된 session과 task/run/lease의 매핑을 등록하고, 모든 sandbox 생성·명령 실행·결과 반환에서 이 매핑과 현재 lease를 확인한다. 여러 delegate는 Hermes가 부모의 환경 키를 공유시키므로 같은 run sandbox와 권한을 상속한다.
-- Hermes 환경 캐시의 resolved key와 세션 종료 cleanup 호출 키가 다를 수 있다. 명시적 run 완료·취소 cleanup, gateway 세션 종료 cleanup, 만료된 sandbox를 회수하는 broker reaper를 함께 구현하고, 한 경로의 실패가 영구 sandbox 누수로 이어지지 않게 한다.
-- sandbox Pod는 별도 namespace의 broker가 고정 템플릿으로 생성·삭제한다. Gateway와 worker의 ServiceAccount에는 Kubernetes 자격 증명이나 sandbox Pod 관리 권한을 주지 않는다. broker API는 run에 묶인 제한 토큰만 받고, Pod spec·이미지·ServiceAccount·Secret·hostPath를 호출자가 지정할 수 없게 한다.
-- 현재 `/workspace`는 Pod 내부 `emptyDir`이므로 sandbox와 직접 공유할 수 없다. worker가 경로·용량을 제한한 source archive와 Git SHA/checksum을 broker로 보내고, broker가 고정된 sandbox에 전달한다. 종료 후 sandbox는 변경·삭제 manifest와 output archive를 반환하고, worker는 경로 탈출·symlink·용량을 검증한 뒤 자신의 checkout에 적용한다. GitHub/Kanzo write credential은 sandbox에 보내지 않는다.
-- sandbox 내부 exec supervisor는 명령마다 별도 process group과 exec ID를 관리한다. 취소 시 원격 exec 연결 종료만 믿지 않고 해당 process group을 종료·회수하며, broker는 취소되었거나 lease가 만료된 run의 늦은 결과를 거부한다. sandbox namespace에는 기본 거부 네트워크 정책, Pod 보안 설정, resource quota와 TTL 회수를 적용한다.
-- sandbox는 기본적으로 직접 인터넷에 연결하지 않는다. lockfile 기반 검증에 외부 package restore가 꼭 필요한 경우, sandbox에서 임의 egress를 열지 않고 허용된 registry만 제공하는 내부 cache/proxy 경로를 둔다. proxy 자격 증명은 sandbox 환경에 넘기지 않고, repository script가 임의 URL로 우회할 수 없도록 네트워크 정책과 proxy allowlist를 함께 적용한다. 필수 restore 경로가 없으면 해당 검증을 통과했다고 보고하지 않는다.
-- broker와 실행 이미지는 Hermes 이미지와 분리하고 digest를 고정한다. broker는 K3s Pod lifecycle에 필요한 최소 권한만 가지며, 실행 이미지에는 셸·Hermes file tool이 요구하는 유틸리티와 실제 사용할 언어 런타임만 포함한다. 저장소의 Buildah→K3s image import 경로를 사용하고 Docker daemon 의존성을 추가하지 않는다.
-- native memory·스킬·회고는 상주 Hermes에서 실행하고, terminal·repository file·execute_code·도구가 실행하는 스크립트는 run별 격리 환경으로 라우팅한다. delegate가 쓰는 도구도 같은 run 권한을 상속한다.
-- ReadOnly에는 소스를 읽기 전용으로, scratch·산출물은 쓰기 가능하게 제공한다. 코드 변경에는 별도 쓰기 가능한 checkout을 제공한다. 공통 host의 로컬 terminal/file fallback을 차단하고, 경로·프로세스·네트워크·비밀 전달을 도구 실행 경계에서 강제한다.
-- `cwd` 변경이나 프롬프트 지시만으로 격리했다고 보지 않는다. 컨테이너·별도 도구 서비스 등 설치 버전과 호환되는 한 가지 방식부터 검증하고, run ID와 lease에 묶인 도구 요청만 허용한다.
-- MCP 서버의 외부 변경 권한은 로컬 파일 마운트로 제한할 수 없으므로 토큰·도구 allowlist로 별도 제어한다. 학습에 필요한 기억 쓰기는 좁은 provider/API 경로로 허용하고, 모든 MCP 쓰기 권한을 열지 않는다.
-- 준비된 런타임과 최소 초기화를 사용한다. 의존성 변경은 이미지 버전에, 워커 코드·설정 변경은 실행별 고정 버전에 반영한다. 프로필을 매번 복사·복구하지 않는다.
-- dispatcher 재시작·연결 끊김·executor 복구가 원 작업의 자동 재시도로 이어지지 않게 한다. lease와 실행 장부로 기존 실행의 상태를 확인한다.
-- 취소·deadline에는 해당 turn과 자식 도구·위임만 중단하고 다른 세션·상주 Gateway·기억을 유지한다. 취소된 run의 늦은 도구 요청과 결과 게시를 거부한다. init/reaper가 도구 자식을 회수하며 회고의 저장·인계 여부를 기록한다.
-- provider 요청의 취소와 실제 모델 서버의 연산 중단은 별도로 확인한다. API 취소 수락만으로 GPU 연산까지 끝났다고 표시하지 않는다. 특정 run만 종료할 수 없는 경우에는 이를 미해결 제약으로 남긴다.
-- 작업 예산과 종료·회고 정리 시간을 구분한다. 45분 제한의 무조건적인 연장을 성능 개선으로 취급하지 않는다.
-- 로컬 모델 입장 제한은 lane 이름이 아닌 실제 GPU·모델 서버 자원 기준으로 둔다. 초기 동시 실행 1을 측정 출발점으로 삼고, 외부 모델 경로는 별도 예산으로 관리한다.
-- CPU·메모리 requests/limits는 실행 peak와 제한 영향을 확인해 역할별로 조정한다.
-- run별 도구 환경 정리와 영속 학습·산출물·Kanzo 카드 보관 정책을 분리한다. 임시 환경 정리가 backlog/stale 카드 삭제로 이어지지 않게 한다.
-
-완료 기준:
-
-- 취소·timeout 후 해당 run의 활성 도구 자식이 남지 않으며, 정상 상주 Gateway와 다른 세션은 계속 사용할 수 있다.
-- 새 프로젝트를 카탈로그에 추가하면 재배포 없이 실행한다.
-- 코드 변경 배포가 Desktop 대화나 이미 실행 중인 run을 의도치 않게 종료하지 않는다.
-- 동시 실행 증가가 로컬 GPU의 모델 교체·메모리 경합을 악화시키지 않는다.
-- 도구 환경 정리 후에도 회고·메모리·스킬 갱신이 유지되고 다음 실행의 실제 사용까지 검증된다.
-- ReadOnly 에이전트가 terminal·file·execute_code·delegate 경로를 바꿔도 소스와 host 설정을 수정할 수 없다. 동시에 허용된 학습 쓰기는 정상 동작한다.
-- 기존 Gateway에 연결한 실제 도구가 run별 경로와 권한을 사용한다. 클라이언트 컨테이너만 격리하고 도구는 host에서 실행되는 우회 경로가 없다.
-
-### 5. 결과·추적·위임 계약 완성
-
-작업:
-
-- 결과는 실행기가 검증 가능한 형식으로 제출한다. 종료 코드, 결과 문서, 산출물, 수락 기준별 근거와 검증 한계를 함께 확인한다.
-- 파일 존재나 모델의 `done` 선언만으로 의미상 완료를 확정하지 않는다. 구현 완료와 사용자 리뷰 대기를 구분한다.
-- 위임 가능 여부·child budget·모델 예산을 시작 시 확정하고 Hermes에 전달한다. 독립 검증이 필요한 작업만 분할한다.
-- unattended 모드에서 승인받을 수 없는 명령 형태는 준비 단계에서 대체한다. 광범위한 승인 우회 옵션을 기본 해법으로 사용하지 않는다.
-- 모델·도구·하위 에이전트 관측은 Hermes 경로에서 생성한다. 같은 요청의 LiteLLM/Alloy 중복 export를 정리하되 Grafana 운영 메트릭은 유지한다.
-- Langfuse session은 태스크 단위로 묶는 것을 목표로 하고 run·turn·child를 metadata/관측으로 구분한다. 플러그인의 지원 범위와 필요한 어댑터 변경을 확인한다.
-- `uid:10000`을 사람 식별자로 간주하지 않는다. 확인된 요청자가 없으면 실행 계정 metadata로 표현한다.
-- 정상 종료 때 trace flush와 결과 저장을 수행한다. 프로세스 강제 종료·OOM·네트워크 장애에도 root span이 반드시 완성된다고 보장하지 않는다.
-- 실행 장부가 최종 상태를 보존하고 미완료 trace 또는 누락 관측을 표시한다. 가능한 경우 최종 상태 반영을 보완하되 LLM 실행을 다시 시작하지 않는다.
-
-완료 기준:
-
-- 성공·실패·취소·timeout마다 Kanzo, 실행 장부, 산출물, Langfuse를 같은 run ID로 대조할 수 있다.
-- 단일 모델 호출이 중복 generation으로 집계되지 않는다.
-- Langfuse가 일시적으로 불가해도 실행 상태와 산출물을 잃지 않으며, 미기록 사실을 확인할 수 있다.
-- 필요한 전문가 위임이 설정상 실행 불가능한 상태로 태스크를 시작하지 않는다.
-
-### 6. 상주 실행·학습·성능 검증
-
-먼저 좁힌 #18 인벤토리 작업으로 소스/설정 수집·제안·결과 제출을 검증한다. 클러스터 설정 변경은 수행하지 않는 검증 작업으로 사용한다. 이후 작은 수정 작업과 리뷰 작업으로 범위를 넓힌다.
-
-| 비교 항목 | 기록할 지표 |
-|---|---|
-| 처리 시간 | 승인→시작 대기, 준비, 모델 대기·처리, 도구, 결과 저장·게시 |
-| 모델 사용량 | 성공한 작업당 호출 수·입출력 토큰·컨텍스트 처리량 |
-| 학습 사용량 | 회고 대기·호출·토큰·저장 성공, 후속 작업의 기억·스킬 재사용과 중복 조사 감소 |
-| 자원 | executor 메모리 peak, CPU 사용·제한 영향, 디스크·캐시 사용량 |
-| 수명주기 | 취소 완료 시간, timeout 후 남은 프로세스, 재시작 후 상태 일치 |
-| 품질 | 수락 기준 충족, 근거 revision, 누락 산출물, 결과 절단 여부 |
-
-같은 모델·입력 범위·소스 SHA·출력 기준으로 비교하고 cold/warm cache를 구분한다. 작은 표본의 최대값을 p95라고 부르지 않으며 표본 수를 함께 기록한다. 합격할 기능 조건과 성능 회귀 허용치는 비교 실행 전에 정한다.
-
-필수 검증 시나리오:
-
-1. 소스가 필요한 ReadOnly 조사: 저장소 내용 불변, 근거와 산출물 제출.
-2. 수정 작업: 격리된 변경과 검증, 리뷰용 결과 및 PR 연결.
-3. 실행 중 취소: 동일 run만 종료, 최신 사용자 상태 보존, 자식 프로세스 잔류 없음.
-4. timeout·프로세스 오류: 실패 종료 확정, 산출물·장부 보존, 자동 재시도 없음.
-5. 이벤트 중복·재연결·dispatcher 재시작: 누락·중복 claim 및 중복 게시 없음.
-6. 사람 선행 카드 완료: 대기 해제 후 새 실행 시작, 이전 산출물의 명시적 인계.
-7. 추적 전송 장애: 작업 상태 보존, 미기록 표시, LLM 재실행 없음.
-8. 별도 프로젝트·프로필: 의도한 스킬·지식·보드만 공유하고 세션·checkout 충돌 없음.
-9. 학습 연속성: 작업 A의 회고·기억·스킬 개선을 작업 B에서 실제로 검색·사용하고 근거를 확인. Pod 교체 후에도 유지.
-10. ReadOnly 학습: 저장소는 불변이며 기억·회고·학습 스킬의 허용된 갱신은 성공.
-11. 학습 종료 처리: 느린 회고·사용자 취소·timeout에서 저장 완료/미완료를 구분하고 인계 중복·원 작업 재실행 없음.
-12. 공유 상태 갱신: 같은 스킬·기억의 동시 갱신이 소실되지 않고, 정정·변경 이력과 세션 검색이 보존됨.
-13. 세션별 취소: 자동 작업 취소 중 다른 Desktop 대화와 회고 상태를 유지하고, 취소된 run의 늦은 도구 요청을 거부.
-14. 도구 격리: 원격 Gateway·file·execute_code·delegate·스크립트에서 모두 동일한 ReadOnly 경계를 적용. host 직접 실행 fallback 없음.
-15. 상주 host 재시작: 세션·학습·미완료 회고를 보존하고 원 작업 자동 재시도와 중복 게시 없이 복구 상태 표시.
-
-같은 범위의 성공 작업으로 기존 one-shot 실행과 상주 실행을 비교한다. 초기화 재사용, 실제 host·Gateway 수, 누적 RSS·연결·자식 프로세스 증가, 세션 간 간섭을 함께 확인한다. 실제 병목과 필요가 확인될 때만 executor pool이나 추가 replica를 도입한다.
-
-성능 수치가 좋아도 학습 연속성이나 도구 격리 검증에 실패한 구현은 채택하지 않는다. 비교에는 후속 작업의 재조사 감소와 회고 비용도 포함한다. 현재 범위에서 태스크별 Hermes Job backend를 함께 구현하지 않는다.
-
-## 변경 적용과 운영 전환
-
-- 기존 Gateway·프로필·인증·Kanban 데이터를 보존하고, 새 구조의 저장 경로와 게시 계약을 먼저 정한다.
-- 메모리·학습 스킬·세션·미완료 회고를 이전 전에 목록화하고 보존한다. 성공적인 재사용을 확인하기 전 이전 HOME이나 상태 저장소를 삭제하지 않는다.
-- 활성 run을 종료시키는 배포는 피하고 완료·취소 상태를 확인해 전환한다. 명시적으로 승인된 긴급 종료는 별도로 기록한다.
-- 읽기 전용 조사 → 작은 수정 → 필요한 전문가 협업 순으로 적용 범위를 늘린다.
-- 기능 기준과 결과 보존을 확인한 뒤 이전 실행 경로를 제거한다. 실패한 새 run을 이전 경로로 자동 재실행하지 않는다.
-- 운영 문서의 현재 동작과 roadmap의 제안을 구현 단계마다 맞춘다. 완료 표시는 배포와 검증 근거를 연결한 뒤 변경한다.
-
-## 현재 범위에서 미루는 항목
-
-- 상주 executor pool, 자동 확장, 다중 dispatcher replica 및 이를 위한 새 DB 서비스.
-- 태스크별 Hermes Job backend와 전문가·DAG 노드별 Job 분산 실행.
-- 실패한 작업의 무조건적인 재시도와 자동 모델/provider fallback.
-- backlog 개수 제한, stale 카드 자동 만료, 산출물 보관 기간의 임의 단축.
-- 인증 전 Codex·Anthropic 사용 및 프로필 간 OAuth 상태의 일괄 공유.
-
-## 근거와 관련 문서
-
-- [현재 worker 운영](kanzo-agent-worker.md)
-- [LLM gateway 구성](ai-architecture.md)
-- [LiteLLM·Headroom·Langfuse 운영](litellm-headroom-langfuse.md)
-- [worker 구현](../platform/kanzo-agent-worker/worker.py)
-- [ReadOnly executor 구현](../platform/kanzo-agent-worker/readonly_executor.py)
-- [현재 배포와 볼륨·리소스 설정](../platform/kanzo-agent-worker/worker.yaml)
-- [Kubernetes requests·limits](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
-- [Langfuse Observations API](https://langfuse.com/docs/api-and-data-platform/features/public-api)
-- [Hermes 학습 루프 개요](https://hermes-agent.nousresearch.com/docs)
-- [Hermes 스킬·자기 개선](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills/)
-- [OMH 메모리 수용·정리 정책](https://github.com/rlaope/oh-my-hermes/blob/main/docs/MEMORY_CONTEXT.md)
+- 현재 배포/실행 계약: [Kanzo Hermes worker](kanzo-agent-worker.md)
+- 구현 및 배포 진행: [Kanzo Hermes status](kanzo-hermes-status.md)

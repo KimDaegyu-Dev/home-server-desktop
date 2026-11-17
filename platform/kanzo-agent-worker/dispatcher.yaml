@@ -233,8 +233,8 @@ spec:
             readOnlyRootFilesystem: true
       volumes:
         - name: workspace
-          emptyDir:
-            sizeLimit: 4Gi
+          persistentVolumeClaim:
+            claimName: kanzo-agent-workspaces
         - name: tmp
           emptyDir:
             sizeLimit: 512Mi

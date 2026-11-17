@@ -6,6 +6,7 @@ resources:
   - dispatcher.yaml
   - grafana-dashboard.yaml
   - dispatcher-state.yaml
+  - workspace-storage.yaml
   - dispatcher-state-binder.yaml
   - state-migration-job.yaml
   - hermes-dashboard-ingress.yaml
@@ -26,6 +27,7 @@ configMapGenerator:
     files:
       - worker.py=worker.py
       - run_ledger.py=run_ledger.py
+      - workspace_registry.py=workspace_registry.py
       - artifact_store.py=artifact_store.py
       - event_adapter.py=event_adapter.py
       - readonly_executor.py=readonly_executor.py

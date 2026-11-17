@@ -844,10 +844,56 @@ class Worker:
             self._workspace_registry = WorkspaceRegistry(self.state_dir / "workspace-registry.sqlite3")
         return self._workspace_registry
 
+    def _settle_interrupted_execution(self, run_id: str, task_id: str, fields: dict[str, Any]) -> bool:
+        """Stop or prove terminal the exact remote turn before releasing its workspace."""
+        session_id = fields.get("gateway_session_id")
+        if session_id is None:
+            return True
+        if not isinstance(session_id, str) or not session_id:
+            return False
+        admission_id = fields.get("prompt_admission_id")
+        if admission_id is not None and (not isinstance(admission_id, str) or not admission_id):
+            return False
+        generation = fields.get("execution_generation")
+        if generation is not None and (type(generation) is not int or generation < 0):
+            return False
+        if self.env.get("KANZO_EXECUTOR_API_URL", "").strip():
+            try:
+                executor = ExecutorClient(
+                    self.env.get("KANZO_EXECUTOR_API_URL", ""),
+                    self.env.get("KANZO_EXECUTOR_API_TOKEN", ""),
+                )
+                receipt = executor.cancel(
+                    task_id=task_id, run_id=run_id, session_id=session_id,
+                    admission_id=admission_id, execution_generation=generation,
+                )
+            except Exception as exc:
+                LOG.warning("Could not settle interrupted executor run %s (%s)", run_id, type(exc).__name__)
+                return False
+            if receipt.get("accepted") is not True:
+                LOG.warning("Executor did not confirm interrupted run %s as terminal", run_id)
+                return False
+        else:
+            active = {
+                "task_id": task_id, "run_id": run_id, "gateway_session_id": session_id,
+                "prompt_admission_id": admission_id, "execution_generation": generation,
+                "execution_generation_authoritative": generation is not None,
+                "executor_kind": "hermes_gateway_cli", "profile": fields.get("profile", "researcher"),
+            }
+            if not self._interrupt_gateway_session(active):
+                return False
+        try:
+            self.ledger.record_fields(run_id, {"gateway_interrupt_accepted": True})
+        except Exception:
+            LOG.exception("Could not persist restart interrupt receipt for run %s", run_id)
+            return False
+        return True
+
     def _reconcile_ledger(self) -> None:
-        """Route an interrupted run to human review before claiming more work."""
+        """Stop orphaned remote turns before moving work to human review."""
         if self._ledger_reconciled:
             return
+        all_reconciled = True
         for run in self.ledger.list_unfinished():
             run_id = run["run_id"]
             task_id = run["task_id"]
@@ -856,6 +902,10 @@ class Worker:
                     "orphan_reason": "worker restarted before a terminal outcome was recorded",
                 })
             fields = run.get("fields") if isinstance(run.get("fields"), dict) else {}
+            if not self._settle_interrupted_execution(run_id, task_id, fields):
+                all_reconciled = False
+                LOG.warning("Keeping interrupted run %s and its workspace lease until remote execution is settled", run_id)
+                continue
             self._recover_interrupted_workspace_lease(run_id, fields)
             self._record_langfuse_reconciliation(
                 run_id, fields.get("gateway_session_id"), run.get("created_at")
@@ -912,7 +962,7 @@ class Worker:
                 "kanzo_status_at_reconciliation": state or "unknown",
             })
             LOG.warning("Interrupted run %s for %s routed to human review", run_id, task_id)
-        self._ledger_reconciled = True
+        self._ledger_reconciled = all_reconciled
 
     def _recover_interrupted_workspace_lease(self, run_id: str, fields: dict[str, Any]) -> None:
         """Release only this interrupted run's lease while preserving its checkout."""
@@ -2882,6 +2932,8 @@ class Worker:
         self.client = McpClient(self.mcp_url, self.token)
         self.client.connect()
         self._reconcile_ledger()
+        if not self._ledger_reconciled:
+            return False
         self._reconcile_workspace_cleanup()
         if not self._executor_ready_for_claim():
             return False
@@ -3107,6 +3159,7 @@ class Worker:
                 "branch": active.get("branch"),
                 "workspace_id": active.get("workspace_id"),
                 "read_only": bool(task.route and task.route.read_only),
+                "profile": active.get("profile", "researcher"),
             })
             self._prepare_sandbox(task, checkout, source_sha, active)
             self.ledger.transition(run_id, "running")

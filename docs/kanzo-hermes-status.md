@@ -7,7 +7,7 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - 현재 배포 revision은 `0e4dc4e26886efda3777a22e1a31c9fb2801f567`다. Argo `kanzo-agent-worker`는 Synced/Healthy, dispatcher Deployment는 1/1 Ready이며 새 Pod에 push preflight 코드가 로드된 것을 확인했다. Kanzo는 `0.4.2-agent.5`, dispatcher는 `0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2` 이미지, `/workspace` PVC는 32Gi Bound다.
 - PR #1은 squash merge됐고 원격·로컬 작업 브랜치는 삭제했다. 병합된 변경에는 안전한 merged-branch cleanup, executor 재시작 reconciliation, latest catalog route parsing, GitHub push 사전 점검이 포함된다.
 - 실제 Kanzo task #143은 이벤트 경로로 claim되어 persistent workspace에 marker를 생성하고 로컬 commit까지 만들었지만, push 단계에서 403으로 종료되어 review에 남아 있다. marker와 브랜치는 보존되어 있고 재실행하지 않았다.
-- WSL runner의 `GITHUB_TOKEN`은 Windows `gh` 로그인 토큰과 다르다. Runner 토큰은 저장소 조회는 되지만 `git push --dry-run`을 거부한다. 새 preflight는 배포됐지만 이 토큰은 여전히 실패하므로 writable code task는 Hermes 시작 전에 중단될 것이다.
+- WSL runner의 `GITHUB_TOKEN`은 현재 Kubernetes/Vault 동기화 Secret과 일치하며 Windows `gh` 로그인 토큰과 다르다. Runner 토큰은 저장소 조회는 되지만 `git push --dry-run`을 거부한다. 따라서 오래된 runner 프로세스가 아니라 현재 주입 Secret의 쓰기 권한 문제다. 새 preflight는 배포됐지만 이 토큰은 여전히 실패하므로 writable code task는 Hermes 시작 전에 중단될 것이다.
 - Kanzo #140은 Todo에서 human 승인 카드 #141을 기다린다. #140 본문은 source manifest 구현을 요구하며 deploy/merge/push를 금지한다. #141은 사용자 승인 게이트로 유지한다.
 
 ## 단계 진행
@@ -136,4 +136,4 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 
 - After PR #1 merged, Argo synced revision `0e4dc4e26886efda3777a22e1a31c9fb2801f567`; the dispatcher rollout completed 1/1 Ready and the live container contains `_preflight_git_push`.
 - Invoked the deployed preflight directly with a temporary Git repository and the dispatcher’s current Vault-injected token. GitHub denied the dry-run branch push; the preflight returned before any Hermes call. No Kanzo task or remote branch was created.
-- The WSL runner token differs from the Windows `gh` login token. Before writable-task acceptance, update the Vault runner token with repository Contents write and Pull requests write, then test with a new canary ID. #143 remains review and must not be retried.
+- The running WSL process token matches the current Kubernetes/Vault-synced Secret (so this is not stale process state) and differs from the Windows `gh` login token. Before writable-task acceptance, update the Vault runner token with repository Contents write and Pull requests write, then test with a new canary ID. #143 remains review and must not be retried.

@@ -98,6 +98,7 @@ class McpClient:
         self.session_id: str | None = None
         self.request_id = 0
         self.tools: dict[str, dict[str, Any]] = {}
+        self.upstream_tools: dict[str, dict[str, str]] = {}
 
     def _post(self, message: dict[str, Any]) -> dict[str, Any] | None:
         headers = {
@@ -159,31 +160,43 @@ class McpClient:
         direct = [name for name in self.tools if name.lower().replace("-", "_").endswith(suffix)]
         if len(direct) == 1:
             return self._invoke(direct[0], args)
-
-        discovered = self.call("retrieve_tools", {
-            "query": f"Kanzo {suffix.replace('_', ' ')}",
-            "server": "kanzo",
-            "detail": "compact",
-            "limit": 20,
-        })
-        try:
-            start, end = discovered.index("{"), discovered.rindex("}") + 1
-            catalog = json.loads(discovered[start:end])
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise McpError(f"MCPProxy tool discovery returned invalid JSON for {suffix!r}") from exc
-        matches = [
-            tool for tool in catalog.get("tools", [])
-            if str(tool.get("id", tool.get("name", ""))).lower().endswith(":" + suffix.lower())
-        ]
-        if len(matches) != 1:
-            raise McpError(f"Expected one discovered Kanzo tool for {suffix!r}, found {len(matches)}")
-        tool = matches[0]
-        route = tool.get("call_with")
-        if route not in ("call_tool_read", "call_tool_write", "call_tool_destructive"):
-            raise McpError(f"MCPProxy returned an unsupported call route for {suffix!r}")
-        tool_id = tool.get("id", tool.get("name"))
-        return self.call(route, {
-            "name": tool_id,
+        normalized_suffix = suffix.lower().replace("-", "_")
+        tool = self.upstream_tools.get(normalized_suffix)
+        if tool is None:
+            discovered = self.call("retrieve_tools", {
+                "query": "Kanzo task list, claim, get, create, update, and comment",
+                "server": "kanzo",
+                "detail": "compact",
+                "limit": 20,
+            })
+            candidate = discovered.strip()
+            marker = "[mcpproxy:toon/v1]"
+            if candidate.startswith(marker):
+                candidate = candidate[len(marker):].lstrip()
+            try:
+                start, end = candidate.index("{"), candidate.rindex("}") + 1
+                catalog = json.loads(candidate[start:end])
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise McpError(f"MCPProxy tool discovery returned invalid JSON for {suffix!r}") from exc
+            tools = catalog.get("tools", [])
+            if not isinstance(tools, list):
+                raise McpError("MCPProxy tool discovery returned an invalid tools list")
+            for item in tools:
+                if not isinstance(item, dict):
+                    continue
+                tool_id = item.get("id", item.get("name"))
+                route = item.get("call_with")
+                if not isinstance(tool_id, str) or ":" not in tool_id:
+                    continue
+                if route not in ("call_tool_read", "call_tool_write", "call_tool_destructive"):
+                    continue
+                key = tool_id.rsplit(":", 1)[-1].lower().replace("-", "_")
+                self.upstream_tools[key] = {"id": tool_id, "route": route}
+            tool = self.upstream_tools.get(normalized_suffix)
+        if tool is None:
+            raise McpError(f"Expected one discovered Kanzo tool for {suffix!r}, found 0")
+        return self.call(tool["route"], {
+            "name": tool["id"],
             "args": args,
             "intent_reason": "Process the user-authorized Kanzo task",
             "intent_data_sensitivity": "internal",
@@ -202,6 +215,9 @@ class McpClient:
         result = reply.get("result", {})
         if result.get("isError"):
             raise McpError(f"MCP tool {name} returned an error: {result}")
+        structured = result.get("structuredContent")
+        if isinstance(structured, dict):
+            return json.dumps(structured, ensure_ascii=False, separators=(",", ":"))
         parts = [item.get("text", "") for item in result.get("content", []) if item.get("type") == "text"]
         return "\n".join(parts).strip()
 
@@ -1797,6 +1813,13 @@ class Worker:
     def _comment(self, task_id: str, body: str) -> None:
         self._call("add_comment", {"id": task_id, "body": body, "author": "Hermes Kanzo Worker"})
 
+    def _comment_progress(self, task_id: str, body: str) -> None:
+        """A transient progress-comment failure must never cancel a Hermes run."""
+        try:
+            self._comment(task_id, body)
+        except Exception as exc:
+            LOG.warning("Could not post progress comment for %s (%s)", task_id, type(exc).__name__)
+
     def _comment_result(
         self,
         task_id: str,
@@ -2371,7 +2394,7 @@ class Worker:
                         elif event.get("type") in ("error", "error_detail", "tool_error"):
                             diagnostics.append(json.dumps(event, ensure_ascii=False))
                         if time.monotonic() - last_progress >= 600:
-                            self._comment(task.task_id, "작업이 계속 실행 중입니다. 출력과 제한 시간을 확인하며 진행 중입니다.")
+                            self._comment_progress(task.task_id, "작업이 계속 실행 중입니다. 출력과 제한 시간을 확인하며 진행 중입니다.")
                             last_progress = time.monotonic()
                     result = "".join(parts).strip()
                     if not result:
@@ -2459,7 +2482,7 @@ class Worker:
                         self._heartbeat_sandbox(active)
                         last_heartbeat = now
                     if now - last_progress >= 600:
-                        self._comment(task.task_id, "작업이 계속 진행 중입니다. 아직 검증된 종료 결과는 없습니다.")
+                        self._comment_progress(task.task_id, "작업이 계속 진행 중입니다. 아직 검증된 종료 결과는 없습니다.")
                         self.heartbeat_path.touch()
                         last_progress = now
                     continue
@@ -2508,7 +2531,7 @@ class Worker:
                     self._heartbeat_sandbox(active)
                     last_heartbeat = now
                 if now - last_progress >= 600:
-                    self._comment(task.task_id, "작업이 계속 진행 중입니다. 아직 검증된 종료 결과는 없습니다.")
+                    self._comment_progress(task.task_id, "작업이 계속 진행 중입니다. 아직 검증된 종료 결과는 없습니다.")
                     self.heartbeat_path.touch()
                     last_progress = now
             remaining = deadline - time.monotonic()

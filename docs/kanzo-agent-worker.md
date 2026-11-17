@@ -48,3 +48,32 @@ Render the application with:
 ```bash
 kustomize build platform/kanzo-agent-worker
 ```
+# WSL local repository runner
+
+`platform/kanzo-agent-worker/run-host-runner.sh` runs the same Kanzo worker from WSL. It listens to the Kanzo SSE event stream and sends work to the resident Hermes executor and sandbox broker over Tailscale HTTPS. The in-cluster dispatcher only accepts catalog routes whose `runner_id` is `k3s`; a host runner accepts only its own runner ID.
+
+Configure a project catalog card with:
+
+```json
+{
+  "slug": "babmukdang-local",
+  "repo": "KimDaegyu-Dev/Babmukdang-Backend",
+  "source_kind": "local",
+  "source_path": "/mnt/c/Github/Babmukdang/backend",
+  "runner_id": "wsl-home",
+  "runner_os": "wsl",
+  "workspace_id": "babmukdang-backend",
+  "model_lane": "coding",
+  "provider": "openai-api",
+  "model": "coder",
+  "reason": "high",
+  "profile": "builder",
+  "read_only": false
+}
+```
+
+The source path must be the absolute WSL path to the Git root. The checkout must be clean, including untracked files, and its `origin` must match `repo`. The runner clones that source into its persistent workspace directory; it never edits or stashes the source directory. Linked tasks reuse the configured `workspace_id` and one writer lease.
+
+Start the runner after loading these Vault values into the WSL shell environment: `MCPPROXY_KANZO_AGENT_TOKEN`, `KANZO_EXECUTOR_API_TOKEN`, `KANZO_BROKER_WORKER_TOKEN`, `LITELLM_API_KEY`, and `GITHUB_TOKEN`. Set `KANZO_RUNNER_ID=wsl-home`, `KANZO_WORKSPACE` and `KANZO_WORKER_STATE_DIR` to absolute WSL paths, then run `bash platform/kanzo-agent-worker/run-host-runner.sh` from the repository root. The script binds its local wake/metrics endpoint to `127.0.0.1`; its defaults use `kanzo.tail5389e9.ts.net`, `mcp.tail5389e9.ts.net`, `hermes-executor.tail5389e9.ts.net`, and `kanzo-broker.tail5389e9.ts.net`.
+
+Local sources are currently supported on Linux/WSL runners. Windows drive paths and a native Windows runner are not accepted. The repo card's `repo` remains the GitHub remote used for PR publication.

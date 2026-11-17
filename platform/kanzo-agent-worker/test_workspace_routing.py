@@ -36,6 +36,29 @@ class WorkspaceRoutingTests(unittest.TestCase):
         )
         self.assertEqual(route.source_ref, "release/v2")
 
+    def test_catalog_local_source_keeps_absolute_path_and_runner_identity(self) -> None:
+        route = parse_project_route(
+            "demo",
+            'agent_config: {"slug":"demo","repo":"org/repo","model_lane":"coding",'
+            '"read_only":false,"source_kind":"local","source_path":"/mnt/c/Github/Babmukdang",'
+            '"runner_id":"wsl-home","runner_os":"wsl"}',
+        )
+        self.assertEqual(route.source_kind, "local")
+        self.assertEqual(route.source_path, "/mnt/c/Github/Babmukdang")
+        self.assertEqual(route.runner_id, "wsl-home")
+        self.assertEqual(route.runner_os, "wsl")
+
+    def test_catalog_local_source_requires_absolute_path_and_supported_runner(self) -> None:
+        prefix = 'agent_config: {"slug":"demo","repo":"org/repo","model_lane":"coding",'
+        with self.assertRaises(WorkerError):
+            parse_project_route("demo", prefix + '"read_only":false,"source_kind":"local","source_path":"repo"}')
+        with self.assertRaises(WorkerError):
+            parse_project_route(
+                "demo",
+                prefix + '"read_only":false,"source_kind":"local","source_path":"C:/repo",'
+                '"runner_id":"win-home","runner_os":"windows"}',
+            )
+
     def test_task_repo_and_ref_override_project_defaults(self) -> None:
         task_route = apply_task_source_overrides(
             self.route,
@@ -92,54 +115,35 @@ class WorkspaceRoutingTests(unittest.TestCase):
                     worker._workspace_registry.close()
                 worker.ledger.close()
 
-    def test_linked_code_tasks_reuse_same_dirty_checkout_and_branch(self) -> None:
+    def test_local_linked_code_tasks_reuse_same_dirty_checkout_and_branch(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             source = root_path / "source"
-            remote = root_path / "remote.git"
             workspace = root_path / "workspace"
             state = root_path / "state"
             source.mkdir()
-            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
             subprocess.run(["git", "init", "--initial-branch=main", str(source)], check=True, capture_output=True, text=True)
             subprocess.run(["git", "-C", str(source), "config", "user.name", "Workspace Test"], check=True)
             subprocess.run(["git", "-C", str(source), "config", "user.email", "workspace-test@example.invalid"], check=True)
             (source / "README.md").write_text("base\n", encoding="utf-8")
             subprocess.run(["git", "-C", str(source), "add", "README.md"], check=True)
             subprocess.run(["git", "-C", str(source), "commit", "-m", "base"], check=True, capture_output=True, text=True)
-            subprocess.run(["git", "-C", str(source), "remote", "add", "origin", str(remote)], check=True)
-            subprocess.run(["git", "-C", str(source), "push", "-u", "origin", "main"], check=True, capture_output=True, text=True)
+            subprocess.run(["git", "-C", str(source), "remote", "add", "origin", "https://github.com/owner/repo.git"], check=True)
 
             route = ProjectRoute(
                 slug="demo", repo="owner/repo", model_lane="coding", provider="openai-api",
                 model="coder", reason="high", profile="builder", read_only=False,
-                source_ref="main", workspace_id="shared-feature",
+                source_ref="main", workspace_id="shared-feature", source_kind="local",
+                source_path=str(source), runner_id="wsl-home", runner_os="wsl",
             )
             worker = Worker({
                 "GITHUB_TOKEN": "test-token",
                 "KANZO_WORKSPACE": str(workspace),
                 "KANZO_WORKER_STATE_DIR": str(state),
+                "KANZO_RUNNER_ID": "wsl-home",
             })
             worker._current_route = route
             worker._refresh_cancel_state = lambda _active: None
-            original_run = worker._run_active_command
-
-            def run_command(command, active, *, cwd=None, env=None, timeout=None):
-                if command[:3] == ["gh", "repo", "clone"]:
-                    target = Path(command[4])
-                    cloned = subprocess.run(
-                        ["git", "clone", "--origin", "origin", str(remote), str(target)],
-                        capture_output=True, text=True, check=False,
-                    )
-                    if cloned.returncode == 0:
-                        subprocess.run(
-                            ["git", "-C", str(target), "remote", "set-url", "origin", "https://github.com/owner/repo.git"],
-                            check=True, capture_output=True, text=True,
-                        )
-                    return cloned
-                return original_run(command, active, cwd=cwd, env=env, timeout=timeout)
-
-            worker._run_active_command = run_command
             task = Task("demo#1", "demo", "doing", "Implementation: shared workspace", ("code",), "", route)
             try:
                 first_active = {"run_id": "111111111111", "cancelled": threading.Event()}
@@ -163,6 +167,11 @@ class WorkspaceRoutingTests(unittest.TestCase):
                 self.assertEqual(second_active["branch"], expected_branch)
                 self.assertEqual((second_checkout / "README.md").read_text(encoding="utf-8"), "base\nin progress\n")
                 self.assertEqual((second_checkout / "checkpoint.txt").read_text(encoding="utf-8"), "keep me\n")
+                clean_source = subprocess.run(
+                    ["git", "-C", str(source), "status", "--porcelain", "--untracked-files=all"],
+                    check=True, capture_output=True, text=True,
+                )
+                self.assertEqual(clean_source.stdout, "")
             finally:
                 if worker._workspace_registry is not None:
                     worker._workspace_registry.close()

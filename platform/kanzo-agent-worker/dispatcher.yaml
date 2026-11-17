@@ -54,6 +54,8 @@ spec:
               value: 'true'
             - name: KANZO_CATALOG_PROJECT
               value: kanzo-project-catalog
+            - name: KANZO_RUNNER_ID
+              value: k3s
             - name: KANZO_CODE_PROVIDER
               value: openai-api
             - name: KANZO_CODE_MODEL

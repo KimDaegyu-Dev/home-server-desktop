@@ -10,6 +10,7 @@ resources:
   - dispatcher-state-binder.yaml
   - state-migration-job.yaml
   - hermes-dashboard-ingress.yaml
+  - executor-api-ingress.yaml
 configMapGenerator:
   - name: kanzo-agent-hermes-config
     namespace: mcp

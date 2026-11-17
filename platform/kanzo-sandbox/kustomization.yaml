@@ -4,6 +4,7 @@ resources:
   - namespaces.yaml
   - broker-rbac.yaml
   - broker-service.yaml
+  - broker-ingress.yaml
   - broker-deployment.yaml
   - broker-storage.yaml
   - sandbox-network-policy.yaml

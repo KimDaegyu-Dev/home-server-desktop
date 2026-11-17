@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 
 from artifact_store import ArtifactStore
@@ -250,6 +251,10 @@ class ProjectRoute:
     read_only: bool
     source_ref: str | None = None
     workspace_id: str | None = None
+    source_kind: str = "git"
+    source_path: str | None = None
+    runner_id: str = "k3s"
+    runner_os: str = "linux"
 
 
 @dataclass(frozen=True)
@@ -315,7 +320,34 @@ def parse_project_route(title: str, description: str) -> ProjectRoute:
     source_ref = fields.get("ref", fields.get("source_ref", "")).strip() or None
     if source_ref and not valid_source_ref(source_ref):
         raise WorkerError(f"Catalog card {slug} has invalid ref.")
-    return ProjectRoute(slug, repo or None, lane, provider or default_provider, model or default_model, reason, profile, read_only == "true", source_ref)
+    source_kind = fields.get("source_kind", "git").strip().lower()
+    if source_kind not in {"git", "local"}:
+        raise WorkerError(f"Catalog card {slug} has invalid source_kind.")
+    source_path = fields.get("source_path", "").strip() or None
+    runner_id = fields.get("runner_id", "k3s").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", runner_id):
+        raise WorkerError(f"Catalog card {slug} has invalid runner_id.")
+    runner_os = fields.get("runner_os", "linux").strip().lower()
+    if runner_os not in {"linux", "wsl"}:
+        raise WorkerError(f"Catalog card {slug} has invalid runner_os.")
+    if source_kind == "local":
+        if not source_path or not PurePosixPath(source_path).is_absolute():
+            raise WorkerError(f"Catalog card {slug} requires an absolute POSIX source_path for local sources.")
+        if runner_os not in {"wsl", "linux"}:
+            raise WorkerError(f"Catalog card {slug} uses an unsupported local runner_os.")
+    elif source_path:
+        raise WorkerError(f"Catalog card {slug} must use source_kind=local when source_path is set.")
+    workspace_id = fields.get("workspace_id", "").strip() or None
+    if workspace_id:
+        try:
+            validate_workspace_id(workspace_id)
+        except WorkspaceRegistryError as exc:
+            raise WorkerError(f"Catalog card {slug} has invalid workspace_id: {exc}") from exc
+    return ProjectRoute(
+        slug, repo or None, lane, provider or default_provider, model or default_model,
+        reason, profile, read_only == "true", source_ref, workspace_id,
+        source_kind=source_kind, source_path=source_path, runner_id=runner_id, runner_os=runner_os,
+    )
 
 
 def valid_source_ref(value: str) -> bool:
@@ -1179,7 +1211,7 @@ class Worker:
             def log_message(self, *_: Any) -> None:
                 return
 
-        server = ThreadingHTTPServer(("0.0.0.0", int(self.env.get("METRICS_PORT", "9105"))), Handler)
+        server = ThreadingHTTPServer((self.env.get("METRICS_HOST", "0.0.0.0"), int(self.env.get("METRICS_PORT", "9105"))), Handler)
         threading.Thread(target=server.serve_forever, daemon=True, name="metrics-server").start()
 
     def _call(self, suffix: str, args: dict[str, Any]) -> str:
@@ -2027,6 +2059,36 @@ class Worker:
         if active is not None:
             active["checkout"] = checkout
         source_ref = task.route.source_ref if task.route else None
+        local_source: Path | None = None
+        if task.route and task.route.source_kind == "local":
+            configured_runner_id = self.env.get("KANZO_RUNNER_ID", "k3s").strip() or "k3s"
+            if task.route.runner_id != configured_runner_id:
+                raise WorkerError("This local source is assigned to a different runner.")
+            if task.route.runner_os not in {"linux", "wsl"}:
+                raise WorkerError("This worker supports local sources only on Linux/WSL runners.")
+            if not task.route.source_path:
+                raise WorkerError("Local source is missing its absolute source_path.")
+            try:
+                local_source = Path(task.route.source_path).resolve(strict=True)
+            except OSError as exc:
+                raise WorkerError(f"Local source path is unavailable: {task.route.source_path}") from exc
+            if not local_source.is_dir():
+                raise WorkerError("Local source_path must be a Git repository directory.")
+            source_root = self._run_active_command(
+                ["git", "-C", str(local_source), "rev-parse", "--show-toplevel"], active, timeout=30,
+            )
+            if source_root.returncode or Path(source_root.stdout.strip()).resolve() != local_source:
+                raise WorkerError("Local source_path must be the exact Git repository root.")
+            source_status = self._run_active_command(
+                ["git", "-C", str(local_source), "status", "--porcelain", "--untracked-files=all"], active, timeout=30,
+            )
+            if source_status.returncode or source_status.stdout.strip():
+                raise WorkerError("Local source repository is dirty; commit or clean it before dispatch.")
+            source_remote = self._run_active_command(
+                ["git", "-C", str(local_source), "remote", "get-url", "origin"], active, timeout=30,
+            )
+            if source_remote.returncode or not self._remote_matches_repo(source_remote.stdout.strip(), repo):
+                raise WorkerError("Local source origin does not match the catalog repository.")
         if persistent:
             route = task.route
             assert route is not None
@@ -2078,7 +2140,21 @@ class Worker:
                 return checkout
         auth_env = self._hermes_env()
         auth_env["GH_TOKEN"] = token
-        result = self._run_active_command(["gh", "repo", "clone", repo, str(checkout)], active, timeout=180, env=auth_env)
+        if local_source:
+            result = self._run_active_command(
+                ["git", "clone", "--no-hardlinks", str(local_source), str(checkout)], active, timeout=180,
+            )
+            if result.returncode == 0:
+                configured = self._run_active_command(
+                    ["git", "-C", str(checkout), "remote", "set-url", "origin", f"https://github.com/{repo}.git"],
+                    active, timeout=30,
+                )
+                if configured.returncode:
+                    raise WorkerError("Could not bind the local workspace clone to its GitHub origin.")
+        else:
+            result = self._run_active_command(
+                ["gh", "repo", "clone", repo, str(checkout)], active, timeout=180, env=auth_env,
+            )
         if result.returncode:
             raise WorkerError(f"GitHub 저장소를 가져오지 못했습니다: {result.stdout[-1000:]}")
         if source_ref:
@@ -2680,12 +2756,15 @@ class Worker:
             cards = self._call("list_tasks", {"project": catalog, "status": "doing", "filter": ""})
             header_re = re.compile(r"^\s*([a-zA-Z0-9._-]+#\d+)\s+\[([^]]+)\]\s+(.*)$", re.MULTILINE)
             routes: list[ProjectRoute] = []
+            configured_runner_id = self.env.get("KANZO_RUNNER_ID", "k3s").strip() or "k3s"
             for match in header_re.finditer(cards):
                 if match.group(1).rsplit("#", 1)[0] != catalog or match.group(2).strip().lower() != "doing":
                     continue
                 details = self._call("get_task", {"id": match.group(1)})
                 try:
-                    routes.append(parse_project_route(match.group(3), details))
+                    route = parse_project_route(match.group(3), details)
+                    if route.runner_id == configured_runner_id:
+                        routes.append(route)
                 except WorkerError as exc:
                     self._comment(match.group(1), f"프로젝트 카탈로그 설정 오류로 비활성화했습니다. 수정 후 doing으로 옮겨 다시 활성화하세요.\n\n오류: {exc}")
                     self._call("update_task", {"id": match.group(1), "status": "review", "human": True})
@@ -2884,6 +2963,10 @@ class Worker:
                 "source_sha": source_sha or None,
                 "source_ref": task.route.source_ref if task.route else None,
                 "source_repo": task.route.repo if task.route else None,
+                "source_kind": task.route.source_kind if task.route else "git",
+                "source_path": task.route.source_path if task.route and task.route.source_kind == "local" else None,
+                "runner_id": task.route.runner_id if task.route else "k3s",
+                "runner_os": task.route.runner_os if task.route else "linux",
                 "checkout": str(checkout),
                 "branch": active.get("branch"),
                 "workspace_id": active.get("workspace_id"),

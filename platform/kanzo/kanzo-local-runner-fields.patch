@@ -1,0 +1,65 @@
+diff --git a/src/app.js b/src/app.js
+index 787c330..7ab73a1 100644
+--- a/src/app.js
++++ b/src/app.js
+@@ -1300,11 +1300,14 @@ function renderAgentConfig(task) {
+   if (section.hidden) return;
+   const config = task.agent_config || Object.fromEntries(
+     (task.description || "").split(/\r?\n/).map((line) => {
+-      const match = line.match(/^\s*(slug|repo|ref|source_ref|model_lane|provider|model|reason|profile|read_only)\s*:\s*(.*?)\s*$/i);
++      const match = line.match(/^\s*(slug|repo|ref|source_ref|source_kind|source_path|runner_id|runner_os|workspace_id|model_lane|provider|model|reason|profile|read_only)\s*:\s*(.*?)\s*$/i);
+       return match ? [match[1].toLowerCase(), match[2]] : null;
+     }).filter(Boolean));
+   const fields = [
+     ["#p-agent-slug", config.slug || ""], ["#p-agent-repo", config.repo || ""],
++    ["#p-agent-source-kind", config.source_kind || "git"], ["#p-agent-source-path", config.source_path || ""],
++    ["#p-agent-runner-id", config.runner_id || "k3s"], ["#p-agent-runner-os", config.runner_os || "linux"],
++    ["#p-agent-workspace-id", config.workspace_id || ""],
+     ["#p-agent-ref", config.source_ref || config.ref || ""],
+     ["#p-agent-lane", config.model_lane || "analysis"], ["#p-agent-profile", config.profile || "researcher"],
+     ["#p-agent-provider", config.provider || "openai-api"], ["#p-agent-model", config.model || "iq_3s"],
+@@ -1324,6 +1327,11 @@ function saveAgentConfig() {
+   const config = {
+     slug: $("#p-agent-slug").value.trim(),
+     repo: $("#p-agent-repo").value.trim(),
++    source_kind: $("#p-agent-source-kind").value,
++    source_path: $("#p-agent-source-path").value.trim(),
++    runner_id: $("#p-agent-runner-id").value.trim(),
++    runner_os: $("#p-agent-runner-os").value,
++    workspace_id: $("#p-agent-workspace-id").value.trim(),
+     source_ref: $("#p-agent-ref").value.trim(),
+     model_lane: $("#p-agent-lane").value,
+     provider: $("#p-agent-provider").value.trim(),
+diff --git a/src/index.html b/src/index.html
+index bcbfacf..f825749 100644
+--- a/src/index.html
++++ b/src/index.html
+@@ -627,7 +627,12 @@ html:not(.ready) aside { visibility: hidden; }
+       <p class="hint">Structured worker settings for project catalog cards.</p>
+       <div class="routing-grid">
+         <label>Project slug<input class="field" id="p-agent-slug" autocomplete="off" spellcheck="false" placeholder="my-project"></label>
+-        <label>Repository<input class="field" id="p-agent-repo" autocomplete="off" spellcheck="false" placeholder="owner/repository or none"></label>
++        <label>Git remote<input class="field" id="p-agent-repo" autocomplete="off" spellcheck="false" placeholder="owner/repository or none"></label>
++        <label>Source kind<select class="field" id="p-agent-source-kind"><option value="git">GitHub clone</option><option value="local">Local WSL path</option></select></label>
++        <label>Absolute source path<input class="field" id="p-agent-source-path" autocomplete="off" spellcheck="false" placeholder="/mnt/c/Github/project"></label>
++        <label>Runner ID<input class="field" id="p-agent-runner-id" autocomplete="off" spellcheck="false" placeholder="k3s or wsl-home"></label>
++        <label>Runner OS<select class="field" id="p-agent-runner-os"><option value="linux">linux</option><option value="wsl">wsl</option></select></label>
++        <label>Workspace ID<input class="field" id="p-agent-workspace-id" autocomplete="off" spellcheck="false" placeholder="shared-feature"></label>
+         <label>Source ref<input class="field" id="p-agent-ref" autocomplete="off" spellcheck="false" placeholder="main, release/v2, or commit SHA"></label>
+         <label>Model lane<select class="field" id="p-agent-lane"><option value="analysis">analysis</option><option value="coding">coding</option><option value="review">review</option></select></label>
+         <label>Hermes profile<select class="field" id="p-agent-profile"><option value="researcher">researcher</option><option value="builder">builder</option><option value="reviewer">reviewer</option></select></label>
+diff --git a/src/store.rs b/src/store.rs
+index 3fc6c14..cbb5162 100644
+--- a/src/store.rs
++++ b/src/store.rs
+@@ -155,6 +155,10 @@ pub struct Task {
+ pub struct AgentConfig {
+     pub slug: String,
+     pub repo: String,
++    pub source_kind: String,
++    pub source_path: String,
++    pub runner_id: String,
++    pub runner_os: String,
+     pub source_ref: String,
+     pub workspace_id: String,
+     pub model_lane: String,

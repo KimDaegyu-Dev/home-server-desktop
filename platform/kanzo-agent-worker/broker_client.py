@@ -31,6 +31,16 @@ class BrokerClient:
         self.base_url = (base_url or os.environ.get("KANZO_BROKER_URL", "")).rstrip("/")
         self.token = token or os.environ.get("KANZO_BROKER_WORKER_TOKEN", "")
         parsed = urllib.parse.urlsplit(self.base_url)
+        internal_service = bool(
+            parsed.hostname
+            and (parsed.hostname.endswith(".svc") or parsed.hostname.endswith(".svc.cluster.local"))
+        )
+        tailnet_service = bool(
+            os.environ.get("KANZO_BROKER_ALLOW_TAILNET", "").lower() == "true"
+            and parsed.scheme == "https"
+            and parsed.hostname
+            and parsed.hostname.endswith(".ts.net")
+        )
         if (
             parsed.scheme not in {"http", "https"}
             or not parsed.hostname
@@ -38,9 +48,9 @@ class BrokerClient:
             or parsed.password
             or parsed.query
             or parsed.fragment
-            or not (parsed.hostname.endswith(".svc") or parsed.hostname.endswith(".svc.cluster.local"))
+            or not (internal_service or tailnet_service)
         ):
-            raise BrokerClientError("Kanzo broker URL is not an internal service endpoint")
+            raise BrokerClientError("Kanzo broker URL must be an internal service or an explicitly enabled HTTPS tailnet endpoint")
         if len(self.token) < 24:
             raise BrokerClientError("Kanzo broker worker credential is unavailable")
         self._opener = urllib.request.build_opener(_NoRedirect())

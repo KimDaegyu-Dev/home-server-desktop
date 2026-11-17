@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kanzo-workspace-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  kanzo-workspaces.json: |
+    {
+      "annotations": {"list": []},
+      "editable": false,
+      "graphTooltip": 1,
+      "panels": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "id": 1,
+          "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}},
+          "targets": [{"expr": "kanzo_worker_workspaces", "legendFormat": "{{state}}", "refId": "A"}],
+          "title": "Persistent workspaces by state",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+          "id": 2,
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "value"},
+          "targets": [{"expr": "kanzo_worker_workspace_leases", "refId": "A"}],
+          "title": "Active workspace writer leases",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+          "id": 3,
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "value"},
+          "targets": [{"expr": "kanzo_worker_workspace_dirty", "refId": "A"}],
+          "title": "Dirty workspaces requiring preservation",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 8},
+          "id": 4,
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "value"},
+          "targets": [{"expr": "kanzo_worker_executor_ready", "refId": "A"}],
+          "title": "Resident Executor readiness (1 = ready)",
+          "type": "stat"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 6, "w": 12, "x": 12, "y": 8},
+          "id": 5,
+          "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}},
+          "targets": [{"expr": "kanzo_worker_runner_info", "legendFormat": "{{runner_id}} / {{runner_os}}", "refId": "A"}],
+          "title": "Scraped worker runners",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "gridPos": {"h": 6, "w": 12, "x": 0, "y": 14},
+          "id": 6,
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "value"},
+          "targets": [{"expr": "kanzo_worker_workspace_registry_ready", "refId": "A"}],
+          "title": "Workspace registry readable (1 = healthy)",
+          "type": "stat"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "tags": ["kanzo", "hermes", "workspace"],
+      "time": {"from": "now-24h", "to": "now"},
+      "title": "Kanzo Workspace Operations",
+      "uid": "kanzo-workspace-operations",
+      "version": 1
+    }

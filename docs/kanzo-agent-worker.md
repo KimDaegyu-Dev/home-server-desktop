@@ -77,3 +77,14 @@ The source path must be the absolute WSL path to the Git root. The checkout must
 Start the runner after loading these Vault values into the WSL shell environment: `MCPPROXY_KANZO_AGENT_TOKEN`, `KANZO_EXECUTOR_API_TOKEN`, `KANZO_BROKER_WORKER_TOKEN`, `LITELLM_API_KEY`, and `GITHUB_TOKEN`. Set `KANZO_RUNNER_ID=wsl-home`, `KANZO_WORKSPACE` and `KANZO_WORKER_STATE_DIR` to absolute WSL paths, then run `bash platform/kanzo-agent-worker/run-host-runner.sh` from the repository root. The script binds its local wake/metrics endpoint to `127.0.0.1`; its defaults use `kanzo.tail5389e9.ts.net`, `mcp.tail5389e9.ts.net`, `hermes-executor.tail5389e9.ts.net`, and `kanzo-broker.tail5389e9.ts.net`.
 
 Local sources are currently supported on Linux/WSL runners. Windows drive paths and a native Windows runner are not accepted. The repo card's `repo` remains the GitHub remote used for PR publication.
+# Workspace and runner metrics
+
+The worker exports low-cardinality Prometheus metrics for operations:
+
+- `kanzo_worker_runner_info{runner_id,runner_os}` identifies the scraped worker process.
+- `kanzo_worker_executor_ready` reports whether the configured resident Executor API is ready for claims.
+- `kanzo_worker_workspace_registry_ready` reports whether the persistent registry can be read.
+- `kanzo_worker_workspaces{state}` reports workspace counts by lifecycle state, including retained tombstones.
+- `kanzo_worker_workspace_leases` and `kanzo_worker_workspace_dirty` report active writer leases and dirty workspaces.
+
+The `Kanzo Workspace Operations` Grafana dashboard uses these metrics. It deliberately avoids workspace IDs as labels to keep Prometheus cardinality bounded. A host runner currently binds metrics to localhost, so its process identity is not scraped by the cluster Prometheus until a dedicated authenticated metrics path is designed.

@@ -266,3 +266,25 @@ class WorkspaceRegistry:
         with self._lock:
             rows = self._db.execute(query).fetchall()
         return [self._decode(row) for row in rows if row is not None]
+
+    def metrics_snapshot(self) -> dict[str, Any]:
+        """Return bounded aggregate workspace health without exposing IDs as labels."""
+        with self._lock:
+            states = {
+                str(row[0]): int(row[1])
+                for row in self._db.execute(
+                    "SELECT state, count(*) FROM workspaces GROUP BY state"
+                ).fetchall()
+            }
+            row = self._db.execute(
+                """SELECT count(*),
+                          coalesce(sum(CASE WHEN lease_run_id IS NOT NULL THEN 1 ELSE 0 END), 0),
+                          coalesce(sum(CASE WHEN dirty != 0 AND state != 'deleted' THEN 1 ELSE 0 END), 0)
+                   FROM workspaces"""
+            ).fetchone()
+        return {
+            "states": states,
+            "total": int(row[0]) if row else 0,
+            "active_leases": int(row[1]) if row else 0,
+            "dirty": int(row[2]) if row else 0,
+        }

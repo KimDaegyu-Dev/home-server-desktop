@@ -98,6 +98,20 @@ class WorkspaceRegistryTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.acquire(workspace_id="../escape")
 
+    def test_metrics_snapshot_reports_state_lease_and_dirty_counts(self) -> None:
+        self.acquire()
+        leased = self.registry.metrics_snapshot()
+        self.assertEqual(leased["states"], {"leased": 1})
+        self.assertEqual(leased["total"], 1)
+        self.assertEqual(leased["active_leases"], 1)
+        self.assertEqual(leased["dirty"], 0)
+
+        self.registry.release("shared", "run-1", state="review", dirty=True)
+        review = self.registry.metrics_snapshot()
+        self.assertEqual(review["states"], {"review": 1})
+        self.assertEqual(review["active_leases"], 0)
+        self.assertEqual(review["dirty"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

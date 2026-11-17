@@ -736,6 +736,10 @@ class Worker:
         self.heartbeat_stale_seconds = max(90, int(self.env.get("KANZO_HEARTBEAT_STALE_SECONDS", "900")))
         self.run_once = self.env.get("KANZO_RUN_ONCE", "false").lower() == "true"
         self.enabled = self.env.get("KANZO_ENABLED", "false").lower() == "true"
+        raw_runner_id = self.env.get("KANZO_RUNNER_ID", "k3s").strip() or "k3s"
+        self.runner_id = re.sub(r"[^A-Za-z0-9_.-]", "_", raw_runner_id)[:64] or "unknown"
+        raw_runner_os = self.env.get("KANZO_RUNNER_OS", "linux").strip().lower()
+        self.runner_os = raw_runner_os if raw_runner_os in {"linux", "wsl"} else "unknown"
         self.client: McpClient | None = None
         self.mcp_lock = threading.Lock()
         self.metrics = {
@@ -744,6 +748,7 @@ class Worker:
             "phase_duration": {"count": {}, "sum": {}, "buckets": {}},
             "sandbox_cpu": {"count": {}, "sum": {}, "buckets": {}},
             "sandbox_memory_peak": {"count": {}, "sum": {}, "buckets": {}},
+            "executor_ready": 0 if self.env.get("KANZO_EXECUTOR_API_URL", "").strip() else 1,
         }
         self.heartbeat_path = self.state_dir / "worker-heartbeat"
         self.wake_queue: queue.Queue[str] = queue.Queue(maxsize=1)
@@ -1185,6 +1190,42 @@ class Worker:
                             "# TYPE kanzo_worker_active_task_info gauge",
                             f'kanzo_worker_active_task_info{{task_id="{active["task_id"]}",run_id="{active["run_id"]}"}} 1',
                         ]
+                lines += [
+                    "# HELP kanzo_worker_runner_info Static identity of this event-driven worker process.",
+                    "# TYPE kanzo_worker_runner_info gauge",
+                    f'kanzo_worker_runner_info{{runner_id="{getattr(worker, "runner_id", "unknown")}",runner_os="{getattr(worker, "runner_os", "unknown")}"}} 1',
+                    "# HELP kanzo_worker_executor_ready Whether the configured resident Executor API is ready for claims.",
+                    "# TYPE kanzo_worker_executor_ready gauge",
+                    f"kanzo_worker_executor_ready {worker.metrics.get('executor_ready', 1)}",
+                ]
+                registry = getattr(worker, "_workspace_registry", None)
+                registry_ready = 1
+                snapshot = {"states": {}, "total": 0, "active_leases": 0, "dirty": 0}
+                if registry is not None:
+                    try:
+                        snapshot = registry.metrics_snapshot()
+                    except Exception:
+                        registry_ready = 0
+                        LOG.exception("Could not read workspace registry metrics")
+                lines += [
+                    "# HELP kanzo_worker_workspace_registry_ready Whether the persistent workspace registry can be read.",
+                    "# TYPE kanzo_worker_workspace_registry_ready gauge",
+                    f"kanzo_worker_workspace_registry_ready {registry_ready}",
+                    "# HELP kanzo_worker_workspaces Number of persistent workspaces by lifecycle state.",
+                    "# TYPE kanzo_worker_workspaces gauge",
+                ]
+                for state in ("leased", "ready", "paused", "waiting", "review", "merged", "conflict", "deleted"):
+                    lines.append(
+                        f'kanzo_worker_workspaces{{state="{state}"}} {snapshot["states"].get(state, 0)}'
+                    )
+                lines += [
+                    "# HELP kanzo_worker_workspace_leases Active single-writer workspace leases.",
+                    "# TYPE kanzo_worker_workspace_leases gauge",
+                    f"kanzo_worker_workspace_leases {snapshot['active_leases']}",
+                    "# HELP kanzo_worker_workspace_dirty Persistent workspaces recorded as dirty.",
+                    "# TYPE kanzo_worker_workspace_dirty gauge",
+                    f"kanzo_worker_workspace_dirty {snapshot['dirty']}",
+                ]
                 body = ("\n".join(lines) + "\n").encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -1256,6 +1297,7 @@ class Worker:
                     raise RuntimeError(f"executor readiness returned HTTP {response.status}")
                 payload = json.loads(response.read().decode("utf-8"))
             if isinstance(payload, dict) and payload.get("status") == "ready":
+                self.metrics["executor_ready"] = 1
                 with self.executor_retry_lock:
                     self.executor_retry_delay = 5
                     timer = self.executor_retry_timer
@@ -1269,6 +1311,7 @@ class Worker:
                 "Executor is not ready; leaving Kanzo tasks unclaimed (%s)",
                 type(exc).__name__,
             )
+            self.metrics["executor_ready"] = 0
             self._schedule_executor_retry()
             return False
 

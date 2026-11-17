@@ -5,6 +5,7 @@ resources:
   - executor.yaml
   - dispatcher.yaml
   - grafana-dashboard.yaml
+  - workspace-dashboard.yaml
   - dispatcher-state.yaml
   - workspace-storage.yaml
   - dispatcher-state-binder.yaml

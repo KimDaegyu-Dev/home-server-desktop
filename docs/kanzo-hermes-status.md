@@ -72,3 +72,9 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - The first external Executor readiness request returned 502. Tailscale proxy logs showed connection refused because `kanzo-agent-executor-ingress` allowed only dispatcher traffic on port 8766 and Tailscale traffic on 9119. Adding port 8766 for Tailscale-managed pods fixed it; the external readiness request now returns HTTP 200.
 - Patch byte check: `kanzo-local-runner-fields.patch` has 0 CRLF sequences and 0 NUL bytes. The new local-source linked-workspace integration verifies that repeated task runs reuse one dirty checkout/branch while leaving the configured source root clean.
 - Still pending: run a real, user-approved WSL/local-source Kanzo task end to end, verify checkpoint/resume and event wake-up on that runner, and complete the remaining Phase 4 multi-repo/operations evidence. No task was claimed or modified during this rollout.
+
+## Follow-up evidence (2026-11-18, operations metrics)
+
+- Added bounded workspace registry metrics for lifecycle counts, active writer leases, dirty workspaces, registry readability, Executor readiness, and worker runner identity. Workspace IDs are not Prometheus labels. Added a `Kanzo Workspace Operations` Grafana dashboard. Host-runner metrics remain loopback-only and are intentionally not scraped remotely pending an authenticated metrics design.
+- Babmukdang source check from WSL found `/mnt/c/Github/Babmukdang` has many modified and untracked files and its current branch is 31 commits behind origin. The runner's clean-source guard correctly makes this path ineligible for a local-source canary. No source files were changed.
+- Worker suite after metrics changes: 95 passed, 3 skipped. Worker Kustomize render, launcher shell syntax, and `git diff --check` passed. Kanzo patch byte check remains CRLF=0 and NUL=0.

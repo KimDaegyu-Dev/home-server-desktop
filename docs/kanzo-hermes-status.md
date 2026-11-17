@@ -4,20 +4,20 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 
 ## 현재 상태 — 2026-11-18
 
-- 현재 Argo `kanzo-agent-worker` source sync revision은 `1be992e14eb94b9f5241b74333c3e8d6d451d89c`이며 Synced/Healthy다. worker code rollout을 도입한 merge commit은 `0e4dc4e26886efda3777a22e1a31c9fb2801f567`이고, 그 이후 변경은 상태 문서뿐이다. Argo `kanzo-agent-worker`는 Synced/Healthy, dispatcher Deployment는 1/1 Ready이며 새 Pod에 push preflight 코드가 로드된 것을 확인했다. Kanzo는 `0.4.2-agent.5`, dispatcher는 `0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2` 이미지, `/workspace` PVC는 32Gi Bound다.
-- PR #1은 squash merge됐고 원격·로컬 작업 브랜치는 삭제했다. 병합된 변경에는 안전한 merged-branch cleanup, executor 재시작 reconciliation, latest catalog route parsing, GitHub push 사전 점검이 포함된다.
-- 실제 Kanzo task #143은 이벤트 경로로 claim되어 persistent workspace에 marker를 생성하고 로컬 commit까지 만들었지만, push 단계에서 403으로 종료되어 review에 남아 있다. marker와 브랜치는 보존되어 있고 재실행하지 않았다.
-- WSL runner의 `GITHUB_TOKEN`은 현재 Kubernetes/Vault 동기화 Secret과 일치하며 Windows `gh` 로그인 토큰과 다르다. Runner 토큰은 저장소 조회는 되지만 `git push --dry-run`을 거부한다. 따라서 오래된 runner 프로세스가 아니라 현재 주입 Secret의 쓰기 권한 문제다. 새 preflight는 배포됐지만 이 토큰은 여전히 실패하므로 writable code task는 Hermes 시작 전에 중단될 것이다.
-- Kanzo #140은 Todo에서 human 승인 카드 #141을 기다린다. #140 본문은 source manifest 구현을 요구하며 deploy/merge/push를 금지한다. #141은 사용자 승인 게이트로 유지한다.
+- Argo `kanzo-agent-worker`와 `kanzo-sandbox`는 코드 commit `c65f6748db06573d95c4cbac2328a540c5caca7f`를 Synced/Healthy 상태로 실행 중이다. Kanzo 앱은 `1fd2919`에서 Synced/Healthy다. Dispatcher와 executor는 각각 Ready이며 Prometheus `kanzo_worker_task_active=0`이다. `/workspace` PVC는 32Gi Bound다.
+- PR #1은 `0e4dc4e`로 squash merge됐고 작업 브랜치는 삭제했다. 추가 구현 `c65f674`는 지속형 Workspace prompt를 바로잡고, 확인된 취소에서 sandbox snapshot을 workspace에 전달한다.
+- 실제 task #143은 persistent workspace에 marker를 만들고 local commit까지 했지만 push 403으로 review에 남았다. marker와 branch는 보존 중이며 재실행하지 않았다. live dispatcher push preflight는 같은 Vault 주입 토큰을 사용해 Hermes 호출 전에 정상 차단했다.
+- WSL runner의 `GITHUB_TOKEN`은 현재 Kubernetes/Vault 동기화 Secret과 일치하지만 Windows `gh` 로그인 토큰과 다르고 push가 거부된다. Vault `kv/mcp/kanzo-agent`의 `GITHUB_TOKEN`에 Contents write 및 Pull requests write 권한이 필요하다. VSO가 Secret을 갱신한 뒤 `launch-wsl-runner.sh`를 다시 실행해야 host process가 새 값을 읽는다.
+- Kanzo #140은 Todo에서 human 승인 카드 #141을 기다린다. #140 본문은 source manifest 구현 및 deploy/merge/push 금지를 요구한다. #141 승인 게이트는 유지한다.
 
 ## 단계 진행
 
 | 단계 | 상태 | 근거/다음 작업 |
 |---|---|---|
 | 0. 소스 라우팅 정확성 | 구현·배포·local-source canary 완료 | task-level repo/ref override와 source SHA 기록을 배포했다. Babmukdang WSL read-only canary에서 저장소·고정 SHA·runner 및 원본 파일 무변경을 확인했다. |
-| 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 1-task event canary 부분 통과; 다중 task acceptance 미완료 | PVC/registry 순차 lease·Pod 재시작 smoke와 실제 #143 workspace 생성은 확인했다. 실제 두 번째 task 재사용은 publish 권한 실패로 아직 입증하지 못했다. Vault runner token이 push 가능한 상태가 되면 후속 canary를 진행한다. |
-| 2. 정지·재개·병합 후 정리 | 구현·배포 완료; merged-PR cleanup E2E 미완료 | force-with-lease cleanup과 interrupted Gateway run reconciliation을 배포했다. 실제 merged PR 및 완료 task를 통한 자동 branch/file cleanup acceptance가 남았다. |
-| 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료; writable resume/offline 검증 미완료 | 절대경로/runner 라우팅, event claim, source SHA, 원본 무변경은 확인했다. 같은 workspace에서 writable 중단·재개와 runner offline 복구의 live 검증이 남았다. |
+| 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 1-task event canary 부분 통과; 다중 task acceptance 미완료 | PVC/registry smoke와 실제 #143 workspace 생성은 확인했다. 실제 두 번째 task 재사용 acceptance는 publish 권한 실패로 미입증이다. Vault runner token을 갱신한 뒤 새 canary가 필요하다. |
+| 2. 정지·재개·병합 후 정리 | 구현·배포 완료; merged-PR cleanup E2E 미완료 | safe cleanup, executor reconciliation, persistent-workspace resume guidance, confirmed cancellation snapshot transfer를 배포했다. 실제 merged PR 및 완료 task를 통한 자동 branch/file cleanup은 아직 검증되지 않았다. |
+| 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료; writable resume/offline 검증 미완료 | 절대경로/runner 라우팅, event claim, source SHA, 원본 무변경은 확인했다. writable 중단·재개와 runner offline 복구의 live 검증이 남았다. |
 | 4. 다중 저장소·운영 검증 | 승인 대기 | #140은 #141 human gate를 기다린다. 해당 task의 source manifest 구현은 승인 전 실행하지 않는다. |
 
 ## 이번 구현 세션
@@ -137,3 +137,10 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - After PR #1 merged at `0e4dc4e26886efda3777a22e1a31c9fb2801f567`, the dispatcher rollout completed 1/1 Ready. Argo subsequently synced documentation-only revisions through `1be992e14eb94b9f5241b74333c3e8d6d451d89c` and remains healthy and the live container contains `_preflight_git_push`.
 - Invoked the deployed preflight directly with a temporary Git repository and the dispatcher’s current Vault-injected token. GitHub denied the dry-run branch push; the preflight returned before any Hermes call. No Kanzo task or remote branch was created.
 - The running WSL process token matches the current Kubernetes/Vault-synced Secret (so this is not stale process state) and differs from the Windows `gh` login token. Before writable-task acceptance, update the Vault runner token with repository Contents write and Pull requests write, then test with a new canary ID. #143 remains review and must not be retried.
+
+## Follow-up evidence (2026-11-18, persistent workspace and cancellation behavior)
+
+- Commit `c65f674` updates Hermes task instructions with the actual workspace ID, sequential sharing/resume behavior, and the sandbox `.git` boundary. The stale instruction that handoffs lose ephemeral checkout changes is removed.
+- On a confirmed cancellation of a writable task with a persistent workspace, the worker now applies the final broker snapshot before finalizing the lease. A transfer failure is reported explicitly; unconfirmed remote runs are never snapshotted and remain quarantined.
+- Worker suite: 121 tests passed, including prompt-boundary and cancellation-snapshot tests. `git diff --check` passed; changed source/doc files use LF.
+- Argo `kanzo-agent-worker` and `kanzo-sandbox` are Synced/Healthy at `c65f6748db06573d95c4cbac2328a540c5caca7f`; the new dispatcher Pod is 2/2 Ready, and Prometheus reports active task count 0. Cancellation snapshot transfer has unit coverage but still needs a live cancelled-run canary.

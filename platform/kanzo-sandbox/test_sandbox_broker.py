@@ -32,6 +32,7 @@ class SandboxPodMountTests(unittest.TestCase):
                 source_url="http://source.invalid/archive",
                 source_token="source-token",
                 source_sha256="a" * 64,
+                source_git_sha="c" * 40,
                 read_only=read_only,
             )
         self.assertEqual((captured["method"], captured["path"]), (
@@ -48,6 +49,8 @@ class SandboxPodMountTests(unittest.TestCase):
         self.assertTrue(runner["securityContext"]["readOnlyRootFilesystem"])
         self.assertFalse(pod["spec"]["automountServiceAccountToken"])
         self.assertNotIn("home", {volume["name"] for volume in pod["spec"]["volumes"]})
+        env = {item["name"]: item["value"] for item in runner["env"]}
+        self.assertEqual(env["KANZO_SOURCE_GIT_SHA"], "c" * 40)
 
     def test_writable_mode_keeps_workspace_writable(self) -> None:
         pod = self._pod_for(False)

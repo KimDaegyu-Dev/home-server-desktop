@@ -68,6 +68,7 @@ MAX_WORKSPACE_SCAN_BYTES = 4 * 1024 * 1024 * 1024
 EXEC_ID_RE = re.compile(r"^[A-Za-z0-9_-]{22,128}$")
 SAFE_ENV = {
     "HOME": "/scratch",
+    "KANZO_SOURCE_GIT_SHA": os.environ.get("KANZO_SOURCE_GIT_SHA", ""),
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
     "PATH": "/usr/local/bin:/usr/bin:/bin",

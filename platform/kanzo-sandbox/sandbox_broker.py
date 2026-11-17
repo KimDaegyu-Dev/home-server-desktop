@@ -118,7 +118,7 @@ class KubernetesAPI:
 
     def create_run_pod(self, *, pod_name: str, runner_token: str,
                        source_url: str, source_token: str, source_sha256: str,
-                       read_only: bool) -> None:
+                       source_git_sha: str, read_only: bool) -> None:
         configmap = os.environ.get("KANZO_SANDBOX_CODE_CONFIGMAP", "kanzo-sandbox-code")
         image = os.environ.get("KANZO_SANDBOX_IMAGE", "")
         if not image or not re.fullmatch(r"[A-Za-z0-9./:_-]{1,256}", image):
@@ -163,6 +163,7 @@ class KubernetesAPI:
             "ports": [{"name": "runner", "containerPort": 8000, "protocol": "TCP"}],
             "securityContext": security, "resources": resources_runner,
             "env": [{"name": "HOME", "value": "/scratch"}, {"name": "TMPDIR", "value": "/scratch"},
+                    {"name": "KANZO_SOURCE_GIT_SHA", "value": source_git_sha},
                     {"name": "KANZO_RUNNER_TOKEN", "value": runner_token}],
             "volumeMounts": runner_mounts + [{"name": "scratch", "mountPath": "/scratch"}],
         }
@@ -467,7 +468,7 @@ class BrokerStore:
             self.kube.create_run_pod(
                 pod_name=pod_name, runner_token=runner_token,
                 source_url=f"{internal}/v1/runs/source/{source_token}", source_token=source_token,
-                source_sha256=archive_sha, read_only=read_only,
+                source_sha256=archive_sha, source_git_sha=source_git_sha, read_only=read_only,
             )
         except Exception:
             self.finalize(task_id, run_id, lease)

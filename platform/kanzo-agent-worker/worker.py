@@ -311,23 +311,25 @@ def parse_project_route(title: str, description: str) -> ProjectRoute:
     read_only = fields.get("read_only", "").lower()
     if read_only not in ("true", "false"):
         raise WorkerError(f"Catalog card {slug} requires read_only: true or false.")
-    profile = fields.get("profile", default_profile)
+    profile = (fields.get("profile") or default_profile).strip().lower()
     if profile not in ALLOWED_PROFILES:
         raise WorkerError(f"Catalog card {slug} has unsupported profile {profile!r}.")
-    reason = fields.get("reason", "high").lower()
+    reason = (fields.get("reason") or "high").strip().lower()
     if reason not in ALLOWED_REASONING:
         raise WorkerError(f"Catalog card {slug} has invalid reason.")
     source_ref = fields.get("ref", fields.get("source_ref", "")).strip() or None
     if source_ref and not valid_source_ref(source_ref):
         raise WorkerError(f"Catalog card {slug} has invalid ref.")
-    source_kind = fields.get("source_kind", "git").strip().lower()
+    # Kanzo's catalog form serializes optional fields as empty strings. Treat
+    # those the same as omitted fields so the documented defaults still apply.
+    source_kind = (fields.get("source_kind") or "").strip().lower() or "git"
     if source_kind not in {"git", "local"}:
         raise WorkerError(f"Catalog card {slug} has invalid source_kind.")
     source_path = fields.get("source_path", "").strip() or None
-    runner_id = fields.get("runner_id", "k3s").strip()
+    runner_id = (fields.get("runner_id") or "").strip() or "k3s"
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", runner_id):
         raise WorkerError(f"Catalog card {slug} has invalid runner_id.")
-    runner_os = fields.get("runner_os", "linux").strip().lower()
+    runner_os = (fields.get("runner_os") or "").strip().lower() or "linux"
     if runner_os not in {"linux", "wsl"}:
         raise WorkerError(f"Catalog card {slug} has invalid runner_os.")
     if source_kind == "local":
@@ -385,7 +387,9 @@ def apply_task_source_overrides(route: ProjectRoute, details: str) -> ProjectRou
     repo = route.repo
     if "repo" in fields:
         value = fields["repo"].strip()
-        if value.lower() == "none":
+        if not value:
+            pass  # An empty form field inherits the project default.
+        elif value.lower() == "none":
             repo = None
         else:
             value = value.removeprefix("https://github.com/").removesuffix(".git").strip("/")

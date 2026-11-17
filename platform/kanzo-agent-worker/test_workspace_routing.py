@@ -36,6 +36,31 @@ class WorkspaceRoutingTests(unittest.TestCase):
         )
         self.assertEqual(route.source_ref, "release/v2")
 
+    def test_empty_catalog_form_fields_use_documented_defaults(self) -> None:
+        route = parse_project_route(
+            "demo",
+            'agent_config: {"slug":"demo","repo":"org/repo","model_lane":"analysis",'
+            '"read_only":true,"provider":"","model":"","reason":"","profile":"",'
+            '"source_kind":"","source_path":"","runner_id":"","runner_os":"","ref":""}',
+        )
+        self.assertEqual(route.provider, "openai-api")
+        self.assertEqual(route.model, "iq_3s")
+        self.assertEqual(route.reason, "high")
+        self.assertEqual(route.profile, "researcher")
+        self.assertEqual(route.source_kind, "git")
+        self.assertIsNone(route.source_path)
+        self.assertEqual(route.runner_id, "k3s")
+        self.assertEqual(route.runner_os, "linux")
+
+    def test_empty_task_repo_field_inherits_project_default(self) -> None:
+        task_route = apply_task_source_overrides(
+            self.route,
+            'agent_config: {"repo":"","ref":"","workspace_id":""}',
+        )
+        self.assertEqual(task_route.repo, "org/default-repo")
+        self.assertEqual(task_route.source_ref, "main")
+        self.assertIsNone(task_route.workspace_id)
+
     def test_catalog_local_source_keeps_absolute_path_and_runner_identity(self) -> None:
         route = parse_project_route(
             "demo",

@@ -81,3 +81,11 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - The metrics rollout is live at revision `46c6f3f`: ArgoCD Synced/Healthy, dispatcher 2/2 Ready, `kanzo-workspace-dashboard` present in the monitoring namespace. Live `/metrics` showed runner `k3s/linux`, Executor ready=1, workspace registry ready=1, writer leases=0, and dirty workspaces=0. Active task gauge was 0 before rollout.
 - Grafana's Prometheus datasource returned the live `kanzo_worker_runner_info`, `kanzo_worker_workspace_registry_ready`, and all bounded `kanzo_worker_workspaces{state}` series for the new dispatcher pod.
 - Grafana API confirms dashboard UID `kanzo-workspace-operations` is discovered with all six expected workspace/runner panels.
+
+## Follow-up evidence (2026-11-18, runner heartbeat)
+
+- Added an authenticated runner heartbeat from each worker to the sandbox broker. The broker keeps a bounded runner registry, expires stale heartbeats after 90 seconds, and exposes `kanzo_runner_up` and last-seen metrics. Added a ServiceMonitor and changed the Grafana runner panel to use the broker's live runner state.
+- Worker suite: 96 passed, 3 skipped; sandbox broker suite: 11 passed. Worker and sandbox Kustomize renders succeeded, and `git diff --check` passed. Changes were committed and pushed as `2e54302`.
+- Live rollout verified: `kanzo-agent-worker` and `kanzo-sandbox` are Synced/Healthy; dispatcher is 2/2 Running. Broker `/metrics` reports `runner_id="k3s", runner_os="linux"` with `kanzo_runner_up=1`; a direct Prometheus query returns the same series with value `1` from the broker ServiceMonitor.
+- During rollout the old dispatcher reported `kanzo_worker_task_active=0`. It drained and exited without force deletion; the replacement worker became healthy. This confirms safe rollout for an idle worker, not yet a rollout during an active task.
+- WSL runner is still not launched. The Babmukdang source remains dirty and behind origin, so it cannot serve as a local-source canary until a clean source is available. Multi-repository execution and end-to-end WSL checkpoint/resume remain open Phase 4 evidence.

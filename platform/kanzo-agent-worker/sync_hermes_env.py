@@ -10,6 +10,7 @@ from ruamel.yaml import YAML
 
 
 ROOT = Path("/opt/data/home")
+PROFILE_MAX_TURNS = {"builder": 80}
 COMPRESSION_SETTINGS = {
     "enabled": True,
     "threshold_tokens": 36000,
@@ -46,6 +47,12 @@ def main() -> None:
             if not isinstance(compression, dict):
                 raise SystemExit(f"{config_path} has invalid compression settings")
             compression.update(COMPRESSION_SETTINGS)
+            profile = home.name if home.parent.name == "profiles" else "default"
+            if profile in PROFILE_MAX_TURNS:
+                agent = config.setdefault("agent", {})
+                if not isinstance(agent, dict):
+                    raise SystemExit(f"{config_path} has invalid agent settings")
+                agent["max_turns"] = PROFILE_MAX_TURNS[profile]
             staged = config_path.with_name(".config.yaml.kanzo.tmp")
             with staged.open("w", encoding="utf-8") as stream:
                 yaml.dump(config, stream)

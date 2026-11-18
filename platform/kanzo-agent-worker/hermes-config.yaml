@@ -22,7 +22,7 @@ toolsets:
   - hermes-cli
 
 agent:
-  max_turns: 40
+  max_turns: 80
   reasoning_effort: xhigh
   tool_use_enforcement: true
   disabled_toolsets:

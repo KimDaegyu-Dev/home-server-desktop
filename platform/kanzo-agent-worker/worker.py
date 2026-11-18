@@ -322,6 +322,18 @@ class ProjectRoute:
     source_path: str | None = None
     runner_id: str = "k3s"
     runner_os: str = "linux"
+    sources: tuple["SourceSpec", ...] = ()
+    max_turns: int = 80
+
+
+@dataclass(frozen=True)
+class SourceSpec:
+    name: str
+    repo: str | None
+    ref: str
+    path: str | None = None
+    runner_id: str = "k3s"
+    runner_os: str = "linux"
 
 
 @dataclass(frozen=True)
@@ -343,6 +355,7 @@ ALLOWED_PROFILES = {"researcher", "builder", "reviewer"}
 
 def parse_project_route(title: str, description: str) -> ProjectRoute:
     fields: dict[str, str] = {}
+    raw_sources: Any = []
     # Kanzo can append an updated structured config to a catalog card's
     # description instead of replacing the older line. The newest explicit
     # config is authoritative; selecting the first one can silently route a
@@ -356,6 +369,7 @@ def parse_project_route(title: str, description: str) -> ProjectRoute:
         try:
             config = json.loads(structured_configs[-1])
             if isinstance(config, dict) and config.get("slug"):
+                raw_sources = config.get("sources", [])
                 fields = {key: str(value).lower() if isinstance(value, bool) else str(value) for key, value in config.items()}
         except json.JSONDecodeError as exc:
             raise WorkerError(f"Catalog card has invalid structured agent configuration: {exc}") from exc
@@ -414,6 +428,14 @@ def parse_project_route(title: str, description: str) -> ProjectRoute:
             raise WorkerError(f"Catalog card {slug} uses an unsupported local runner_os.")
     elif source_path:
         raise WorkerError(f"Catalog card {slug} must use source_kind=local when source_path is set.")
+    sources = parse_source_specs(raw_sources, slug)
+    max_turns_text = fields.get("max_turns", "").strip()
+    try:
+        max_turns = int(max_turns_text) if max_turns_text else 80
+    except ValueError as exc:
+        raise WorkerError(f"Catalog card {slug} has invalid max_turns.") from exc
+    if not 1 <= max_turns <= 80:
+        raise WorkerError(f"Catalog card {slug} max_turns must be between 1 and 80.")
     workspace_id = fields.get("workspace_id", "").strip() or None
     if workspace_id:
         try:
@@ -424,7 +446,50 @@ def parse_project_route(title: str, description: str) -> ProjectRoute:
         slug, repo or None, lane, provider or default_provider, model or default_model,
         reason, profile, read_only == "true", source_ref, workspace_id,
         source_kind=source_kind, source_path=source_path, runner_id=runner_id, runner_os=runner_os,
+        sources=sources, max_turns=max_turns,
     )
+
+
+def parse_source_specs(value: Any, slug: str) -> tuple[SourceSpec, ...]:
+    """Validate a bounded, read-only secondary source manifest."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or len(value) > 4:
+        raise WorkerError(f"Catalog card {slug} sources must be a list with at most 4 entries.")
+    result: list[SourceSpec] = []
+    names: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise WorkerError(f"Catalog card {slug} source {index + 1} must be an object.")
+        name = str(item.get("name", "")).strip()
+        key = name.casefold()
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", name) or key in names:
+            raise WorkerError(f"Catalog card {slug} has an invalid or duplicate source name.")
+        names.add(key)
+        repo_value = str(item.get("repo", "")).strip()
+        path = str(item.get("path", "")).strip() or None
+        ref = str(item.get("ref", "")).strip()
+        if not valid_source_ref(ref):
+            raise WorkerError(f"Catalog card {slug} source {name} requires a valid pinned ref or SHA.")
+        if bool(repo_value) == bool(path):
+            raise WorkerError(f"Catalog card {slug} source {name} must specify exactly one of repo or path.")
+        if repo_value:
+            repo = repo_value.removeprefix("https://github.com/").removesuffix(".git").strip("/")
+            if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo)
+                    or any(part in {".", ".."} for part in repo.split("/"))):
+                raise WorkerError(f"Catalog card {slug} source {name} has an invalid repository.")
+            result.append(SourceSpec(name=name, repo=repo, ref=ref))
+            continue
+        path_parts = (path or "").split("/")
+        if not PurePosixPath(path or "").is_absolute() or any(part in {".", ".."} for part in path_parts):
+            raise WorkerError(f"Catalog card {slug} local source {name} requires a clean absolute POSIX path.")
+        runner_id = str(item.get("runner_id", "")).strip()
+        runner_os = str(item.get("runner_os", "")).strip().lower()
+        if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", runner_id)
+                or runner_os not in {"linux", "wsl"}):
+            raise WorkerError(f"Catalog card {slug} local source {name} requires runner_id and runner_os linux or wsl.")
+        result.append(SourceSpec(name=name, repo=None, ref=ref, path=path, runner_id=runner_id, runner_os=runner_os))
+    return tuple(result)
 
 
 def valid_source_ref(value: str) -> bool:
@@ -443,6 +508,7 @@ def valid_source_ref(value: str) -> bool:
 def apply_task_source_overrides(route: ProjectRoute, details: str) -> ProjectRoute:
     """Apply a task's explicit source/workspace settings to project defaults."""
     fields: dict[str, str] = {}
+    sources = route.sources
     task_body = TASK_COMMENTS_HEADER_RE.split(details, maxsplit=1)[0]
     structured = re.search(r"^agent_config:\s*(\{[^\r\n]*\})\s*$", task_body, re.IGNORECASE | re.MULTILINE)
     if structured:
@@ -453,9 +519,11 @@ def apply_task_source_overrides(route: ProjectRoute, details: str) -> ProjectRou
         if not isinstance(config, dict):
             raise WorkerError("Task agent_config must be a JSON object.")
         fields = {str(key).lower(): str(value) for key, value in config.items()}
+        if "sources" in config:
+            sources = parse_source_specs(config["sources"], route.slug)
     else:
         for line in task_body.splitlines():
-            match = re.match(r"^\s*(repo|ref|source_ref|workspace_id)\s*:\s*(.*?)\s*$", line, re.IGNORECASE)
+            match = re.match(r"^\s*(repo|ref|source_ref|workspace_id|max_turns)\s*:\s*(.*?)\s*$", line, re.IGNORECASE)
             if match:
                 fields[match.group(1).lower()] = match.group(2)
 
@@ -481,7 +549,14 @@ def apply_task_source_overrides(route: ProjectRoute, details: str) -> ProjectRou
             validate_workspace_id(workspace_id)
         except WorkspaceRegistryError as exc:
             raise WorkerError(f"Task has invalid workspace_id: {exc}") from exc
-    return replace(route, repo=repo, source_ref=source_ref, workspace_id=workspace_id)
+    max_turns_text = fields.get("max_turns", "").strip()
+    try:
+        max_turns = int(max_turns_text) if max_turns_text else route.max_turns
+    except ValueError as exc:
+        raise WorkerError("Task max_turns must be an integer between 1 and 80.") from exc
+    if not 1 <= max_turns <= 80:
+        raise WorkerError("Task max_turns must be between 1 and 80.")
+    return replace(route, repo=repo, source_ref=source_ref, workspace_id=workspace_id, sources=sources, max_turns=max_turns)
 
 
 def parse_catalog_cards(text: str) -> list[ProjectRoute]:
@@ -648,7 +723,13 @@ def select_task_prompt_context(details: str, *, max_comments: int = 8, max_comme
     return f"{description}\n\nRecent comments from other authors:\n{rendered}"
 
 
-def task_prompt(task: Task, code: bool, source_sha: str | None = None, workspace_id: str | None = None) -> str:
+def task_prompt(
+    task: Task,
+    code: bool,
+    source_sha: str | None = None,
+    workspace_id: str | None = None,
+    source_manifest: list[dict[str, str]] | None = None,
+) -> str:
     if task.is_tool_free:
         return f"""You are handling one bounded Kanzo task with no tools enabled.
 
@@ -686,6 +767,18 @@ Use only the supplied task text. Do not request tools, research, delegate, creat
         "The Graphify index may represent another revision; do not claim it matches unless independently verified.\n\n"
         if source_sha else ""
     )
+    if code and task.route and task.route.sources:
+        resolved_sources = source_manifest or []
+        source_lines = "\n".join(
+            f"- {item.get('name')}: `.kanzo-sources/{item.get('name')}/` at {item.get('sha')}"
+            for item in resolved_sources
+        )
+        source_context += (
+            "Pinned secondary repositories are mounted read-only beneath `.kanzo-sources/<name>/`; "
+            "use them only as context and do not edit, add, or delete files there. The worker verifies their "
+            "resolved SHAs and rejects any returned changes under `.kanzo-sources/`.\n"
+            f"Resolved sources:\n{source_lines}\n\n"
+        )
     task_context = select_task_prompt_context(task.details)
     implementation_guidance = (
         """Code-task pacing:
@@ -2545,7 +2638,13 @@ class Worker:
 
         if provider not in ("openai-api", "openai_compatible") and not self._auth_ready(provider, profile):
             raise WorkerError(f"Hermes is not authenticated for provider {provider}.")
-        prompt = task_prompt(task, code, active.get("source_sha") if active else None, active.get("workspace_id") if active else None)
+        prompt = task_prompt(
+            task,
+            code,
+            active.get("source_sha") if active else None,
+            active.get("workspace_id") if active else None,
+            active.get("source_manifest") if active else None,
+        )
         if active is not None:
             previous = active.get("previous_checkpoint")
             if previous and previous.get("run_id") != active.get("run_id"):
@@ -2891,17 +2990,41 @@ class Worker:
             raise WorkerError("Kanzo project route has a repository but checkout is not a Git worktree.")
         if has_git and not source_sha:
             raise WorkerError("Kanzo sandbox requires an exact repository source revision.")
+        if route and route.sources and not has_git:
+            raise WorkerError("Secondary source manifests require a Git primary source.")
         client = BrokerClient()
-        if has_git:
-            lease = client.prepare(
-                active["task_id"], active["run_id"], checkout, source_sha,
-                bool(route and route.read_only),
-            )
-        else:
-            lease = client.prepare_empty(
-                active["task_id"], active["run_id"], bool(route and route.read_only)
-            )
+        source_root: Path | None = None
+        additional_sources: list[tuple[str, Path, str]] = []
+        source_metadata: list[dict[str, str]] = []
+        try:
+            if route and route.sources:
+                source_root = Path(tempfile.mkdtemp(prefix=".kanzo-source-prep-", dir=self.workspace))
+                additional_sources, source_metadata = self._resolve_secondary_sources(route, active, source_root)
+            if has_git:
+                lease = client.prepare(
+                    active["task_id"], active["run_id"], checkout, source_sha,
+                    bool(route and route.read_only), additional_sources=additional_sources,
+                )
+            else:
+                if additional_sources:
+                    raise WorkerError("Secondary source manifests require a Git primary source.")
+                lease = client.prepare_empty(
+                    active["task_id"], active["run_id"], bool(route and route.read_only)
+                )
+        finally:
+            if source_root is not None:
+                shutil.rmtree(source_root, ignore_errors=True)
         active["broker_client"] = client
+        if additional_sources:
+            active["protected_prefixes"] = [".kanzo-sources"]
+            lease["protected_prefixes"] = [".kanzo-sources"]
+        active["source_manifest"] = source_metadata
+        active["source_archive_sha256"] = lease.get("source_archive_sha256")
+        if source_metadata:
+            self.ledger.record_fields(active["run_id"], {
+                "source_manifest": source_metadata,
+                "source_archive_sha256": active["source_archive_sha256"],
+            })
         active["broker_lease"] = lease
 
         def progress() -> None:
@@ -2923,6 +3046,7 @@ class Worker:
             task_id=active["task_id"], run_id=active["run_id"], profile=profile,
             provider=provider, model=model, reasoning=reasoning,
             tool_policy=task.hermes_tool_policy,
+            max_turns=route.max_turns if route else 80,
         )
         session_id = prepared.get("session_id")
         generation = prepared.get("execution_generation")
@@ -2943,6 +3067,98 @@ class Worker:
         active["execution_generation_authoritative"] = False
         client.bind(lease, session_id, profile)
         active["broker_bound"] = True
+
+    def _resolve_secondary_sources(
+        self, route: ProjectRoute, active: dict[str, Any], staging: Path,
+    ) -> tuple[list[tuple[str, Path, str]], list[dict[str, str]]]:
+        """Resolve every manifest source to a clean, pinned checkout before model invocation."""
+        token = self.env.get("GITHUB_TOKEN", "")
+        if any(source.repo for source in route.sources) and not token:
+            raise WorkerError("A GitHub token is required to resolve the secondary source manifest.")
+        runner_id = self.env.get("KANZO_RUNNER_ID", "k3s").strip() or "k3s"
+        roots_raw = self.env.get("KANZO_LOCAL_SOURCE_ROOTS", "")
+        allowed_roots: list[Path] = []
+        for item in roots_raw.split(os.pathsep):
+            if item.strip():
+                try:
+                    allowed_roots.append(Path(item.strip()).expanduser().resolve(strict=True))
+                except OSError as exc:
+                    raise WorkerError("A configured local source root is unavailable.") from exc
+        resolved: list[tuple[str, Path, str]] = []
+        metadata: list[dict[str, str]] = []
+        for source in route.sources:
+            destination = staging / source.name
+            if source.path:
+                if source.runner_id != runner_id:
+                    raise WorkerError(f"Local source {source.name!r} is assigned to a different runner.")
+                if source.runner_os != (self.env.get("KANZO_RUNNER_OS", "linux").strip().lower() or "linux"):
+                    raise WorkerError(f"Local source {source.name!r} has a runner OS mismatch.")
+                try:
+                    local_root = Path(source.path).expanduser().resolve(strict=True)
+                except OSError as exc:
+                    raise WorkerError(f"Local source {source.name!r} is unavailable.") from exc
+                if not local_root.is_dir() or not any(
+                    local_root == allowed or allowed in local_root.parents for allowed in allowed_roots
+                ):
+                    raise WorkerError(f"Local source {source.name!r} is outside configured source roots.")
+                repo_root = self._run_active_command(
+                    ["git", "-C", str(local_root), "rev-parse", "--show-toplevel"], active, timeout=30,
+                )
+                if repo_root.returncode or Path(repo_root.stdout.strip()).resolve() != local_root:
+                    raise WorkerError(f"Local source {source.name!r} must be an exact Git root.")
+                status = self._run_active_command(
+                    ["git", "-C", str(local_root), "status", "--porcelain", "--untracked-files=all"],
+                    active, timeout=30,
+                )
+                if status.returncode or status.stdout.strip():
+                    raise WorkerError(f"Local source {source.name!r} is dirty; refusing to snapshot it.")
+                cloned = self._run_active_command(
+                    ["git", "clone", "--no-hardlinks", str(local_root), str(destination)], active, timeout=180,
+                )
+            else:
+                assert source.repo
+                auth_env = self._hermes_env()
+                auth_env["GH_TOKEN"] = token
+                cloned = self._run_active_command(
+                    ["gh", "repo", "clone", source.repo, str(destination)], active,
+                    timeout=180, env=auth_env,
+                )
+            if cloned.returncode:
+                raise WorkerError(f"Could not resolve secondary source {source.name!r}.")
+            candidates = [source.ref]
+            if not re.fullmatch(r"(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})", source.ref):
+                candidates.extend((f"refs/remotes/origin/{source.ref}", f"refs/tags/{source.ref}"))
+            revision = ""
+            for candidate in candidates:
+                result = self._run_active_command(
+                    ["git", "-C", str(destination), "rev-parse", "--verify", "--quiet", "--end-of-options", f"{candidate}^{{commit}}"],
+                    active, timeout=30,
+                )
+                if result.returncode == 0 and re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})\s*", result.stdout):
+                    revision = result.stdout.strip()
+                    break
+            if not revision:
+                raise WorkerError(f"Secondary source {source.name!r} ref does not resolve to a commit.")
+            checked_out = self._run_active_command(
+                ["git", "-C", str(destination), "checkout", "--detach", revision], active, timeout=60,
+            )
+            clean = self._run_active_command(
+                ["git", "-C", str(destination), "status", "--porcelain", "--untracked-files=all"],
+                active, timeout=30,
+            )
+            if checked_out.returncode or clean.returncode or clean.stdout.strip():
+                raise WorkerError(f"Secondary source {source.name!r} failed pinned checkout validation.")
+            resolved.append((source.name, destination, revision))
+            metadata.append({
+                "name": source.name,
+                "kind": "local" if source.path else "git",
+                "repo": source.repo or "",
+                "path": source.path or "",
+                "ref": source.ref,
+                "sha": revision,
+                "archive_path": f".kanzo-sources/{source.name}",
+            })
+        return resolved, metadata
 
     @staticmethod
     def _heartbeat_sandbox(active: dict[str, Any] | None) -> None:

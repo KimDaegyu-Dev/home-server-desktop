@@ -10,6 +10,7 @@ from unittest.mock import patch
 from worker import Task, Worker
 from worker import (
     ProjectRoute,
+    SourceSpec,
     WorkerError,
     apply_task_source_overrides,
     parse_project_route,
@@ -51,6 +52,134 @@ class WorkspaceRoutingTests(unittest.TestCase):
             "agent_config: {\"slug\":\"demo\",\"repo\":\"org/repo\",\"model_lane\":\"analysis\",\"read_only\":true,\"ref\":\"release/v2\"}",
         )
         self.assertEqual(route.source_ref, "release/v2")
+
+    def test_catalog_parses_a_bounded_mixed_source_manifest(self) -> None:
+        route = parse_project_route(
+            "demo",
+            'agent_config: {"slug":"demo","repo":"org/primary","model_lane":"coding",'
+            '"read_only":false,"sources":[{"name":"api","repo":"org/api","ref":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},'
+            '{"name":"shared","path":"/mnt/c/Github/shared","ref":"main",'
+            '"runner_id":"wsl-home","runner_os":"wsl"}]}',
+        )
+        self.assertEqual(len(route.sources), 2)
+        self.assertEqual((route.sources[0].name, route.sources[0].repo, route.sources[0].ref), ("api", "org/api", "a" * 40))
+        self.assertEqual((route.sources[1].path, route.sources[1].runner_id, route.sources[1].runner_os),
+                         ("/mnt/c/Github/shared", "wsl-home", "wsl"))
+
+    def test_per_task_model_turn_budget_is_bounded_and_inheritable(self) -> None:
+        route = parse_project_route(
+            "demo",
+            'agent_config: {"slug":"demo","repo":"org/repo","model_lane":"coding",'
+            '"read_only":false,"max_turns":8}',
+        )
+        self.assertEqual(route.max_turns, 8)
+        inherited = apply_task_source_overrides(route, 'agent_config: {"max_turns":""}')
+        self.assertEqual(inherited.max_turns, 8)
+        overridden = apply_task_source_overrides(route, 'agent_config: {"max_turns":72}')
+        self.assertEqual(overridden.max_turns, 72)
+        with self.assertRaises(WorkerError):
+            parse_project_route(
+                "demo",
+                'agent_config: {"slug":"demo","repo":"org/repo","model_lane":"coding",'
+                '"read_only":false,"max_turns":81}',
+            )
+
+    def test_catalog_rejects_unpinned_unsafe_duplicate_or_excess_sources(self) -> None:
+        prefix = '{"slug":"demo","repo":"org/primary","model_lane":"coding","read_only":false,"sources":'
+        cases = [
+            '[{"name":"api","repo":"org/api"}]',
+            '[{"name":"../api","repo":"org/api","ref":"main"}]',
+            '[{"name":"api","repo":"org/api","ref":"main"},{"name":"API","repo":"org/api","ref":"main"}]',
+            '[{"name":"local","path":"/mnt/c/Github/../secret","ref":"main","runner_id":"wsl-home","runner_os":"wsl"}]',
+            '[{"name":"local","path":"/mnt/c/Github/repo","ref":"main"}]',
+            '[{"name":"a","repo":"org/a","ref":"main"},{"name":"b","repo":"org/b","ref":"main"},'
+            '{"name":"c","repo":"org/c","ref":"main"},{"name":"d","repo":"org/d","ref":"main"},'
+            '{"name":"e","repo":"org/e","ref":"main"}]',
+        ]
+        for sources in cases:
+            with self.subTest(sources=sources), self.assertRaises(WorkerError):
+                parse_project_route("demo", f"agent_config: {prefix}{sources}}}")
+
+    def test_task_sources_override_project_manifest_and_empty_list_clears_it(self) -> None:
+        route = parse_project_route(
+            "demo",
+            'agent_config: {"slug":"demo","repo":"org/primary","model_lane":"coding",'
+            '"read_only":false,"sources":[{"name":"api","repo":"org/api","ref":"main"}]}',
+        )
+        overridden = apply_task_source_overrides(
+            route,
+            'agent_config: {"sources":[{"name":"client","repo":"org/client","ref":"v1"}]}',
+        )
+        self.assertEqual([(item.name, item.repo) for item in overridden.sources], [("client", "org/client")])
+        cleared = apply_task_source_overrides(route, 'agent_config: {"sources":[]}')
+        self.assertEqual(cleared.sources, ())
+
+    def test_same_runner_local_secondary_source_is_pinned_and_copied_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            allowed = root / "sources"
+            source = allowed / "shared"
+            source.mkdir(parents=True)
+            subprocess.run(["git", "init", "--initial-branch=main", str(source)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.name", "Manifest Test"], check=True)
+            subprocess.run(["git", "-C", str(source), "config", "user.email", "manifest@example.invalid"], check=True)
+            (source / "shared.py").write_text("value = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "shared.py"], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-m", "base"], check=True, capture_output=True)
+            sha = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            route = ProjectRoute(
+                slug="demo", repo="org/primary", model_lane="coding", provider="openai-api",
+                model="iq_3s", reason="high", profile="builder", read_only=False,
+                sources=(SourceSpec("shared", None, "main", str(source), "wsl-home", "wsl"),),
+            )
+            worker = Worker({
+                "KANZO_RUNNER_ID": "wsl-home", "KANZO_RUNNER_OS": "wsl",
+                "KANZO_LOCAL_SOURCE_ROOTS": str(allowed),
+                "KANZO_WORKER_STATE_DIR": str(root / "state"),
+                "KANZO_WORKSPACE": str(root / "workspace"),
+            })
+            worker._refresh_cancel_state = lambda _active: None
+            staging = root / "staging"
+            staging.mkdir()
+            try:
+                resolved, metadata = worker._resolve_secondary_sources(route, {"run_id": "a" * 12}, staging)
+                self.assertEqual(resolved[0][2], sha)
+                self.assertEqual(metadata[0]["sha"], sha)
+                self.assertEqual((resolved[0][1] / "shared.py").read_text(encoding="utf-8"), "value = 1\n")
+                self.assertEqual(subprocess.run(
+                    ["git", "-C", str(source), "status", "--porcelain"], check=True,
+                    capture_output=True, text=True,
+                ).stdout, "")
+            finally:
+                worker.ledger.close()
+                if worker._workspace_registry is not None:
+                    worker._workspace_registry.close()
+
+    def test_local_secondary_source_fails_closed_outside_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            allowed = root / "allowed"
+            source = root / "outside"
+            allowed.mkdir()
+            source.mkdir()
+            route = ProjectRoute(
+                slug="demo", repo="org/primary", model_lane="coding", provider="openai-api",
+                model="iq_3s", reason="high", profile="builder", read_only=False,
+                sources=(SourceSpec("shared", None, "main", str(source), "wsl-home", "wsl"),),
+            )
+            worker = Worker({
+                "KANZO_RUNNER_ID": "wsl-home", "KANZO_RUNNER_OS": "wsl",
+                "KANZO_LOCAL_SOURCE_ROOTS": str(allowed),
+                "KANZO_WORKER_STATE_DIR": str(root / "state"),
+                "KANZO_WORKSPACE": str(root / "workspace"),
+            })
+            try:
+                with self.assertRaisesRegex(WorkerError, "outside configured source roots"):
+                    worker._resolve_secondary_sources(route, {"run_id": "a" * 12}, root)
+            finally:
+                worker.ledger.close()
+                if worker._workspace_registry is not None:
+                    worker._workspace_registry.close()
 
     def test_empty_catalog_form_fields_use_documented_defaults(self) -> None:
         route = parse_project_route(

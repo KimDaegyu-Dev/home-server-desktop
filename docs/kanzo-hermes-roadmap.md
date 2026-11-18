@@ -14,7 +14,7 @@ Git은 코드 변경의 기본 계약으로 유지한다. 기본 소스 공급�
 - Kanzo 커스터마이징은 사용자가 관리하는 private downstream 저장소에서 유지하고, 공식 저장소는 `upstream` remote로 연결한다. 변경은 downstream에서 추적하고 필요한 upstream 변경만 선택적으로 가져와 충돌과 업데이트를 관리한다.
 - 각 Workspace는 `source kind + repository 또는 절대경로 + runner/OS + ref + resolved SHA`를 시작 전에 기록하고, 출처가 검증되지 않으면 모델을 호출하지 않는다.
 - 샌드박스 `/workspace`에는 검증된 소스 스냅샷만 전달하고 `.git` 메타데이터는 노출하지 않는다. 실행 직전 checkout에서 확인한 commit SHA는 `KANZO_SOURCE_GIT_SHA`로 runner 명령에 전달해 근거를 남긴다.
-- 태스크의 소스 설정은 프로젝트 기본값을 상속하고 명시된 `repo`/`ref`만 덮어쓴다. 여러 저장소가 필요한 작업은 나중에 태스크에 저장소 목록과 역할을 지정하는 명시적 manifest로 확장한다.
+- 태스크의 소스 설정은 프로젝트 기본값을 상속하고 명시된 `repo`/`ref`만 덮어쓴다. 여러 저장소가 필요한 작업은 명시적 manifest를 사용한다. 기본 저장소는 쓰기 가능하고, 추가 저장소는 ref/SHA를 고정해 읽기 전용 스냅샷으로 `.kanzo-sources/<name>/` 아래에 전달한다. manifest는 최대 4개 추가 저장소를 허용하고, 합산 파일 수·확장 크기·압축 크기를 제한한다.
 - Workspace는 안정적인 ID와 절대경로를 가진다. 여러 태스크가 하나의 Workspace에 연결될 수 있고, Workspace 하나에는 writer lease 하나만 허용한다. 실행 ID마다 새 checkout을 만들지 않는다.
 - 같은 변경 흐름에 속한 태스크만 Workspace를 명시적으로 공유하고 순차 실행한다. 독립 병렬 작업은 별도 Workspace와 브랜치를 사용한다.
 - 중단·대기·실패·리뷰 상태에서는 작업 디렉터리와 브랜치를 보존한다. 재개 시 저장소, 브랜치, 커밋, 변경 파일, 마지막 실행과 checkpoint를 먼저 확인한다. 예상하지 못한 변경은 덮어쓰지 않고 review로 멈춘다.
@@ -82,7 +82,7 @@ Kanzo 이벤트는 깨우기 신호이고 Kanzo 카드와 workspace registry가 
 
 ### 4. 여러 저장소, 로컬·원격 통합과 운영 검증
 
-- 태스크 source manifest로 API/클라이언트 등 여러 repo를 각각 절대경로 또는 repo/ref/SHA로 고정한다.
+- 태스크 source manifest로 API/클라이언트 등 최대 4개 추가 repo를 각각 절대경로 또는 repo/ref/SHA로 고정한다. source identity와 resolved SHA를 RunLedger에 기록하고, secondary source 수정·삭제 결과는 primary workspace에 적용하기 전에 거부한다.
 - 각 저장소의 commit/PR과 Workspace에 연결된 Kanzo 태스크 결과를 연결한다. 부분 성공은 완료로 표시하지 않는다.
 - workspace 용량, lease, runner 연결, dirty worktree, merge 검증, 자동 정리 결과를 Grafana/Kanzo에서 확인한다.
 - 백업·복구와 dispatcher 장애 복구 절차를 검증하고 GitOps를 통해 점진 배포한다.

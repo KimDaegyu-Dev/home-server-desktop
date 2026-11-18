@@ -609,11 +609,14 @@ class Handler(BaseHTTPRequestHandler):
     def _create(self) -> None:
         body = self._body()
         required = {"task_id", "run_id", "profile", "provider", "model", "reasoning"}
-        if not required.issubset(body) or set(body) - required - {"tool_policy"}:
+        if not required.issubset(body) or set(body) - required - {"tool_policy", "max_turns"}:
             raise ApiError(400, "invalid_create_fields")
         tool_policy = body.get("tool_policy", "standard")
         if not isinstance(tool_policy, str) or tool_policy not in TOOLSET_POLICIES:
             raise ApiError(400, "tool_policy_invalid")
+        max_turns = body.get("max_turns", 80)
+        if isinstance(max_turns, bool) or not isinstance(max_turns, int) or not 1 <= max_turns <= 80:
+            raise ApiError(400, "max_turns_invalid")
         task, run, profile = body["task_id"], body["run_id"], body["profile"]
         if not _valid_identity(task, 256) or not _valid_identity(run, 128):
             raise ApiError(400, "run_identity_invalid")
@@ -628,10 +631,11 @@ class Handler(BaseHTTPRequestHandler):
         home = _profile_home(profile)
         safe_body = {key: body[key] for key in ("task_id", "run_id", "profile", "provider", "model", "reasoning")}
         safe_body["tool_policy"] = tool_policy
+        safe_body["max_turns"] = max_turns
         digest = hashlib.sha256(json.dumps(safe_body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         create_payload = {
             "provider": body["provider"], "model": body["model"],
-            "reasoning": body["reasoning"], "tool_policy": tool_policy,
+            "reasoning": body["reasoning"], "tool_policy": tool_policy, "max_turns": max_turns,
         }
         should_create, create_request_id = self.store.begin_create(
             task, run, profile, digest, create_payload
@@ -645,6 +649,7 @@ class Handler(BaseHTTPRequestHandler):
                 "--task-id", task, "--run-id", run, "--provider", body["provider"],
                 "--model", body["model"], "--reasoning", body["reasoning"],
                 "--toolsets", ",".join(TOOLSET_POLICIES[tool_policy]), "--cwd", "/workspace",
+                "--max-turns", str(max_turns),
                 "--request-id", create_request_id]
         try:
             code, out, _ = _run_helper(args, timeout=60, output_limit=64 * 1024)
@@ -899,10 +904,16 @@ def _reconcile_startup(store: Store) -> None:
         try:
             payload = json.loads(row["create_payload"])
             if (not isinstance(payload, dict)
-                    or set(payload) != {"provider", "model", "reasoning", "tool_policy"}
+                    or set(payload) not in (
+                        {"provider", "model", "reasoning", "tool_policy"},
+                        {"provider", "model", "reasoning", "tool_policy", "max_turns"},
+                    )
                     or payload.get("tool_policy") not in TOOLSET_POLICIES
                     or not all(isinstance(payload.get(key), str) and payload[key]
                                for key in ("provider", "model", "reasoning"))
+                    or isinstance(payload.get("max_turns", 80), bool)
+                    or not isinstance(payload.get("max_turns", 80), int)
+                    or not 1 <= payload.get("max_turns", 80) <= 80
                     or not row["create_request_id"]):
                 continue
             if not store.retry_create(task, run):
@@ -911,6 +922,7 @@ def _reconcile_startup(store: Store) -> None:
                     "--task-id", task, "--run-id", run, "--provider", payload["provider"],
                     "--model", payload["model"], "--reasoning", payload["reasoning"],
                     "--toolsets", ",".join(TOOLSET_POLICIES[payload["tool_policy"]]),
+                    "--max-turns", str(payload.get("max_turns", 80)),
                     "--cwd", "/workspace", "--request-id", row["create_request_id"]]
             code, output, _ = _run_helper(args, timeout=60, output_limit=64 * 1024)
             result = json.loads(output)

@@ -119,10 +119,13 @@ class ExecutorClient:
         model: str,
         reasoning: str,
         tool_policy: str = "standard",
+        max_turns: int = 80,
     ) -> dict[str, Any]:
         """Create one session and require a valid session_id in the JSON reply."""
         if tool_policy not in {"standard", "response_only"}:
             raise ValueError("tool_policy must be standard or response_only")
+        if isinstance(max_turns, bool) or not isinstance(max_turns, int) or not 1 <= max_turns <= 80:
+            raise ValueError("max_turns must be between 1 and 80")
         payload = {
             "task_id": _validate_identifier(task_id, "task_id"),
             "run_id": _validate_identifier(run_id, "run_id"),
@@ -131,6 +134,7 @@ class ExecutorClient:
             "model": _validate_identifier(model, "model"),
             "reasoning": _validate_identifier(reasoning, "reasoning"),
             "tool_policy": tool_policy,
+            "max_turns": max_turns,
         }
         response = self._post_json("/v1/sessions", payload, self.request_timeout)
         session_id = response.get("session_id")

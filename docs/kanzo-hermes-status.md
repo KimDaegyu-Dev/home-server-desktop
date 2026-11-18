@@ -10,6 +10,7 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - WSL runner의 `GITHUB_TOKEN`은 현재 Kubernetes/Vault 동기화 Secret과 일치하지만 Windows `gh` 로그인 토큰과 다르고 push가 거부된다. Vault `kv/mcp/kanzo-agent`의 `GITHUB_TOKEN`에 Contents write 및 Pull requests write 권한이 필요하다. VSO가 Secret을 갱신한 뒤 `launch-wsl-runner.sh`를 다시 실행해야 host process가 새 값을 읽는다.
 - Kanzo #140은 Todo에서 human 승인 카드 #141을 기다린다. #140 본문은 source manifest 구현 및 deploy/merge/push 금지를 요구한다. #141 승인 게이트는 유지한다.
 - 2026-11-18 압축 지연 개선은 `fix/gateway-compression-checkpoint` 브랜치에 구현했다. Gateway 대기 300초, 실행 시작 체크포인트, 진행·완료 로그, 압축 실패 시 `review` 전환을 포함한다. 압축 시점의 작업 세부 내역은 원본 Hermes session transcript에 남고, 현재 체크포인트에는 해당 세션 포인터를 둔다. 아직 이미지 빌드·GitOps 반영·롤아웃은 하지 않아 live 설정은 기존 값이다.
+- 현재 로컬 변경은 Kanzo 프로젝트/태스크의 `max_turns` 상한(1–80)과 다중 저장소 source manifest를 구현한다. UI·worker·Executor API·Hermes Gateway 경로를 연결했으며, manifest 추가 저장소는 고정된 읽기 전용 스냅샷으로만 전달한다. 이 변경은 #140의 deploy/merge/push 금지 조건에 따라 아직 배포하거나 원격에 push하지 않았다.
 
 ## 단계 진행
 
@@ -19,7 +20,7 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 | 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 1-task event canary 부분 통과; 다중 task acceptance 미완료 | PVC/registry smoke와 실제 #143 workspace 생성은 확인했다. 실제 두 번째 task 재사용 acceptance는 publish 권한 실패로 미입증이다. Vault runner token을 갱신한 뒤 새 canary가 필요하다. |
 | 2. 정지·재개·병합 후 정리 | 구현·배포 완료; merged-PR cleanup E2E 미완료 | safe cleanup, executor reconciliation, persistent-workspace resume guidance, confirmed cancellation snapshot transfer를 배포했다. 실제 merged PR 및 완료 task를 통한 자동 branch/file cleanup은 아직 검증되지 않았다. |
 | 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료; writable resume/offline 검증 미완료 | 절대경로/runner 라우팅, event claim, source SHA, 원본 무변경은 확인했다. writable 중단·재개와 runner offline 복구의 live 검증이 남았다. |
-| 4. 다중 저장소·운영 검증 | 승인 대기 | #140은 #141 human gate를 기다린다. 해당 task의 source manifest 구현은 승인 전 실행하지 않는다. |
+| 4. 다중 저장소·운영 검증 | 다중 저장소 구현 로컬 완료·테스트 통과; live canary 미완료 | Kanzo 폼, 최대 4개 secondary source pinning/read-only 스냅샷, primary 변경만 전달하는 경계를 구현했다. Python 134 tests, Kanzo Rust 76 tests, release build 통과. #140 조건에 따라 push/deploy하지 않아 live manifest canary는 아직 없다. 운영 recovery/observability(이번 요청의 6번)는 범위에서 제외했다. |
 
 ## 이번 구현 세션
 
@@ -145,3 +146,11 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - On a confirmed cancellation of a writable task with a persistent workspace, the worker now applies the final broker snapshot before finalizing the lease. A transfer failure is reported explicitly; unconfirmed remote runs are never snapshotted and remain quarantined.
 - Worker suite: 121 tests passed, including prompt-boundary and cancellation-snapshot tests. `git diff --check` passed; changed source/doc files use LF.
 - Argo `kanzo-agent-worker` and `kanzo-sandbox` are Synced/Healthy at `c65f6748db06573d95c4cbac2328a540c5caca7f`; the new dispatcher Pod is 2/2 Ready, and Prometheus reports active task count 0. Cancellation snapshot transfer has unit coverage but still needs a live cancelled-run canary.
+
+## Follow-up evidence (2026-11-18, local multi-source implementation)
+
+- Added structured Kanzo form fields for a project/task `max_turns` limit (1–80) and up to four additional source repositories. The worker resolves each source to an exact commit before calling Hermes, records its ref/SHA and archive digest in RunLedger, places it under `.kanzo-sources/<name>/`, and rejects changed/deleted secondary files before applying any output to the primary workspace.
+- Combined archive generation enforces compressed bytes, expanded bytes, and file count across all sources, not per repository. Local secondary sources must use the current runner/OS, resolve to an exact Git root under the configured allowlist, and be clean.
+- The deployed Hermes Gateway contract was inspected read-only: `session_create` exposes `max_turns`; `_requested_policy` carries it; `session_policy` applies it to the session config. No Gateway or cluster configuration was changed.
+- Worker: `python -m py_compile *.py` and `python -m unittest discover -s . -p "test_*.py"` — 134 passed. Kanzo patches applied cleanly in order to a clean pinned v0.4.2 checkout; `node --check src/app.js`, `git diff --check`, Kanzo `cargo test --locked` (76 passed), and `cargo build --release --locked` passed. The scoped `rustfmt --edition 2024 --check src/store.rs` passed; whole-tree `cargo fmt -- --check` still flags pre-existing formatting in the separate MCP annotations patch.
+- No Kanzo task was moved, no live manifest canary was run, and no commit was pushed or deployed. The implementation remains a local review branch because #140 explicitly forbids push/deploy/merge. Phases 1–3 still have the live acceptance gaps listed above; item 6 remains excluded.

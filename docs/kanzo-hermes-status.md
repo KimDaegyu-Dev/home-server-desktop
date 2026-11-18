@@ -144,3 +144,11 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - On a confirmed cancellation of a writable task with a persistent workspace, the worker now applies the final broker snapshot before finalizing the lease. A transfer failure is reported explicitly; unconfirmed remote runs are never snapshotted and remain quarantined.
 - Worker suite: 121 tests passed, including prompt-boundary and cancellation-snapshot tests. `git diff --check` passed; changed source/doc files use LF.
 - Argo `kanzo-agent-worker` and `kanzo-sandbox` are Synced/Healthy at `c65f6748db06573d95c4cbac2328a540c5caca7f`; the new dispatcher Pod is 2/2 Ready, and Prometheus reports active task count 0. Cancellation snapshot transfer has unit coverage but still needs a live cancelled-run canary.
+
+## Follow-up evidence (2026-11-18, WSL token and shared-workspace canary)
+
+- VaultStaticSecret and the Kubernetes credential Secret are Synced/Healthy. The live WSL runner environment matches the synced Secret by SHA-256, and a GitHub branch push dry-run succeeded. Secret values were not printed.
+- Canary #148 reused workspace p1-shared-e2e-20261118b from #143. The first checkpoint remained present; the second checkpoint was committed at 2f438eb and pushed on kanzo/workspaces/p1-shared-e2e-20261118b. Both files and a clean worktree were independently verified.
+- #148 initially stopped after push because the WSL host lacked gh. Installed Ubuntu package gh 2.45.0 and created draft PR #2 without rerunning the model. The PR is review-only and has not been merged or deployed. The worker now checks for gh before starting Hermes so a missing CLI fails before model usage.
+- Canary #145 was configured with task-level read_only:true, but the worker derives read-only mode from the active project catalog route and does not apply that task-level field. Since the catalog route was writable, the worker entered the write path and rejected the unchanged code task. This does not establish a workspace reuse failure. The first canary workspace was independently confirmed intact.
+- #143, #145, and #148 remain in review. The draft canary PR and workspace are retained pending review. #140 remains blocked on human approval card #141; it was not bypassed.

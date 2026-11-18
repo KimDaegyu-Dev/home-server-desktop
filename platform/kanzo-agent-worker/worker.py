@@ -2872,6 +2872,8 @@ class Worker:
         token = self.env.get("GITHUB_TOKEN", "")
         if not token:
             raise WorkerError("검토용 브랜치를 게시할 GitHub 토큰이 없습니다. Hermes 실행 전에 중단했습니다.")
+        if not shutil.which("gh", path=self.env.get("PATH")):
+            raise WorkerError("GitHub CLI gh is missing from this runner. Install it and restart the worker; Hermes was not started.")
         branch = (active or {}).get("branch", "")
         if not branch:
             branch_result = self._run_active_command(

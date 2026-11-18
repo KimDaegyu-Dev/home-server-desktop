@@ -4,6 +4,7 @@ import unittest
 import tempfile
 import subprocess
 import threading
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -149,6 +150,19 @@ class WorkspaceRoutingTests(unittest.TestCase):
         self.assertEqual(task_route.workspace_id, "meal-plan-v2")
         self.assertEqual(task_route.profile, self.route.profile)
         self.assertTrue(task_route.read_only)
+
+    def test_task_read_only_can_restrict_writable_project(self) -> None:
+        writable = replace(self.route, read_only=False)
+        task_route = apply_task_source_overrides(writable, 'agent_config: {"read_only":true}')
+        self.assertTrue(task_route.read_only)
+
+    def test_task_cannot_relax_project_read_only(self) -> None:
+        task_route = apply_task_source_overrides(self.route, 'agent_config: {"read_only":false}')
+        self.assertTrue(task_route.read_only)
+
+    def test_invalid_task_read_only_fails_closed(self) -> None:
+        with self.assertRaisesRegex(WorkerError, "Task read_only must be true or false"):
+            apply_task_source_overrides(self.route, 'agent_config: {"read_only":"sometimes"}')
 
     def test_task_source_settings_inherit_project_defaults(self) -> None:
         task_route = apply_task_source_overrides(

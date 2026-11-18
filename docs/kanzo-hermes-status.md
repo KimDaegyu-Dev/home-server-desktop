@@ -20,7 +20,7 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 | 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 1-task event canary 부분 통과; 다중 task acceptance 미완료 | PVC/registry smoke와 실제 #143 workspace 생성은 확인했다. 실제 두 번째 task 재사용 acceptance는 publish 권한 실패로 미입증이다. Vault runner token을 갱신한 뒤 새 canary가 필요하다. |
 | 2. 정지·재개·병합 후 정리 | 구현·배포 완료; 로컬 cleanup 통합 테스트 통과, live merged-PR E2E 미완료 | safe cleanup, executor reconciliation, persistent-workspace resume guidance, confirmed cancellation snapshot transfer를 배포했다. 실제 worker 정리 함수와 registry를 쓰는 통합 테스트는 통과했지만 GitHub API는 모의했으므로 live merged PR 및 완료 task를 통한 자동 branch/file cleanup은 아직 검증되지 않았다. |
 | 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료; writable resume/offline 검증 미완료 | 절대경로/runner 라우팅, event claim, source SHA, 원본 무변경은 확인했다. writable 중단·재개와 runner offline 복구의 live 검증이 남았다. |
-| 4. 다중 저장소·운영 검증 | 다중 저장소 구현 로컬 완료·테스트 통과; live canary 미완료 | Kanzo 폼, 최대 4개 secondary source pinning/read-only 스냅샷, primary 변경만 전달하는 경계를 구현했다. Python 136 tests, Kanzo Rust 76 tests, release build 통과. #140 조건에 따라 push/deploy하지 않아 live manifest canary는 아직 없다. 운영 recovery/observability(이번 요청의 6번)는 범위에서 제외했다. |
+| 4. 다중 저장소·운영 검증 | 다중 저장소 구현 로컬 완료·테스트 통과; live canary 미완료 | Kanzo 폼, 최대 4개 secondary source pinning/read-only 스냅샷, primary 변경만 전달하는 경계를 구현했다. Python 137 tests, Kanzo Rust 76 tests, release build 통과. #140 조건에 따라 push/deploy하지 않아 live manifest canary는 아직 없다. 운영 recovery/observability(이번 요청의 6번)는 범위에서 제외했다. |
 
 ## 이번 구현 세션
 
@@ -152,6 +152,13 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Commit `b9a12cd38b80ee959de27a33f38e1edb18e88594` on local branch `kanzo/phase4-readonly-source-manifest` contains the bounded multi-source implementation and project/task turn caps. It was not pushed or deployed because #140 prohibits both.
 - Worker suite after adding combined multi-source limit tests and the workspace cleanup orchestration test: 136 passed. The cleanup test exercises the real worker method, SQLite registry, clean Git checkout, linked-task checks, tombstone, and local workspace deletion; GitHub PR/ref responses and remote branch deletion are mocked. This is not live merged-PR E2E evidence.
 - Phase 1 already has a synthetic PVC restart canary and a local linked-task resume test, but a live pair of Kanzo event tasks sharing one workspace remains unverified. Phase 3 has local linked-workspace and runner-routing tests; live writable WSL interruption/resume and host-offline behavior remain unverified. Phase 4 live manifest canary remains intentionally unrun until the local implementation is separately approved and deployed. Item 6 remains excluded.
+
+## Follow-up evidence (2026-11-19, live linked-task workspace canary started)
+
+- A no-write GitHub branch-push preflight from the live dispatcher succeeded using its Vault-injected token; no remote branch was created by the preflight.
+- Canary task `home-server-desktop#150` was claimed through the event path and completed in workspace `roadmap-live-e2e-20261119` at source SHA `b8797651fa0b906f0e0b0536c49b326f31cc745c`. The sandbox verified a single marker file, and the worker created draft PR #5. The sandbox lacks `.git`, so Git status is not directly available inside the sandbox.
+- Canary task `#151` initially failed before Hermes because its host source repository was dirty. The dirty file was this session's uncommitted regression test; after testing and committing, #151 can be explicitly requeued to validate the same workspace. No automatic retry occurred.
+- Added a combined compressed-size boundary test. Worker `py_compile` and suite: 137 passed. This update does not yet prove second-task reuse or merged-PR cleanup.
 
 ## Follow-up evidence (2026-11-18, local multi-source implementation)
 

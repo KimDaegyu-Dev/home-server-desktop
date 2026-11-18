@@ -13,6 +13,7 @@ from workspace_transfer import (
     WorkspaceTransferError,
     apply_changed_archive,
     build_manifest_archive,
+    build_source_archive,
 )
 
 
@@ -103,6 +104,23 @@ class ManifestTransferTests(unittest.TestCase):
             with self.assertRaisesRegex(WorkspaceTransferError, "max_expanded_bytes"):
                 build_manifest_archive(
                     primary, primary_sha, [("api", secondary, secondary_sha)], max_expanded_bytes=20,
+                )
+
+    def test_manifest_archive_applies_compressed_limit_across_all_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            primary = root / "primary"
+            secondary = root / "secondary"
+            primary_sha = init_repo(primary, "README.md", "primary\n")
+            secondary_sha = init_repo(secondary, "api.md", "api contract\n")
+            primary_archive, _ = build_source_archive(primary, primary_sha)
+            secondary_archive, _ = build_source_archive(secondary, secondary_sha)
+            combined_limit = max(len(primary_archive), len(secondary_archive)) + 1
+
+            with self.assertRaisesRegex(WorkspaceTransferError, "max_compressed_bytes"):
+                build_manifest_archive(
+                    primary, primary_sha, [("api", secondary, secondary_sha)],
+                    max_compressed_bytes=combined_limit,
                 )
 
     def test_secondary_source_edits_fail_closed_before_primary_changes_apply(self) -> None:

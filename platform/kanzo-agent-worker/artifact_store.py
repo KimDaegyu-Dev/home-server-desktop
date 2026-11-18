@@ -155,6 +155,64 @@ class ArtifactStore:
             "sha256": digest,
         }
 
+    def write_checkpoint(
+        self, task_id: str, run_id: str, checkpoint: dict[str, Any]
+    ) -> dict[str, str]:
+        """Persist a structured run checkpoint outside the source workspace."""
+        if not isinstance(checkpoint, dict):
+            raise TypeError("checkpoint must be a dictionary")
+        payload = json.dumps(
+            checkpoint, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        envelope = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "run_id": run_id,
+            "sha256": digest,
+            "checkpoint": json.loads(payload.decode("utf-8")),
+        }
+        data = (json.dumps(envelope, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
+        with self._lock:
+            run_dir = self._run_dir(task_id, run_id)
+            path = run_dir / "checkpoint.json"
+            self._atomic_write(path, data)
+        return {"path": str(path.resolve()), "sha256": digest}
+
+    def read_checkpoint(self, task_id: str, run_id: str) -> dict[str, Any] | None:
+        """Read a checkpoint only when its identity and digest match."""
+        task = _validate_task_id(task_id)
+        run = _validate_run_id(run_id)
+        run_dir = self.root / task / run
+        path = run_dir / "checkpoint.json"
+        try:
+            for directory in (self.root, self.root / task, run_dir):
+                info = directory.lstat()
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    raise ValueError("checkpoint path is not a real directory")
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+                raise ValueError("checkpoint path is not a regular file")
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        checkpoint = envelope.get("checkpoint") if isinstance(envelope, dict) else None
+        if (
+            not isinstance(envelope, dict)
+            or envelope.get("schema_version") != 1
+            or envelope.get("task_id") != task
+            or envelope.get("run_id") != run
+            or not isinstance(checkpoint, dict)
+        ):
+            raise ValueError("checkpoint identity or schema does not match the requested run")
+        payload = json.dumps(
+            checkpoint, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        if envelope.get("sha256") != digest:
+            raise ValueError("checkpoint SHA-256 does not match its envelope")
+        return checkpoint
+
     def read_result(self, task_id: str, run_id: str) -> dict[str, Any] | None:
         """Read a complete artifact, returning None when either file is absent."""
         task = _validate_task_id(task_id)

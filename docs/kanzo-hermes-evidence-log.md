@@ -753,3 +753,11 @@ This file preserves the dated implementation notes and operational evidence form
 - Added active project-catalog card `kanzo-project-catalog#123` for slug `babmukdang`, default repository `KimDaegyu-Dev/BabMukDang-Backend`, researcher / `openai-api` / `iq_3s` / high, read-only.
 - Added five non-claimable investigation cards `babmukdang#124`–`#128` from #16's Graphify candidates: Shared/Client contract and MSW agreement, food-manifest request path, meal-plan socket listener cleanup, auth response unwrapping, and push deep-link/bootstrap ordering. Each is explicitly an unverified candidate, read-only, routed to `LikeLion-Hackathon-bab/BabMukDang-Client`, and requires source-level evidence before any fix is proposed.
 - The local Babmukdang workspace contains user-owned untracked codebase snapshots and archives; it was inspected read-only and left untouched. No backlog card was promoted to Todo and no project source was changed.
+
+
+## 2026-11-18 — Gateway 압축 대기와 실패 체크포인트
+
+- 구현 브랜치 `fix/gateway-compression-checkpoint`에서 Gateway hygiene wait/idle timeout/turn-hold를 300초로 맞추고, 압축 임계 토큰을 36,000으로 낮췄다(65K context에서 압축을 더 일찍 시작). Hermes의 기본 10초 hold를 300초로 늘리고 전체 ceiling은 600초로 유지한다.
+- Hermes 호출 직전 dispatcher가 목표·경로·모델/프로필 결정·변경 파일·검증 상태를 초기 `ArtifactStore/checkpoint.json`과 RunLedger에 원자적으로 기록한다. 압축 실패 후에는 세션 ID와 실패 사유를 포함해 같은 artifact를 갱신하고 `review`로 보낸다. 수동 재개 시 최근 실패 체크포인트를 프롬프트에 포함하며 자동 재시도는 없다. 압축 시점의 세부 완료 내역은 현재 RunLedger로 복사하지 않고, 원본 Hermes session transcript 링크로 보존한다.
+- Hermes v0.23.1 pinned `gateway/run_turn_hygiene.py`에 압축 시작 후 30초 heartbeat, 완료 로그를 추가했다. turn-hold 초과·예외·요약 abort 경로는 fail-closed되어 uncompressed history를 모델에 넘기지 않는다.
+- 정적 검증: Python 5개 파일 AST parse, pinned v0.23.1 source에 패치 적용 확인, `k3s kubectl kustomize platform/kanzo-agent-worker` 렌더링 성공, `git diff --check` 통과. 테스트는 실행하지 않았다. 이미지 빌드/클러스터 rollout은 아직 하지 않았다.

@@ -26,6 +26,10 @@ RUN HERMES_HOME=/opt/hermes HOME=/opt/hermes \
     && chmod -R a+rX /opt/hermes/tools/pnpm-* \
     && /opt/hermes/.venv/bin/python -c 'from pm.install import activate; problems = activate(); print(problems); assert not problems, problems'
 
+COPY patches/fail_closed_hygiene.py /opt/kanzo-agent/fail_closed_hygiene.py
+RUN /opt/hermes/.venv/bin/python /opt/kanzo-agent/fail_closed_hygiene.py \
+    && rm /opt/kanzo-agent/fail_closed_hygiene.py
+
 COPY --chown=10000:10000 entrypoint.sh /opt/kanzo-agent/entrypoint.sh
 RUN chmod 0555 /opt/kanzo-agent/entrypoint.sh
 

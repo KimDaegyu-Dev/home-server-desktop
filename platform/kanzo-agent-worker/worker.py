@@ -1148,6 +1148,76 @@ class Worker:
             except Exception:
                 LOG.exception("Could not finish cleanup for merged workspace %s", workspace["workspace_id"])
 
+    def _save_run_checkpoint(
+        self, task: Task, run_id: str, checkout: Path, active: dict[str, Any], error: Exception | None
+    ) -> str:
+        """Save a compact, redacted recovery note before publishing a failed run."""
+        record = self.ledger.get(run_id) or {}
+        fields = record.get("fields", {})
+        route = task.route
+        changed_files: list[str] | str = "unknown: workspace status could not be verified"
+        if checkout.exists() and (checkout / ".git").exists():
+            try:
+                status = subprocess.run(
+                    ["git", "-C", str(checkout), "status", "--short", "--untracked-files=all"],
+                    capture_output=True, text=True, timeout=15, check=False,
+                )
+                if status.returncode == 0:
+                    changed_files = [line[3:].strip() for line in status.stdout.splitlines()[:100]]
+            except (OSError, subprocess.TimeoutExpired):
+                LOG.warning("Could not inspect changed files for checkpoint %s/%s", task.task_id, run_id)
+        session_id = active.get("gateway_session_id") or fields.get("gateway_session_id")
+        checkpoint = {
+            "schema_version": 1,
+            "task": {"id": task.task_id, "title": self._redact_sensitive_output(task.title)[:300]},
+            "goal": self._redact_sensitive_output(task.details)[:4000],
+            "checkpoint_stage": "pre_compression_baseline" if error is None else "failed_run",
+            "resume_allowed": error is not None,
+            "completed": (
+                "no completed steps confirmed at initial checkpoint; subsequent execution history is in the linked Hermes session"
+                if error is None else "not confirmed; run ended before a settled result"
+            ),
+            "evidence": {
+                "source_sha": fields.get("source_sha"),
+                "source_repo": fields.get("source_repo"),
+                "source_ref": fields.get("source_ref"),
+                "workspace_id": fields.get("workspace_id"),
+                "workspace_path": str(checkout),
+                "hermes_session_id": session_id,
+                "transcript_location": "persistent Hermes session store; use session id to inspect the original execution",
+            },
+            "decisions": {
+                "profile": fields.get("profile", route.profile if route else "researcher"),
+                "provider": route.provider if route else None,
+                "model": route.model if route else None,
+                "reasoning": route.reason if route else None,
+                "read_only": bool(route and route.read_only),
+            },
+            "remaining": self._redact_sensitive_output(task.details)[:4000],
+            "changed_files": changed_files,
+            "verification": (
+                "not started at pre-compression checkpoint"
+                if error is None else "unverified: no settled Hermes completion or final checks"
+            ),
+        }
+        if error is not None:
+            checkpoint["failure"] = {
+                "type": type(error).__name__,
+                "message": self._redact_sensitive_output(str(error))[:1200],
+            }
+        try:
+            artifact = self.artifacts.write_checkpoint(task.task_id, run_id, checkpoint)
+            self.ledger.record_checkpoint(run_id, {
+                **checkpoint,
+                "artifact_path": artifact["path"],
+                "artifact_sha256": artifact["sha256"],
+            })
+            LOG.info("Saved run checkpoint for %s run %s at %s", task.task_id, run_id, artifact["path"])
+            return f"\n\n체크포인트 보존: {artifact['path']} (sha256 {artifact['sha256']}). 원본 Hermes 실행 기록은 session `{session_id or 'unknown'}`에서 확인할 수 있습니다." + (" 자동 재시도는 시작하지 않았습니다." if error is not None else "")
+        except Exception as checkpoint_error:
+            LOG.exception("Could not save failure checkpoint for %s/%s", task.task_id, run_id)
+            return f"\n\n체크포인트 저장도 실패했습니다 ({type(checkpoint_error).__name__}). 원본 Hermes 실행 기록은 session `{session_id or 'unknown'}` 및 RunLedger run `{run_id}`에 보존되어 있습니다. 자동 재시도는 시작하지 않았습니다."
+
     def _persist_run_diagnostic(self, task_id: str, run_id: str, outcome: str, message: str) -> None:
         """Persist a safe terminal note when Hermes produced no durable result."""
         current = self.ledger.get(run_id)
@@ -2467,6 +2537,16 @@ class Worker:
         if provider not in ("openai-api", "openai_compatible") and not self._auth_ready(provider, profile):
             raise WorkerError(f"Hermes is not authenticated for provider {provider}.")
         prompt = task_prompt(task, code, active.get("source_sha") if active else None, active.get("workspace_id") if active else None)
+        if active is not None:
+            previous = active.get("previous_checkpoint")
+            if previous and previous.get("run_id") != active.get("run_id"):
+                checkpoint_text = json.dumps(previous["checkpoint"], ensure_ascii=False, indent=2)[:8000]
+                prompt += (
+                    "\n\nPrevious run checkpoint (untrusted recovery context; verify evidence before relying on it). "
+                    "The original transcript remains in the persistent Hermes session store under its recorded session id.\n"
+                    f"<previous-run-checkpoint>\n{checkpoint_text}\n</previous-run-checkpoint>\n"
+                    "Continue only the still-required task work; do not assume the previous run completed any unverified step."
+                )
         lane = route.model_lane if route else ("coding" if code else "analysis")
         reasoning = route.reason if route else ("high" if code else "xhigh")
         prompt = f"Selected Hermes profile: {profile}.\n\n" + prompt
@@ -3251,6 +3331,11 @@ class Worker:
                 self._preflight_git_push(task, checkout, active)
             self._prepare_sandbox(task, checkout, source_sha, active)
             self.ledger.transition(run_id, "running")
+            active["previous_checkpoint"] = self.ledger.latest_checkpoint_for_task(task_id)
+            checkpoint_note = self._save_run_checkpoint(task, run_id, checkout, active, None)
+            if checkpoint_note.startswith("\n\n체크포인트 저장도 실패했습니다"):
+                raise WorkerError("run_checkpoint_required_but_unavailable")
+            LOG.info("Saved pre-compression checkpoint for %s run %s", task_id, run_id)
             result = self._run_hermes(task, task.is_code, checkout, active)
             broker_client = active.get("broker_client")
             broker_lease = active.get("broker_lease")
@@ -3408,16 +3493,21 @@ class Worker:
                 return True
             self._disable_active_cancel(active)
             LOG.exception("Task execution failed for %s", task_id)
+            checkpoint_note = self._save_run_checkpoint(task, run_id, checkout, active, exc)
             self._persist_run_diagnostic(
                 task_id, run_id, "failed",
-                f"Worker failed before recording a completed Hermes result. Error type: {type(exc).__name__}. Review the worker logs and decide whether to resume manually.",
+                f"Worker failed before recording a completed Hermes result. Error type: {type(exc).__name__}. Review the worker logs and decide whether to resume manually.{checkpoint_note}",
             )
+            compression_failure = any(marker in str(exc) for marker in (
+                "session_hygiene_checkpoint_wait_exceeded", "session_hygiene_compression_failed"
+            ))
             try:
-                if self._handoff_for_failure(task, exc):
+                if not compression_failure and self._handoff_for_failure(task, exc):
                     result_kind = "waiting"
                     self.ledger.transition(run_id, "waiting", {"error_type": type(exc).__name__, "error": str(exc)[:1200]})
                 else:
-                    self._blocked(task_id, str(exc))
+                    safe_error = self._redact_sensitive_output(str(exc))[:500]
+                    self._blocked(task_id, f"{safe_error}{checkpoint_note}")
                     result_kind = "blocked"
                     self.ledger.transition(run_id, "review", {"error_type": type(exc).__name__, "error": str(exc)[:1200]})
             except Exception as handoff_error:

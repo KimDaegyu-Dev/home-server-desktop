@@ -452,6 +452,44 @@ class RunLedger:
             )
             return self._record(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
 
+    def record_checkpoint(self, run_id: str, checkpoint: Mapping[str, Any]) -> dict[str, Any]:
+        """Durably attach a sanitized context checkpoint to the run."""
+        checkpoint_value = _require_mapping(checkpoint, "checkpoint")
+        checkpoint_json = _json_dump(checkpoint_value)
+        with self._transaction() as connection:
+            row = connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+            if row is None:
+                raise RunNotFoundError("run_id does not exist")
+            stored_fields = _json_load(row["fields_json"])
+            stored_fields["checkpoint"] = _json_load(checkpoint_json)
+            stored_fields["checkpoint_saved_at"] = _now()
+            connection.execute(
+                "UPDATE runs SET updated_at = ?, fields_json = ? WHERE run_id = ?",
+                (_now(), _json_dump(stored_fields), run_id),
+            )
+            return self._record(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
+
+    def latest_checkpoint_for_task(self, task_id: str) -> dict[str, Any] | None:
+        """Return the newest checkpoint for a Kanzo task, excluding runs without one."""
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValueError("task_id must be a non-empty string")
+        with self._lock:
+            try:
+                rows = self._connection.execute(
+                    "SELECT run_id, fields_json FROM runs WHERE task_id = ? ORDER BY updated_at DESC",
+                    (task_id,),
+                ).fetchall()
+                for row in rows:
+                    fields = _json_load(row["fields_json"])
+                    checkpoint = fields.get("checkpoint")
+                    if isinstance(checkpoint, dict):
+                        if checkpoint.get("resume_allowed") is True:
+                            return {"run_id": row["run_id"], "checkpoint": checkpoint}
+                        return None
+                return None
+            except sqlite3.DatabaseError as exc:
+                raise LedgerCorruptionError("Unable to read task checkpoint") from exc
+
     def mark_publication(self, run_id: str, step: str) -> dict[str, Any]:
         if not isinstance(step, str) or not _PUBLICATION_STEP.fullmatch(step):
             raise ValueError("step must be 1-128 safe identifier characters")

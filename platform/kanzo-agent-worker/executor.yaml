@@ -74,13 +74,13 @@ spec:
               drop:
                 - ALL
         - name: bootstrap-omh
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          image: localhost/home-server/kanzo-agent-worker:0.2.2-hermes-v0.23.1-omh-4.0.7-checkpoint1
           imagePullPolicy: Never
           command:
             - /bin/sh
             - -ec
           args:
-            - "export HERMES_HOME=/opt/data/home HOME=/opt/data/home\npython - <<'PY'\nimport shutil\nfrom pathlib import Path\n\nsource = Path('/opt/kanzo-agent/kanzo_terminal_provider.py')\nif not source.is_file():\n    raise SystemExit('Kanzo terminal provider module is missing')\nhomes = [Path('/opt/data/home'), *(Path('/opt/data/home/profiles') / name for name in ('researcher', 'builder', 'reviewer'))]\nfor home in homes:\n    plugin = home / 'plugins' / 'kanzo_broker'\n    if not plugin.is_dir():\n        raise SystemExit(f'Kanzo terminal plugin is missing for {home}')\n    staged = plugin / '.__init__.py.tmp'\n    shutil.copy2(source, staged)\n    staged.chmod(0o644)\n    staged.replace(plugin / '__init__.py')\n    (plugin / 'plugin.yaml').write_text(\n        'name: kanzo_broker\\nversion: 0.1.0\\ndescription: Per-run Kanzo Kubernetes terminal backend\\nkind: backend\\nprovides_hooks:\\n  - subagent_start\\n  - subagent_stop\\n',\n        encoding='utf-8',\n    )\nPY\nif [ -f /opt/data/home/.kanzo-bootstrap-version ] && [ \"$(cat /opt/data/home/.kanzo-bootstrap-version)\" = \"1\" ]; then\n  python /opt/kanzo-agent/sync_hermes_env.py\n  exit 0\nfi\npython - <<'PY'\nimport json\nimport shutil\nfrom pathlib\
+            - "export HERMES_HOME=/opt/data/home HOME=/opt/data/home\npython - <<'PY'\nimport shutil\nfrom pathlib import Path\n\nsource = Path('/opt/kanzo-agent/kanzo_terminal_provider.py')\nif not source.is_file():\n    raise SystemExit('Kanzo terminal provider module is missing')\nhomes = [Path('/opt/data/home'), *(Path('/opt/data/home/profiles') / name for name in ('researcher', 'builder', 'reviewer'))]\nfor home in homes:\n    plugin = home / 'plugins' / 'kanzo_broker'\n    if not plugin.is_dir():\n        raise SystemExit(f'Kanzo terminal plugin is missing for {home}')\n    staged = plugin / '.__init__.py.tmp'\n    shutil.copy2(source, staged)\n    staged.chmod(0o644)\n    staged.replace(plugin / '__init__.py')\n    (plugin / 'plugin.yaml').write_text(\n        'name: kanzo_broker\\nversion: 0.1.0\\ndescription: Per-run Kanzo Kubernetes terminal backend\\nkind: backend\\nprovides_hooks:\\n  - subagent_start\\n  - subagent_stop\\n',\n        encoding='utf-8',\n    )\nPY\nif [ -f /opt/data/home/.kanzo-bootstrap-version ] && [ \"$(cat /opt/data/home/.kanzo-bootstrap-version)\" = \"1\" ]; then\n  /opt/hermes/.venv/bin/python /opt/kanzo-agent/sync_hermes_env.py\n  exit 0\nfi\npython - <<'PY'\nimport json\nimport shutil\nfrom pathlib\
               \ import Path\n\nimage_store = Path('/opt/hermes/tools')\nhome_store = Path('/opt/data/home/tools')\nimage_facts\
               \ = json.loads((image_store / 'facts.json').read_text(encoding='utf-8'))\npnpm = image_facts.get('packages',\
               \ {}).get('pnpm')\nif not pnpm:\n    raise SystemExit('image is missing the pinned pnpm package metadata')\n\
@@ -194,7 +194,7 @@ spec:
               drop:
                 - ALL
         - name: install-human-agent-report-skill
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          image: localhost/home-server/kanzo-agent-worker:0.2.2-hermes-v0.23.1-omh-4.0.7-checkpoint1
           imagePullPolicy: Never
           command:
             - python
@@ -252,7 +252,7 @@ spec:
               drop:
                 - ALL
         - name: configure-langfuse-session-context
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          image: localhost/home-server/kanzo-agent-worker:0.2.2-hermes-v0.23.1-omh-4.0.7-checkpoint1
           imagePullPolicy: Never
           command:
             - python
@@ -280,7 +280,7 @@ spec:
               drop:
                 - ALL
         - name: wait-for-previous-hermes-owner
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          image: localhost/home-server/kanzo-agent-worker:0.2.2-hermes-v0.23.1-omh-4.0.7-checkpoint1
           imagePullPolicy: Never
           command:
             - python
@@ -314,7 +314,7 @@ spec:
               drop:
                 - ALL
         - name: configure-worker-kanban-tool-search
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          image: localhost/home-server/kanzo-agent-worker:0.2.2-hermes-v0.23.1-omh-4.0.7-checkpoint1
           imagePullPolicy: Never
           command:
             - /opt/hermes/.venv/bin/python
@@ -347,7 +347,7 @@ spec:
               drop:
                 - ALL
         - name: reconcile-hermes-pm-environment
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          image: localhost/home-server/kanzo-agent-worker:0.2.2-hermes-v0.23.1-omh-4.0.7-checkpoint1
           imagePullPolicy: Never
           command:
             - /opt/hermes/.venv/bin/python
@@ -381,7 +381,7 @@ spec:
                 - ALL
       containers:
         - name: hermes-gateway
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          image: localhost/home-server/kanzo-agent-worker:0.2.2-hermes-v0.23.1-omh-4.0.7-checkpoint1
           imagePullPolicy: Never
           command:
             - hermes
@@ -467,7 +467,7 @@ spec:
                 - ALL
             readOnlyRootFilesystem: true
         - name: hermes-dashboard
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          image: localhost/home-server/kanzo-agent-worker:0.2.2-hermes-v0.23.1-omh-4.0.7-checkpoint1
           imagePullPolicy: Never
           command:
             - hermes
@@ -537,7 +537,7 @@ spec:
                 - ALL
             readOnlyRootFilesystem: true
         - name: hermes-executor-api
-          image: localhost/home-server/kanzo-agent-worker:0.2.1-hermes-v0.23.1-omh-4.0.7-pnpmfix2
+          image: localhost/home-server/kanzo-agent-worker:0.2.2-hermes-v0.23.1-omh-4.0.7-checkpoint1
           imagePullPolicy: Never
           command:
             - python

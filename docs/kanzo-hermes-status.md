@@ -9,6 +9,7 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - 실제 task #143은 persistent workspace에 marker를 만들고 local commit까지 했지만 push 403으로 review에 남았다. marker와 branch는 보존 중이며 재실행하지 않았다. live dispatcher push preflight는 같은 Vault 주입 토큰을 사용해 Hermes 호출 전에 정상 차단했다.
 - WSL runner의 `GITHUB_TOKEN`은 현재 Kubernetes/Vault 동기화 Secret과 일치하지만 Windows `gh` 로그인 토큰과 다르고 push가 거부된다. Vault `kv/mcp/kanzo-agent`의 `GITHUB_TOKEN`에 Contents write 및 Pull requests write 권한이 필요하다. VSO가 Secret을 갱신한 뒤 `launch-wsl-runner.sh`를 다시 실행해야 host process가 새 값을 읽는다.
 - Kanzo #140은 Todo에서 human 승인 카드 #141을 기다린다. #140 본문은 source manifest 구현 및 deploy/merge/push 금지를 요구한다. #141 승인 게이트는 유지한다.
+- 2026-11-18 압축 지연 개선은 `fix/gateway-compression-checkpoint` 브랜치에 구현했다. Gateway 대기 300초, 실행 시작 체크포인트, 진행·완료 로그, 압축 실패 시 `review` 전환을 포함한다. 압축 시점의 작업 세부 내역은 원본 Hermes session transcript에 남고, 현재 체크포인트에는 해당 세션 포인터를 둔다. 아직 이미지 빌드·GitOps 반영·롤아웃은 하지 않아 live 설정은 기존 값이다.
 
 ## 단계 진행
 

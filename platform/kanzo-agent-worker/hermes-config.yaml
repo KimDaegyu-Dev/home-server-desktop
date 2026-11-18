@@ -5,6 +5,16 @@ model:
   base_url: ${LITELLM_BASE_URL}
   api_key: ${LITELLM_API_KEY}
 
+compression:
+  enabled: true
+  threshold_tokens: 36000
+  abort_on_summary_failure: true
+  hygiene_timeout_seconds: 300
+  hygiene_total_ceiling_seconds: 600
+  hygiene_max_turn_hold_seconds: 300
+  context_timeout_seconds: 300
+  context_total_ceiling_seconds: 600
+
 terminal:
   backend: local
 

@@ -18,9 +18,9 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 |---|---|---|
 | 0. 소스 라우팅 정확성 | 구현·배포·local-source canary 완료 | task-level repo/ref override와 source SHA 기록을 배포했다. Babmukdang WSL read-only canary에서 저장소·고정 SHA·runner 및 원본 파일 무변경을 확인했다. |
 | 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 1-task event canary 부분 통과; 다중 task acceptance 미완료 | PVC/registry smoke와 실제 #143 workspace 생성은 확인했다. 실제 두 번째 task 재사용 acceptance는 publish 권한 실패로 미입증이다. Vault runner token을 갱신한 뒤 새 canary가 필요하다. |
-| 2. 정지·재개·병합 후 정리 | 구현·배포 완료; merged-PR cleanup E2E 미완료 | safe cleanup, executor reconciliation, persistent-workspace resume guidance, confirmed cancellation snapshot transfer를 배포했다. 실제 merged PR 및 완료 task를 통한 자동 branch/file cleanup은 아직 검증되지 않았다. |
+| 2. 정지·재개·병합 후 정리 | 구현·배포 완료; 로컬 cleanup 통합 테스트 통과, live merged-PR E2E 미완료 | safe cleanup, executor reconciliation, persistent-workspace resume guidance, confirmed cancellation snapshot transfer를 배포했다. 실제 worker 정리 함수와 registry를 쓰는 통합 테스트는 통과했지만 GitHub API는 모의했으므로 live merged PR 및 완료 task를 통한 자동 branch/file cleanup은 아직 검증되지 않았다. |
 | 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료; writable resume/offline 검증 미완료 | 절대경로/runner 라우팅, event claim, source SHA, 원본 무변경은 확인했다. writable 중단·재개와 runner offline 복구의 live 검증이 남았다. |
-| 4. 다중 저장소·운영 검증 | 다중 저장소 구현 로컬 완료·테스트 통과; live canary 미완료 | Kanzo 폼, 최대 4개 secondary source pinning/read-only 스냅샷, primary 변경만 전달하는 경계를 구현했다. Python 134 tests, Kanzo Rust 76 tests, release build 통과. #140 조건에 따라 push/deploy하지 않아 live manifest canary는 아직 없다. 운영 recovery/observability(이번 요청의 6번)는 범위에서 제외했다. |
+| 4. 다중 저장소·운영 검증 | 다중 저장소 구현 로컬 완료·테스트 통과; live canary 미완료 | Kanzo 폼, 최대 4개 secondary source pinning/read-only 스냅샷, primary 변경만 전달하는 경계를 구현했다. Python 136 tests, Kanzo Rust 76 tests, release build 통과. #140 조건에 따라 push/deploy하지 않아 live manifest canary는 아직 없다. 운영 recovery/observability(이번 요청의 6번)는 범위에서 제외했다. |
 
 ## 이번 구현 세션
 
@@ -146,6 +146,12 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - On a confirmed cancellation of a writable task with a persistent workspace, the worker now applies the final broker snapshot before finalizing the lease. A transfer failure is reported explicitly; unconfirmed remote runs are never snapshotted and remain quarantined.
 - Worker suite: 121 tests passed, including prompt-boundary and cancellation-snapshot tests. `git diff --check` passed; changed source/doc files use LF.
 - Argo `kanzo-agent-worker` and `kanzo-sandbox` are Synced/Healthy at `c65f6748db06573d95c4cbac2328a540c5caca7f`; the new dispatcher Pod is 2/2 Ready, and Prometheus reports active task count 0. Cancellation snapshot transfer has unit coverage but still needs a live cancelled-run canary.
+
+## Follow-up evidence (2026-11-19, local acceptance coverage)
+
+- Commit `b9a12cd38b80ee959de27a33f38e1edb18e88594` on local branch `kanzo/phase4-readonly-source-manifest` contains the bounded multi-source implementation and project/task turn caps. It was not pushed or deployed because #140 prohibits both.
+- Worker suite after adding combined multi-source limit tests and the workspace cleanup orchestration test: 136 passed. The cleanup test exercises the real worker method, SQLite registry, clean Git checkout, linked-task checks, tombstone, and local workspace deletion; GitHub PR/ref responses and remote branch deletion are mocked. This is not live merged-PR E2E evidence.
+- Phase 1 already has a synthetic PVC restart canary and a local linked-task resume test, but a live pair of Kanzo event tasks sharing one workspace remains unverified. Phase 3 has local linked-workspace and runner-routing tests; live writable WSL interruption/resume and host-offline behavior remain unverified. Phase 4 live manifest canary remains intentionally unrun until the local implementation is separately approved and deployed. Item 6 remains excluded.
 
 ## Follow-up evidence (2026-11-18, local multi-source implementation)
 

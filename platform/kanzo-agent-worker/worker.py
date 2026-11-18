@@ -441,7 +441,7 @@ def valid_source_ref(value: str) -> bool:
 
 
 def apply_task_source_overrides(route: ProjectRoute, details: str) -> ProjectRoute:
-    """Apply a task's explicit source/workspace settings to project defaults."""
+    """Apply task source/workspace settings and only stricter read-only permissions."""
     fields: dict[str, str] = {}
     task_body = TASK_COMMENTS_HEADER_RE.split(details, maxsplit=1)[0]
     structured = re.search(r"^agent_config:\s*(\{[^\r\n]*\})\s*$", task_body, re.IGNORECASE | re.MULTILINE)
@@ -455,7 +455,7 @@ def apply_task_source_overrides(route: ProjectRoute, details: str) -> ProjectRou
         fields = {str(key).lower(): str(value) for key, value in config.items()}
     else:
         for line in task_body.splitlines():
-            match = re.match(r"^\s*(repo|ref|source_ref|workspace_id)\s*:\s*(.*?)\s*$", line, re.IGNORECASE)
+            match = re.match(r"^\s*(repo|ref|source_ref|workspace_id|read_only)\s*:\s*(.*?)\s*$", line, re.IGNORECASE)
             if match:
                 fields[match.group(1).lower()] = match.group(2)
 
@@ -481,7 +481,15 @@ def apply_task_source_overrides(route: ProjectRoute, details: str) -> ProjectRou
             validate_workspace_id(workspace_id)
         except WorkspaceRegistryError as exc:
             raise WorkerError(f"Task has invalid workspace_id: {exc}") from exc
-    return replace(route, repo=repo, source_ref=source_ref, workspace_id=workspace_id)
+    read_only = route.read_only
+    if "read_only" in fields:
+        value = fields["read_only"].strip().lower()
+        if value not in {"true", "false"}:
+            raise WorkerError("Task read_only must be true or false.")
+        # A task may narrow a writable project to read-only, but it cannot
+        # override a project-wide read-only restriction.
+        read_only = read_only or value == "true"
+    return replace(route, repo=repo, source_ref=source_ref, workspace_id=workspace_id, read_only=read_only)
 
 
 def parse_catalog_cards(text: str) -> list[ProjectRoute]:

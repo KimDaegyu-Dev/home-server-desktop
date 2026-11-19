@@ -776,6 +776,7 @@ def _get_kanzo_file_ops(task_id: str, fallback: Any) -> Any:
                 cwd="/workspace", timeout=timeout, task_id=task_id or "default"
             )
             environment_key = f"kanzo-file-ops:{session_id}"
+            registered = False
             with terminal_tool._env_lock:
                 existing = terminal_tool._active_environments.get(environment_key)
                 if existing is not None and not getattr(existing, "_cleaned", False):
@@ -784,7 +785,9 @@ def _get_kanzo_file_ops(task_id: str, fallback: Any) -> Any:
                 else:
                     terminal_tool._active_environments[environment_key] = environment
                     terminal_tool._last_activity[environment_key] = time.time()
-                    terminal_tool._start_cleanup_thread()
+                    registered = True
+            if registered:
+                terminal_tool._start_cleanup_thread()
 
         if (
             getattr(environment, "_hermes_backend_name", "") != "kanzo_broker"

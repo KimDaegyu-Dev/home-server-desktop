@@ -61,6 +61,7 @@ async def _create_session(
     model: str,
     provider: str,
     reasoning: str,
+    max_turns: int,
     toolsets: list[str],
     cwd: Path,
     request_id: str,
@@ -87,6 +88,7 @@ async def _create_session(
         model=model,
         provider=provider,
         reasoning=reasoning,
+        max_turns=max_turns,
         toolsets=toolsets,
     )
     policy = _requested_policy(args)
@@ -153,6 +155,7 @@ def create_session(
     toolsets: list[str],
     cwd: str | os.PathLike[str],
     request_id: str,
+    max_turns: int = 80,
 ) -> dict[str, Any]:
     """Create a new canonical Gateway session without submitting a prompt."""
     try:
@@ -167,6 +170,8 @@ def create_session(
         raise RuntimeError("gateway_session_path_invalid")
     if not model.strip() or not provider.strip() or not reasoning.strip():
         raise RuntimeError("gateway_session_route_invalid")
+    if isinstance(max_turns, bool) or not isinstance(max_turns, int) or not 1 <= max_turns <= 80:
+        raise RuntimeError("gateway_session_max_turns_invalid")
     if not isinstance(request_id, str) or not request_id or len(request_id) > 128 or any(
         ord(char) < 0x20 for char in request_id
     ):
@@ -192,6 +197,7 @@ def create_session(
                 model=model.strip(),
                 provider=provider.strip(),
                 reasoning=reasoning.strip(),
+                max_turns=max_turns,
                 toolsets=[item.strip() for item in toolsets],
                 cwd=working_dir,
                 request_id=request_id,
@@ -209,6 +215,7 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--provider", required=True)
     parser.add_argument("--reasoning", required=True)
+    parser.add_argument("--max-turns", type=int, default=80)
     parser.add_argument("--toolsets", required=True)
     parser.add_argument("--cwd", required=True)
     parser.add_argument("--request-id", required=True)
@@ -221,6 +228,7 @@ def main() -> int:
             model=args.model,
             provider=args.provider,
             reasoning=args.reasoning,
+            max_turns=args.max_turns,
             toolsets=[part.strip() for part in args.toolsets.split(",") if part.strip()],
             cwd=args.cwd,
             request_id=args.request_id,

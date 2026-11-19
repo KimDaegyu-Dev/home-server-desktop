@@ -15,9 +15,9 @@ import gzip
 import io
 import tarfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
-from workspace_transfer import apply_changed_archive, build_source_archive
+from workspace_transfer import apply_changed_archive, build_manifest_archive, build_source_archive
 
 
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
@@ -56,8 +56,13 @@ class BrokerClient:
             raise BrokerClientError("Kanzo broker worker credential is unavailable")
         self._opener = urllib.request.build_opener(_NoRedirect())
 
-    def prepare(self, task_id: str, run_id: str, checkout: Path, source_sha: str, read_only: bool) -> dict[str, Any]:
-        archive, digest = build_source_archive(checkout, source_sha)
+    def prepare(self, task_id: str, run_id: str, checkout: Path, source_sha: str, read_only: bool,
+                *, additional_sources: Iterable[tuple[str, Path, str]] = ()) -> dict[str, Any]:
+        source_list = list(additional_sources)
+        if source_list:
+            archive, digest = build_manifest_archive(checkout, source_sha, source_list)
+        else:
+            archive, digest = build_source_archive(checkout, source_sha)
         return self._prepare_archive(task_id, run_id, source_sha, read_only, archive, digest)
 
     def prepare_empty(self, task_id: str, run_id: str, read_only: bool) -> dict[str, Any]:
@@ -99,7 +104,9 @@ class BrokerClient:
             },
             method="POST",
         )
-        return self._json_request(request, timeout=180)
+        result = self._json_request(request, timeout=180)
+        result["source_archive_sha256"] = digest
+        return result
 
     def wait_ready(self, lease: dict[str, Any], *, timeout: int = 600,
                    cancelled: Any = None, progress: Any = None) -> None:
@@ -146,7 +153,10 @@ class BrokerClient:
         actual = hashlib.sha256(archive).hexdigest()
         if not claimed or not hmac.compare_digest(actual, claimed):
             raise BrokerClientError("output archive digest mismatch")
-        return apply_changed_archive(checkout, archive)
+        protected = lease.get("protected_prefixes", [])
+        if not isinstance(protected, list) or any(not isinstance(item, str) for item in protected):
+            raise BrokerClientError("sandbox lease has invalid protected source paths")
+        return apply_changed_archive(checkout, archive, protected_prefixes=protected)
 
     def finalize(self, lease: dict[str, Any]) -> None:
         self._post_json("/v1/runs/finalize", self._run_authority(lease), timeout=20)

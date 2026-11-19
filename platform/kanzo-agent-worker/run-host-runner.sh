@@ -21,6 +21,7 @@ export KANZO_ENABLED=true
 export KANZO_CATALOG_PROJECT="${KANZO_CATALOG_PROJECT:-kanzo-project-catalog}"
 export KANZO_RUNNER_ID
 export KANZO_RUNNER_OS="${KANZO_RUNNER_OS:-wsl}"
+export KANZO_LOCAL_SOURCE_ROOTS="${KANZO_LOCAL_SOURCE_ROOTS:-/mnt/c/Github}"
 export KANZO_EVENTS_URL="${KANZO_EVENTS_URL:-https://kanzo.tail5389e9.ts.net/api/events}"
 export KANZO_EXECUTOR_API_URL="${KANZO_EXECUTOR_API_URL:-https://hermes-executor.tail5389e9.ts.net}"
 export KANZO_BROKER_URL="${KANZO_BROKER_URL:-https://kanzo-broker.tail5389e9.ts.net}"

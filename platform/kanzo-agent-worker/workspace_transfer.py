@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -146,6 +147,96 @@ def build_source_archive(
     return data, hashlib.sha256(data).hexdigest()
 
 
+def build_manifest_archive(
+    checkout: Path,
+    expected_git_sha: str,
+    sources: Iterable[tuple[str, Path, str]],
+    *,
+    max_compressed_bytes: int = _DEFAULT_COMPRESSED,
+    max_expanded_bytes: int = _DEFAULT_SOURCE_EXPANDED,
+    max_files: int = _DEFAULT_SOURCE_FILES,
+) -> tuple[bytes, str]:
+    """Archive primary files at `/` and pinned secondary repos under a reserved prefix."""
+    source_list = list(sources)
+    if len(source_list) > 4:
+        raise WorkspaceTransferError("source manifest exceeds four secondary sources")
+    names: set[str] = set()
+    archives: list[tuple[str, bytes]] = []
+    compressed_total = 0
+    expanded_total = 0
+    file_total = 0
+    pinned_sources = [("", checkout, expected_git_sha), *source_list]
+    for name, path, revision in pinned_sources:
+        if name:
+            if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", name) or name.casefold() in names:
+                raise WorkspaceTransferError("source manifest has an invalid or duplicate name")
+            names.add(name.casefold())
+        if compressed_total >= max_compressed_bytes:
+            raise WorkspaceTransferError("combined source archive exceeds max_compressed_bytes")
+        if expanded_total > max_expanded_bytes or file_total > max_files:
+            raise WorkspaceTransferError("combined source archive exceeds configured limits")
+        archive_bytes, _ = build_source_archive(
+            path, revision,
+            max_compressed_bytes=max_compressed_bytes - compressed_total,
+            max_expanded_bytes=max_expanded_bytes - expanded_total,
+            max_files=max_files - file_total,
+        )
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as source_archive:
+            for member in source_archive:
+                if not member.isreg():
+                    raise WorkspaceTransferError("source manifest contains a non-regular entry")
+                file_total += 1
+                expanded_total += member.size
+                if file_total > max_files:
+                    raise WorkspaceTransferError("combined source archive exceeds max_files")
+                if expanded_total > max_expanded_bytes:
+                    raise WorkspaceTransferError("combined source archive exceeds max_expanded_bytes")
+        compressed_total += len(archive_bytes)
+        archives.append((f".kanzo-sources/{name}/" if name else "", archive_bytes))
+
+    sink = _LimitedBytesIO(max_compressed_bytes)
+    count = 0
+    expanded = 0
+    seen_paths: set[str] = set()
+    try:
+        with gzip.GzipFile(fileobj=sink, mode="wb", filename="", mtime=0, compresslevel=6) as gz:
+            with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as output:
+                for prefix, archive_bytes in archives:
+                    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as source_archive:
+                        for member in source_archive:
+                            path = _validate_relative_path(member.name)
+                            if not member.isreg() or _has_git_metadata_component(path):
+                                raise WorkspaceTransferError("source manifest contains a non-regular or Git metadata entry")
+                            count += 1
+                            if count > max_files:
+                                raise WorkspaceTransferError("combined source archive exceeds max_files")
+                            if expanded + member.size > max_expanded_bytes:
+                                raise WorkspaceTransferError("combined source archive exceeds max_expanded_bytes")
+                            stream = source_archive.extractfile(member)
+                            if stream is None:
+                                raise WorkspaceTransferError(f"could not read source member: {path}")
+                            data = stream.read(member.size + 1)
+                            if len(data) != member.size:
+                                raise WorkspaceTransferError(f"source member size changed: {path}")
+                            target_path = _validate_relative_path(prefix + path)
+                            if target_path in seen_paths:
+                                raise WorkspaceTransferError(f"source manifest path collision: {target_path}")
+                            seen_paths.add(target_path)
+                            info = tarfile.TarInfo(target_path)
+                            info.type = tarfile.REGTYPE
+                            info.size = len(data)
+                            info.mode = 0o755 if member.mode & 0o111 else 0o644
+                            info.uid = info.gid = 0
+                            info.uname = info.gname = ""
+                            info.mtime = 0
+                            output.addfile(info, io.BytesIO(data))
+                            expanded += len(data)
+    except _LimitExceeded as exc:
+        raise WorkspaceTransferError(str(exc)) from exc
+    result = sink.getvalue()
+    return result, hashlib.sha256(result).hexdigest()
+
+
 def apply_changed_archive(
     checkout: Path,
     archive_bytes: bytes,
@@ -153,6 +244,7 @@ def apply_changed_archive(
     max_compressed_bytes: int = _DEFAULT_COMPRESSED,
     max_expanded_bytes: int = _DEFAULT_OUTPUT_EXPANDED,
     max_files: int = 20000,
+    protected_prefixes: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Validate, stage, then apply regular-file replacements and manifest deletions.
 
@@ -165,6 +257,7 @@ def apply_changed_archive(
         raise WorkspaceTransferError("max_files must be a non-negative integer")
     if not isinstance(archive_bytes, bytes):
         raise WorkspaceTransferError("archive_bytes must be bytes")
+    protected = tuple(_validate_relative_path(item.rstrip("/")) for item in protected_prefixes)
     if len(archive_bytes) > max_compressed_bytes:
         raise WorkspaceTransferError("output archive exceeds max_compressed_bytes")
 
@@ -235,6 +328,9 @@ def apply_changed_archive(
         if len(staged) > max_files:
             raise WorkspaceTransferError("output archive exceeds max_files")
         _validate_change_set(staged.keys(), deleted)
+        for path in (*staged.keys(), *deleted):
+            if any(path == prefix or path.startswith(prefix + "/") for prefix in protected):
+                raise WorkspaceTransferError(f"output attempts to modify read-only source path: {path}")
         _preflight_destinations(root, staged.keys(), deleted)
         _apply_staged_changes(root, stage_path, staged, deleted)
         return {

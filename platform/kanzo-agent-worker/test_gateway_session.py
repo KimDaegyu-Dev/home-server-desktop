@@ -21,7 +21,7 @@ class _GatewayClient:
     async def rpc(self, method: str, **kwargs):
         if method == "runtime.describe":
             return {"session_create": {
-                "parameters": ["model", "provider", "reasoning", "toolsets", "source", "cwd", "client_env"],
+                "parameters": ["model", "provider", "reasoning", "max_turns", "toolsets", "source", "cwd", "client_env"],
                 "sources": ["oneshot"],
             }}
         if method == "session.create":
@@ -63,6 +63,7 @@ class GatewaySessionTests(unittest.TestCase):
             "model": args.model,
             "provider": args.provider,
             "reasoning": args.reasoning,
+            "max_turns": args.max_turns,
             "toolsets": args.toolsets,
         }
         gateway_chat.client_env_policy = lambda _params: {
@@ -96,6 +97,7 @@ class GatewaySessionTests(unittest.TestCase):
                     model="iq_3s",
                     provider="openai-api",
                     reasoning="high",
+                    max_turns=12,
                     toolsets=["terminal"],
                     cwd=cwd,
                     request_id="request-41",
@@ -103,6 +105,7 @@ class GatewaySessionTests(unittest.TestCase):
 
         self.assertEqual(result["session_id"], "session-1")
         self.assertEqual(client.created_with["request_id"], "request-41")
+        self.assertEqual(client.created_with["max_turns"], 12)
         env = client.created_with["client_env"]
         self.assertEqual(env["KANZO_TASK_ID"], "project#41")
         self.assertEqual(env["KANZO_RUN_ID"], "run-41")

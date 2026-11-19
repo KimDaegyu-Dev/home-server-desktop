@@ -673,13 +673,128 @@ class KanzoTerminalProvider(TerminalEnvironmentProvider):
         _clean_absolute_path(mapping.get("temp_dir"), "temp_dir")
         _LOG.info("terminal backend resolved backend=kanzo_broker task_id=%s run_id=%s",
                   expected_task_id, expected_run_id)
-        return KanzoTerminalEnvironment(
+        environment = KanzoTerminalEnvironment(
             broker=client,
             session_id=session_id,
             mapping=mapping,
             cwd=mapped_cwd,
             timeout=int(timeout or _DEFAULT_TIMEOUT_SECONDS),
         )
+        environment._hermes_backend_name = self.name
+        return environment
+
+
+_kanzo_file_ops_lock = threading.RLock()
+_kanzo_file_ops_cache: dict[str, tuple[Any, Any]] = {}
+
+
+def _get_kanzo_file_ops(task_id: str, fallback: Any) -> Any:
+    """Bind Hermes file tools to this session's Kanzo broker environment.
+
+    Hermes' file_tools module maintains a separate terminal-environment cache
+    from terminal_tool. Its task key can be shared by Gateway sessions, so using
+    the stock cache can point read_file/search_files/patch at the Gateway pod
+    instead of the task's leased /workspace. Resolve by Hermes session identity
+    and fail closed if a broker environment cannot be established.
+    """
+    if not _kanzo_automation_active():
+        source = session_context.get_session_env("HERMES_SESSION_SOURCE", "")
+        source_value = getattr(source, "value", source)
+        try:
+            from agent.session_client_env import bound_client_env
+
+            raw_client_env = bound_client_env()
+        except (ImportError, RuntimeError):
+            raw_client_env = None
+        client_env = raw_client_env if isinstance(raw_client_env, dict) else {}
+        has_automation_marker = any(
+            client_env.get(key)
+            for key in ("KANZO_AUTOMATED_RUN", "KANZO_TASK_ID", "KANZO_RUN_ID")
+        )
+        if source_value in _LOCAL_INTERACTIVE_SOURCES and not has_automation_marker:
+            return fallback(task_id)
+        raise KanzoBrokerError("refusing file operation for an unverified automated Hermes session")
+
+    session_id = session_context.get_session_env("HERMES_SESSION_ID", "")
+    if (
+        not isinstance(session_id, str)
+        or not session_id.strip()
+        or len(session_id) > 256
+        or any(ord(char) < 0x20 for char in session_id)
+    ):
+        raise KanzoBrokerError("refusing file operation without an active Hermes session id")
+
+    try:
+        from tools import terminal_tool
+        from tools.file_operations import ShellFileOperations
+    except ImportError as exc:
+        raise KanzoBrokerError("Hermes broker-backed file operations are unavailable") from exc
+
+    with _kanzo_file_ops_lock:
+        for stale_session, (stale_env, _stale_ops) in list(_kanzo_file_ops_cache.items()):
+            if getattr(stale_env, "_cleaned", False):
+                _kanzo_file_ops_cache.pop(stale_session, None)
+        cached = _kanzo_file_ops_cache.get(session_id)
+        if cached is not None:
+            environment, file_ops = cached
+            with terminal_tool._env_lock:
+                active_keys = [
+                    key for key, active in terminal_tool._active_environments.items()
+                    if active is environment
+                ]
+                if active_keys and not getattr(environment, "_cleaned", False):
+                    terminal_tool._last_activity[active_keys[0]] = time.time()
+                    return file_ops
+            _kanzo_file_ops_cache.pop(session_id, None)
+
+        with terminal_tool._env_lock:
+            matches = [
+                (key, env) for key, env in terminal_tool._active_environments.items()
+                if getattr(env, "_hermes_backend_name", "") == "kanzo_broker"
+                and getattr(env, "_session_id", "") == session_id
+                and not getattr(env, "_cleaned", False)
+            ]
+            if matches:
+                # Multiple handles can be legitimate (terminal and file tools
+                # each own a handle); all are broker-bound to this exact session.
+                key, environment = max(
+                    matches,
+                    key=lambda pair: terminal_tool._last_activity.get(pair[0], 0),
+                )
+                terminal_tool._last_activity[key] = time.time()
+            else:
+                environment = None
+
+        if environment is None:
+            # Create directly through the registered provider instead of the
+            # global file-tools cache, whose "default" key can belong to another
+            # concurrent Gateway session.
+            from tools.terminal_tool_config import _tenv
+
+            timeout = int(_tenv("TERMINAL_TIMEOUT", str(_DEFAULT_TIMEOUT_SECONDS)))
+            environment = KanzoTerminalProvider().create_environment(
+                cwd="/workspace", timeout=timeout, task_id=task_id or "default"
+            )
+            environment_key = f"kanzo-file-ops:{session_id}"
+            with terminal_tool._env_lock:
+                existing = terminal_tool._active_environments.get(environment_key)
+                if existing is not None and not getattr(existing, "_cleaned", False):
+                    environment.cleanup()
+                    environment = existing
+                else:
+                    terminal_tool._active_environments[environment_key] = environment
+                    terminal_tool._last_activity[environment_key] = time.time()
+                    terminal_tool._start_cleanup_thread()
+
+        if (
+            getattr(environment, "_hermes_backend_name", "") != "kanzo_broker"
+            or getattr(environment, "_session_id", "") != session_id
+        ):
+            raise KanzoBrokerError("file operation environment is not bound to this Kanzo session")
+
+        file_ops = ShellFileOperations(environment, cwd="/workspace")
+        _kanzo_file_ops_cache[session_id] = (environment, file_ops)
+        return file_ops
 
 
 def register(ctx: Any) -> None:
@@ -694,6 +809,15 @@ def register(ctx: Any) -> None:
     # resolves the target inside the run's workspace or scratch directory.
     from agent import file_safety
     from tools import file_operations
+    from tools import file_tools
+
+    current_file_ops_factory = file_tools._get_file_ops
+    if not getattr(current_file_ops_factory, "_kanzo_broker_session_scoped", False):
+        def _kanzo_file_ops_factory(task_id: str = "default") -> Any:
+            return _get_kanzo_file_ops(task_id, current_file_ops_factory)
+
+        _kanzo_file_ops_factory._kanzo_broker_session_scoped = True  # type: ignore[attr-defined]
+        file_tools._get_file_ops = _kanzo_file_ops_factory
 
     current_write_denial = file_operations.get_write_denied_error
     if not getattr(current_write_denial, "_kanzo_broker_workspace", False):
@@ -863,6 +987,8 @@ def _retire_delegated_child_environment(payload: dict[str, Any]) -> None:
     except (ImportError, AttributeError):
         _LOG.warning("could not inspect Hermes terminal cache for delegated child")
         return
+    with _kanzo_file_ops_lock:
+        _kanzo_file_ops_cache.pop(child, None)
     with lock:
         matches = [
             (key, env) for key, env in active.items()

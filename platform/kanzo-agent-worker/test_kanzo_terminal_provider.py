@@ -369,5 +369,110 @@ class KanzoBrokerRetryTests(unittest.TestCase):
         self.assertIn("execution state=unknown", result["output"])
 
 
+class KanzoFileToolRoutingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.provider = _load_provider()
+
+    def _install_tools(self, environments):
+        tools = types.ModuleType("tools")
+        tools.__path__ = []
+        terminal_tool = types.SimpleNamespace(
+            _active_environments=environments,
+            _last_activity={key: float(index) for index, key in enumerate(environments)},
+            _env_lock=threading.RLock(),
+            _start_cleanup_thread=lambda: None,
+        )
+        file_operations = types.ModuleType("tools.file_operations")
+
+        class ShellFileOperations:
+            def __init__(self, env, cwd=None):
+                self.env = env
+                self.cwd = cwd
+
+        file_operations.ShellFileOperations = ShellFileOperations
+        config = types.ModuleType("tools.terminal_tool_config")
+        config._tenv = lambda _name, default: default
+        return {
+            "tools": tools,
+            "tools.terminal_tool": terminal_tool,
+            "tools.file_operations": file_operations,
+            "tools.terminal_tool_config": config,
+        }, terminal_tool
+
+    def test_file_tools_reuse_only_the_current_sessions_broker_environment(self) -> None:
+        class Environment:
+            def __init__(self, session_id):
+                self._hermes_backend_name = "kanzo_broker"
+                self._session_id = session_id
+                self._cleaned = False
+                self.cwd = "/workspace"
+
+        parent = Environment("parent-session")
+        child = Environment("child-session")
+        modules, terminal_tool = self._install_tools({
+            "parent": parent,
+            "child": child,
+        })
+        fallback = unittest.mock.Mock(side_effect=AssertionError("stock cache must not be used"))
+        with patch.dict(sys.modules, modules), \
+                patch.object(self.provider, "_kanzo_automation_active", return_value=True):
+            self.provider.session_context = types.SimpleNamespace(
+                get_session_env=lambda name, default="": "child-session"
+            )
+            result = self.provider._get_kanzo_file_ops("default", fallback)
+
+        self.assertIs(result.env, child)
+        self.assertEqual(result.cwd, "/workspace")
+        fallback.assert_not_called()
+        self.assertGreater(terminal_tool._last_activity["child"], 3.0)
+
+    def test_file_tools_create_a_scoped_broker_environment_when_first_tool_is_file(self) -> None:
+        class Environment:
+            _hermes_backend_name = "kanzo_broker"
+            _session_id = "new-session"
+            _cleaned = False
+            cwd = "/workspace"
+
+            def cleanup(self):
+                self._cleaned = True
+
+        created = Environment()
+        modules, terminal_tool = self._install_tools({})
+        fallback = unittest.mock.Mock(side_effect=AssertionError("stock cache must not be used"))
+        with patch.dict(sys.modules, modules), \
+                patch.object(self.provider, "_kanzo_automation_active", return_value=True), \
+                patch.object(self.provider, "KanzoTerminalProvider") as provider_class:
+            self.provider.session_context = types.SimpleNamespace(
+                get_session_env=lambda name, default="": "new-session"
+            )
+            provider_class.return_value.create_environment.return_value = created
+            result = self.provider._get_kanzo_file_ops("default", fallback)
+
+        self.assertIs(result.env, created)
+        self.assertEqual(result.cwd, "/workspace")
+        self.assertIs(terminal_tool._active_environments["kanzo-file-ops:new-session"], created)
+        fallback.assert_not_called()
+
+    def test_non_kanzo_file_tools_keep_the_hermes_default(self) -> None:
+        fallback = unittest.mock.Mock(return_value="default-file-ops")
+        client_env = types.ModuleType("agent.session_client_env")
+        client_env.bound_client_env = lambda: {}
+        with patch.dict(sys.modules, {"agent.session_client_env": client_env}), \
+                patch.object(self.provider, "session_context", types.SimpleNamespace(
+                    get_session_env=lambda name, default="": "desktop" if name == "HERMES_SESSION_SOURCE" else default
+                )), \
+                patch.object(self.provider, "_kanzo_automation_active", return_value=False):
+            result = self.provider._get_kanzo_file_ops("task-1", fallback)
+        self.assertEqual(result, "default-file-ops")
+        fallback.assert_called_once_with("task-1")
+
+    def test_unverified_automated_file_session_fails_closed(self) -> None:
+        fallback = unittest.mock.Mock(side_effect=AssertionError("stock cache must not be used"))
+        with patch.object(self.provider, "_kanzo_automation_active", return_value=False), \
+                self.assertRaises(self.provider.KanzoBrokerError):
+            self.provider._get_kanzo_file_ops("default", fallback)
+        fallback.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

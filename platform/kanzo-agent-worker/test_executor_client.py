@@ -21,6 +21,18 @@ class ExecutorSessionBudgetTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "/v1/sessions")
         self.assertEqual(calls[0][1]["max_turns"], 8)
 
+    def test_default_turn_cap_uses_executor_compatible_omission(self) -> None:
+        client = ExecutorClient("http://executor.mcp.svc.cluster.local:8766", "x" * 32)
+        calls = []
+        with patch.object(client, "_post_json", side_effect=lambda path, payload, _timeout: calls.append((path, payload)) or {
+            "session_id": "session-1", "execution_generation": 0,
+        }):
+            client.create_session(
+                task_id="demo#1", run_id="a" * 12, profile="builder",
+                provider="openai-api", model="iq_3s", reasoning="high",
+            )
+        self.assertNotIn("max_turns", calls[0][1])
+
     def test_session_turn_cap_rejects_values_outside_global_80(self) -> None:
         client = ExecutorClient("http://executor.mcp.svc.cluster.local:8766", "x" * 32)
         for value in (0, 81, True, "8"):

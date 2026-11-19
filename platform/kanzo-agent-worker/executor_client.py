@@ -134,8 +134,12 @@ class ExecutorClient:
             "model": _validate_identifier(model, "model"),
             "reasoning": _validate_identifier(reasoning, "reasoning"),
             "tool_policy": tool_policy,
-            "max_turns": max_turns,
         }
+        # Older deployed executor APIs enforce the same default (80) but do
+        # not accept the max_turns field. Omit only that implicit default;
+        # explicit task caps must reach an API that supports them.
+        if max_turns != 80:
+            payload["max_turns"] = max_turns
         response = self._post_json("/v1/sessions", payload, self.request_timeout)
         session_id = response.get("session_id")
         _validate_identifier(session_id, "response.session_id")

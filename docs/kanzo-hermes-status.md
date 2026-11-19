@@ -2,25 +2,25 @@
 
 SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문서는 구현·검증·배포 진행만 기록한다. 배포된 워커 동작은 [워커 안내](kanzo-agent-worker.md)를 참조한다.
 
-## 현재 상태 — 2026-11-18
+## 현재 상태 — 2026-11-19
 
-- Argo `kanzo-agent-worker`와 `kanzo-sandbox`는 코드 commit `c65f6748db06573d95c4cbac2328a540c5caca7f`를 Synced/Healthy 상태로 실행 중이다. Kanzo 앱은 `1fd2919`에서 Synced/Healthy다. Dispatcher와 executor는 각각 Ready이며 Prometheus `kanzo_worker_task_active=0`이다. `/workspace` PVC는 32Gi Bound다.
-- PR #1은 `0e4dc4e`로 squash merge됐고 작업 브랜치는 삭제했다. 추가 구현 `c65f674`는 지속형 Workspace prompt를 바로잡고, 확인된 취소에서 sandbox snapshot을 workspace에 전달한다.
-- 실제 task #143은 persistent workspace에 marker를 만들고 local commit까지 했지만 push 403으로 review에 남았다. marker와 branch는 보존 중이며 재실행하지 않았다. live dispatcher push preflight는 같은 Vault 주입 토큰을 사용해 Hermes 호출 전에 정상 차단했다.
-- WSL runner의 `GITHUB_TOKEN`은 현재 Kubernetes/Vault 동기화 Secret과 일치하지만 Windows `gh` 로그인 토큰과 다르고 push가 거부된다. Vault `kv/mcp/kanzo-agent`의 `GITHUB_TOKEN`에 Contents write 및 Pull requests write 권한이 필요하다. VSO가 Secret을 갱신한 뒤 `launch-wsl-runner.sh`를 다시 실행해야 host process가 새 값을 읽는다.
-- Kanzo #140은 Todo에서 human 승인 카드 #141을 기다린다. #140 본문은 source manifest 구현 및 deploy/merge/push 금지를 요구한다. #141 승인 게이트는 유지한다.
-- 2026-11-18 압축 지연 개선은 `fix/gateway-compression-checkpoint` 브랜치에 구현했다. Gateway 대기 300초, 실행 시작 체크포인트, 진행·완료 로그, 압축 실패 시 `review` 전환을 포함한다. 압축 시점의 작업 세부 내역은 원본 Hermes session transcript에 남고, 현재 체크포인트에는 해당 세션 포인터를 둔다. 아직 이미지 빌드·GitOps 반영·롤아웃은 하지 않아 live 설정은 기존 값이다.
-- 현재 로컬 변경은 Kanzo 프로젝트/태스크의 `max_turns` 상한(1–80)과 다중 저장소 source manifest를 구현한다. UI·worker·Executor API·Hermes Gateway 경로를 연결했으며, manifest 추가 저장소는 고정된 읽기 전용 스냅샷으로만 전달한다. 이 변경은 #140의 deploy/merge/push 금지 조건에 따라 아직 배포하거나 원격에 push하지 않았다.
+- Argo kanzo-agent-worker와 kanzo-sandbox는 main revision d6e6c85c6da5588749718a40dce2617a2762b22b에서 Synced/Healthy다. PR #9는 task-level agent_config 병합을 고쳐 read_only, profile/lane, runner, sources, turn cap을 프로젝트 기본값 위에 반영한다.
+- WSL runner는 /home/eorbr의 올바른 HOME으로 실행 중이다. Kanzo 이벤트 스트림 연결과 wsl-home heartbeat가 정상이며 worker의 마지막 heartbeat 성공 지표는 1이다.
+- Phase 1 canary #150/#151은 같은 WSL local workspace와 branch를 순차 공유했다. 두 줄 marker만 든 단일 파일이 draft PR #5에 올라갔고, PR 병합 후 연결 task 완료를 확인해 workspace와 branch를 삭제했다. WorkspaceRegistry에는 삭제 tombstone만 남았다.
+- Phase 3 live offline 확인에서 WSL runner 중지 90초 후 broker metric이 wsl-home=0으로 바뀌었고 k3s/linux=1은 유지됐다. runner 재시작 후 wsl-home=1과 이벤트 스트림 연결을 확인했다.
+- Phase 4 read-only canary #152, run 247885580585은 성공 결과를 남겼다. RunLedger에는 read_only=true, researcher profile, primary SHA b8797651fa0b906f0e0b0536c49b326f31cc745c, secondary SHA 14247076a3e976178f3a50094912d15d1a4f7462, archive path .kanzo-sources/kanzo-upstream 및 archive SHA-256이 기록됐다. 결과는 Kanzo upstream kanzo 0.4.2를 확인했고 파일 변경은 없었다.
+- #152는 읽기 전용 실행 정책에 따라 review/human=true에 남아 있다. 사용자가 결과를 확인하면 완료 처리할 수 있다. 실행에서 file lookup 문제에 대한 backlog 제안 #154도 생성됐다.
+- 요청에서 제외한 항목 6은 계속 범위 밖이다.
 
 ## 단계 진행
 
-| 단계 | 상태 | 근거/다음 작업 |
+| 단계 | 상태 | 근거 |
 |---|---|---|
-| 0. 소스 라우팅 정확성 | 구현·배포·local-source canary 완료 | task-level repo/ref override와 source SHA 기록을 배포했다. Babmukdang WSL read-only canary에서 저장소·고정 SHA·runner 및 원본 파일 무변경을 확인했다. |
-| 1. 공유 가능한 지속형 Git Workspace | 구현·배포, 실제 1-task event canary 부분 통과; 다중 task acceptance 미완료 | PVC/registry smoke와 실제 #143 workspace 생성은 확인했다. 실제 두 번째 task 재사용 acceptance는 publish 권한 실패로 미입증이다. Vault runner token을 갱신한 뒤 새 canary가 필요하다. |
-| 2. 정지·재개·병합 후 정리 | 구현·배포 완료; 로컬 cleanup 통합 테스트 통과, live merged-PR E2E 미완료 | safe cleanup, executor reconciliation, persistent-workspace resume guidance, confirmed cancellation snapshot transfer를 배포했다. 실제 worker 정리 함수와 registry를 쓰는 통합 테스트는 통과했지만 GitHub API는 모의했으므로 live merged PR 및 완료 task를 통한 자동 branch/file cleanup은 아직 검증되지 않았다. |
-| 3. Windows/WSL 로컬 저장소 | 구현·배포, read-only local-source canary 완료; writable resume/offline 검증 미완료 | 절대경로/runner 라우팅, event claim, source SHA, 원본 무변경은 확인했다. writable 중단·재개와 runner offline 복구의 live 검증이 남았다. |
-| 4. 다중 저장소·운영 검증 | 다중 저장소 구현 로컬 완료·테스트 통과; live canary 미완료 | Kanzo 폼, 최대 4개 secondary source pinning/read-only 스냅샷, primary 변경만 전달하는 경계를 구현했다. Python 137 tests, Kanzo Rust 76 tests, release build 통과. #140 조건에 따라 push/deploy하지 않아 live manifest canary는 아직 없다. 운영 recovery/observability(이번 요청의 6번)는 범위에서 제외했다. |
+| 0. 소스 라우팅 정확성 | 완료 | task-level source override가 실제 route에 적용되고 잘못된 설정은 실행 전에 거부된다. Babmukdang local-source canary에서 source SHA와 원본 무변경을 확인했다. |
+| 1. 공유 가능한 지속형 Git Workspace | 완료 | #150/#151이 같은 WSL workspace, branch와 파일을 순차 공유했다. PR #5의 정확한 두 줄 단일 파일과 연결 task 상태를 확인했다. |
+| 2. 정지·재개·병합 후 정리 | 완료 | merged PR #5, linked tasks done, lease 해제, clean HEAD를 확인한 뒤 실제 branch 및 workspace 삭제와 tombstone 기록을 확인했다. |
+| 3. Windows/WSL 로컬 저장소 | 완료 | WSL local workspace의 task 간 재개와 runner heartbeat offline/recovery를 live 검증했다. WSL을 멈춰도 K3s runner는 계속 online이었다. |
+| 4. 여러 저장소와 live 검증 | 완료 | #152가 고정된 secondary source를 resolve해 RunLedger와 read-only sandbox에 전달했고, primary/secondary SHA와 package 버전을 확인했다. |
 
 ## 이번 구현 세션
 
@@ -174,3 +174,14 @@ SSOT는 [작업 공간 설계 로드맵](kanzo-hermes-roadmap.md)이다. 이 문
 - Linked-workspace canary `home-server-desktop#151`, run `6734d09deea3`, was routed to review after the source workspace fast-forwarded successfully to `05f342a78be66e41053baed6b7d83a02e4666061`. It failed before creating a Gateway session: the local worker sent `max_turns`, while the deployed Executor API rejects that field (`invalid_create_fields`). No model call occurred; the run checkpoint was preserved.
 - Compatibility fix `6535041` omits `max_turns` only when it is the default 80, which the deployed API already applies. Explicit non-default caps remain in the request and still require the API version that supports them; #151's configured cap of 4 was not bypassed or silently raised.
 - Validation: worker suite 139 passed; `py_compile` and `git diff --check` passed. The fix is committed locally but not pushed/deployed. Live canary #151 remains in review pending deployment of the compatible API/client path and explicit human requeue. No automatic retry occurred.
+
+
+## Follow-up evidence (2026-11-19, roadmap live acceptance completed)
+
+- Worker PR #9 was merged at 1d6067b and Argo synced the updated worker and sandbox. It fixes task-level structured routing propagation. The WSL runner was restarted with HOME=/home/eorbr; this was necessary because a root-launched process retained HOME=/root after dropping to the eorbr UID, causing GitHub CLI config access failures. Do not use the root-inherited environment when launching the host runner.
+- Live linked-workspace canary: #150 run cb9b69d03b69 and #151 run 404508769dc8 both used runner wsl-home, source kind local, workspace roadmap-live-e2e-20261119, and branch kanzo/workspaces/roadmap-live-e2e-20261119. The PR contained only .kanzo-canary/roadmap-live-e2e-20261119.md with the exact create/verify lines. PR #5 merged; #150/#151 are done. Cleanup removed the workspace directory and branch and retained registry state deleted with deleted_at and head SHA fdfd62901d72fd16ee137e03f9680cf7400e7f16.
+- Live WSL offline/recovery: before shutdown, broker reported wsl-home=1 and k3s=1. After stopping WSL runner processes and waiting over 90 seconds, wsl-home=0 while k3s=1. Restart restored wsl-home=1 and the Kanzo event stream.
+- Live Phase 4 read-only manifest canary #152 run 247885580585 completed with outcome done and was intentionally routed to review/human=true. The RunLedger records read_only=true, profile researcher, primary SHA b8797651fa0b906f0e0b0536c49b326f31cc745c, secondary pinned SHA 14247076a3e976178f3a50094912d15d1a4f7462, snapshot path .kanzo-sources/kanzo-upstream, and archive digest 8ea9d333ee313abc0fcf2b0610be2901d369b0e3c96452b85fc1eb4e151667aa. The report identified package kanzo 0.4.2 and no source-file changes. The worker passes the configured 4-turn cap to the Executor API; automated proof of the exact number of consumed turns is not stored in RunLedger.
+- One intermediate retry failed because the runner inherited HOME=/root; after fixing HOME, the same source clone and canary passed. No retry loop was enabled. The run also proposed backlog card #154 for the sandbox file tools path lookup limitation; it remains for human triage.
+- Worker suite validation for PR #9: 143 tests passed; py_compile and git diff --check passed. These tests were run to verify the routing fix before deployment.
+- The previously tracked live acceptance gaps for phases 0–4 are now verified. Item 6 remains explicitly excluded. The remaining human actions are reviewing #152 and triaging #154, not implementation blockers.

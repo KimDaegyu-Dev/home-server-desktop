@@ -507,57 +507,99 @@ def valid_source_ref(value: str) -> bool:
 
 
 def apply_task_source_overrides(route: ProjectRoute, details: str) -> ProjectRoute:
-    """Apply a task's explicit source/workspace settings to project defaults."""
-    fields: dict[str, str] = {}
-    sources = route.sources
+    """Merge task-specific execution settings over the project catalog defaults."""
     task_body = TASK_COMMENTS_HEADER_RE.split(details, maxsplit=1)[0]
     structured = re.search(r"^agent_config:\s*(\{[^\r\n]*\})\s*$", task_body, re.IGNORECASE | re.MULTILINE)
+    config: dict[str, Any] = {}
     if structured:
         try:
-            config = json.loads(structured.group(1))
+            parsed = json.loads(structured.group(1))
         except json.JSONDecodeError as exc:
             raise WorkerError(f"Task has invalid structured agent configuration: {exc}") from exc
-        if not isinstance(config, dict):
+        if not isinstance(parsed, dict):
             raise WorkerError("Task agent_config must be a JSON object.")
-        fields = {str(key).lower(): str(value) for key, value in config.items()}
-        if "sources" in config:
-            sources = parse_source_specs(config["sources"], route.slug)
+        config = parsed
     else:
         for line in task_body.splitlines():
-            match = re.match(r"^\s*(repo|ref|source_ref|workspace_id|max_turns)\s*:\s*(.*?)\s*$", line, re.IGNORECASE)
+            match = re.match(
+                r"^\s*(repo|ref|source_ref|workspace_id|max_turns|model_lane|provider|model|reason|profile|read_only|source_kind|source_path|runner_id|runner_os)\s*:\s*(.*?)\s*$",
+                line, re.IGNORECASE,
+            )
             if match:
-                fields[match.group(1).lower()] = match.group(2)
+                config[match.group(1).lower()] = match.group(2)
 
-    repo = route.repo
-    if "repo" in fields:
-        value = fields["repo"].strip()
-        if not value:
-            pass  # An empty form field inherits the project default.
-        elif value.lower() == "none":
-            repo = None
-        else:
-            value = value.removeprefix("https://github.com/").removesuffix(".git").strip("/")
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) or any(part in {".", ".."} for part in value.split("/")):
-                raise WorkerError("Task has invalid repo override; expected owner/name or none.")
-            repo = value
+    supported = {
+        "slug", "repo", "source_ref", "ref", "workspace_id", "max_turns", "model_lane",
+        "provider", "model", "reason", "profile", "read_only", "source_kind",
+        "source_path", "runner_id", "runner_os", "sources",
+    }
+    unknown = sorted(set(config) - supported)
+    if unknown:
+        raise WorkerError(f"Task agent_config has unsupported fields: {', '.join(unknown)}")
+    requested_slug = config.get("slug")
+    if requested_slug not in (None, "", route.slug):
+        raise WorkerError("Task agent_config slug must match the task's Kanzo project.")
 
-    source_ref = fields.get("ref", fields.get("source_ref", "")).strip() or route.source_ref
-    if source_ref and not valid_source_ref(source_ref):
-        raise WorkerError("Task has invalid ref override.")
-    workspace_id = fields.get("workspace_id", "").strip() or route.workspace_id
-    if workspace_id:
-        try:
-            validate_workspace_id(workspace_id)
-        except WorkspaceRegistryError as exc:
-            raise WorkerError(f"Task has invalid workspace_id: {exc}") from exc
-    max_turns_text = fields.get("max_turns", "").strip()
-    try:
-        max_turns = int(max_turns_text) if max_turns_text else route.max_turns
-    except ValueError as exc:
-        raise WorkerError("Task max_turns must be an integer between 1 and 80.") from exc
-    if not 1 <= max_turns <= 80:
-        raise WorkerError("Task max_turns must be between 1 and 80.")
-    return replace(route, repo=repo, source_ref=source_ref, workspace_id=workspace_id, sources=sources, max_turns=max_turns)
+    base_sources = [
+        {
+            "name": source.name,
+            "repo": source.repo or "",
+            "ref": source.ref,
+            "path": source.path or "",
+            "runner_id": source.runner_id,
+            "runner_os": source.runner_os,
+        }
+        for source in route.sources
+    ]
+    merged: dict[str, Any] = {
+        "slug": route.slug,
+        "repo": route.repo or "none",
+        "model_lane": route.model_lane,
+        "provider": route.provider,
+        "model": route.model,
+        "reason": route.reason,
+        "profile": route.profile,
+        "read_only": route.read_only,
+        "source_ref": route.source_ref or "",
+        "workspace_id": route.workspace_id or "",
+        "source_kind": route.source_kind,
+        "source_path": route.source_path or "",
+        "runner_id": route.runner_id,
+        "runner_os": route.runner_os,
+        "sources": base_sources,
+        "max_turns": route.max_turns,
+    }
+    explicit = {
+        key: value for key, value in config.items()
+        if key != "slug" and key != "sources"
+    }
+    lane_value = explicit.get("model_lane")
+    lane_value = lane_value.strip().lower() if isinstance(lane_value, str) else lane_value
+    if lane_value:
+        defaults = LANE_DEFAULTS.get(lane_value)
+        if defaults is None:
+            raise WorkerError("Task has invalid model_lane override.")
+        if lane_value != route.model_lane:
+            default_provider, default_model, default_profile = defaults
+            for key, value in (("provider", default_provider), ("model", default_model), ("profile", default_profile)):
+                current = explicit.get(key)
+                if current is None or current == "":
+                    merged[key] = value
+
+    for key, value in explicit.items():
+        if key == "read_only":
+            if isinstance(value, bool):
+                merged[key] = value
+            elif isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+                merged[key] = value.strip().lower()
+            else:
+                raise WorkerError("Task read_only override must be true or false.")
+        elif value is not None and not (isinstance(value, str) and not value.strip()):
+            merged[key] = value
+    if "sources" in config:
+        merged["sources"] = config["sources"]
+
+    return parse_project_route(route.slug, "agent_config: " + json.dumps(merged, separators=(",", ":")))
 
 
 def parse_catalog_cards(text: str) -> list[ProjectRoute]:

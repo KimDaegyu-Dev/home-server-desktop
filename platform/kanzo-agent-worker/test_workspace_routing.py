@@ -85,6 +85,46 @@ class WorkspaceRoutingTests(unittest.TestCase):
                 '"read_only":false,"max_turns":81}',
             )
 
+    def test_task_agent_config_overrides_readonly_profile_lane_and_local_runner(self) -> None:
+        route = parse_project_route(
+            "demo",
+            'agent_config: {"slug":"demo","repo":"org/primary","model_lane":"coding",'
+            '"provider":"openai-api","model":"iq_3s","reason":"high",'
+            '"profile":"builder","read_only":false,"source_kind":"git",'
+            '"max_turns":80}',
+        )
+        overridden = apply_task_source_overrides(
+            route,
+            'agent_config: {"slug":"demo","repo":"","model_lane":"analysis",'
+            '"provider":"openai-api","model":"iq_3s","reason":"high",'
+            '"profile":"researcher","read_only":true,"source_kind":"local",'
+            '"source_path":"/mnt/c/Github/repo","runner_id":"wsl-home",'
+            '"runner_os":"wsl","workspace_id":"shared-analysis",'
+            '"max_turns":4,"sources":[]}',
+        )
+        self.assertEqual(overridden.repo, "org/primary")
+        self.assertEqual((overridden.model_lane, overridden.provider, overridden.model),
+                         ("analysis", "openai-api", "iq_3s"))
+        self.assertEqual((overridden.profile, overridden.reason, overridden.read_only),
+                         ("researcher", "high", True))
+        self.assertEqual((overridden.source_kind, overridden.source_path, overridden.runner_id, overridden.runner_os),
+                         ("local", "/mnt/c/Github/repo", "wsl-home", "wsl"))
+        self.assertEqual(overridden.workspace_id, "shared-analysis")
+        self.assertEqual(overridden.max_turns, 4)
+        self.assertEqual(overridden.sources, ())
+
+    def test_task_agent_config_rejects_invalid_readonly_and_project_slug(self) -> None:
+        route = parse_project_route(
+            "demo", 'agent_config: {"slug":"demo","repo":"org/primary",'
+            '"model_lane":"coding","read_only":false}',
+        )
+        for config in (
+            '{"read_only":"sometimes"}',
+            '{"slug":"other","read_only":true}',
+        ):
+            with self.subTest(config=config), self.assertRaises(WorkerError):
+                apply_task_source_overrides(route, f"agent_config: {config}")
+
     def test_catalog_rejects_unpinned_unsafe_duplicate_or_excess_sources(self) -> None:
         prefix = '{"slug":"demo","repo":"org/primary","model_lane":"coding","read_only":false,"sources":'
         cases = [

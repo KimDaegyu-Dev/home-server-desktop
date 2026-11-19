@@ -2537,6 +2537,75 @@ class Worker:
                     raise WorkerError(
                         f"Persistent workspace {workspace_id!r} is on {current_branch.stdout.strip()!r}; expected {branch!r}."
                     )
+                # A previous task may have pushed commits while this workspace
+                # runner was offline. Reconcile its local branch with GitHub
+                # before exposing the checkout to another task. Only fast-forward
+                # a clean checkout; never overwrite a dirty checkpoint or merge
+                # divergent histories automatically.
+                askpass = self.workspace / f"git-askpass-workspace-{uuid.uuid4().hex}.sh"
+                askpass.write_text('#!/bin/sh\nprintf "%s\\n" "$KANZO_GIT_TOKEN"\n', encoding="utf-8")
+                askpass.chmod(0o700)
+                git_env = dict(self._hermes_env())
+                git_env["KANZO_GIT_TOKEN"] = token
+                git_env["GH_TOKEN"] = token
+                git_env["GIT_ASKPASS"] = str(askpass)
+                git_env["GIT_TERMINAL_PROMPT"] = "0"
+                try:
+                    remote_branch = f"refs/heads/{branch}"
+                    remote_check = self._run_active_command(
+                        ["git", "-C", str(checkout), "ls-remote", "--heads", "origin", remote_branch],
+                        active, env=git_env, timeout=60,
+                    )
+                    if remote_check.returncode:
+                        raise WorkerError(
+                            f"Could not inspect remote workspace branch {branch!r}: {remote_check.stderr[-800:]}"
+                        )
+                    if remote_check.stdout.strip():
+                        fetch = self._run_active_command(
+                            ["git", "-C", str(checkout), "fetch", "--no-tags", "origin",
+                             f"+{remote_branch}:refs/remotes/origin/{branch}"],
+                            active, env=git_env, timeout=120,
+                        )
+                        if fetch.returncode:
+                            raise WorkerError(
+                                f"Could not fetch remote workspace branch {branch!r}: {fetch.stderr[-800:]}"
+                            )
+                        divergence = self._run_active_command(
+                            ["git", "-C", str(checkout), "rev-list", "--left-right", "--count",
+                             f"HEAD...refs/remotes/origin/{branch}"],
+                            active, timeout=30,
+                        )
+                        counts = divergence.stdout.strip().split()
+                        if divergence.returncode or len(counts) != 2 or not all(item.isdigit() for item in counts):
+                            raise WorkerError(f"Could not compare workspace branch {branch!r} with its remote.")
+                        ahead, behind = map(int, counts)
+                        if ahead and behind:
+                            raise WorkerError(
+                                f"Persistent workspace branch {branch!r} diverged from GitHub; preserving it for review."
+                            )
+                        if behind:
+                            status = self._run_active_command(
+                                ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=all"],
+                                active, timeout=30,
+                            )
+                            if status.returncode:
+                                raise WorkerError("Could not verify the workspace before fast-forwarding it.")
+                            if status.stdout.strip():
+                                raise WorkerError(
+                                    f"Persistent workspace branch {branch!r} is behind GitHub and has "
+                                    "uncommitted checkpoint files; preserving them for review instead of merging."
+                                )
+                            fast_forward = self._run_active_command(
+                                ["git", "-C", str(checkout), "merge", "--ff-only", f"origin/{branch}"],
+                                active, timeout=120,
+                            )
+                            if fast_forward.returncode:
+                                raise WorkerError(
+                                    f"Could not fast-forward persistent workspace branch {branch!r}: "
+                                    f"{fast_forward.stderr[-800:]}"
+                                )
+                finally:
+                    askpass.unlink(missing_ok=True)
                 revision = self._run_active_command(
                     ["git", "-C", str(checkout), "rev-parse", "--verify", "HEAD"], active, timeout=30,
                 )

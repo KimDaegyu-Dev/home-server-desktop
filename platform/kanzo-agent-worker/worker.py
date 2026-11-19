@@ -19,6 +19,7 @@ import threading
 import time
 import textwrap
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass, replace
@@ -915,6 +916,19 @@ def split_long_comment(body: str, limit: int = 4200) -> list[str]:
             current += f"\n{fence[0]}"
         chunks.append(current.rstrip())
     return chunks
+
+
+def _draft_pr_update_command(url: str, number: int, title: str, body: str) -> list[str]:
+    parsed = urllib.parse.urlsplit(url)
+    match = re.fullmatch(r"/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)/?", parsed.path)
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com" or not match:
+        raise WorkerError("GitHub returned an invalid existing pull request URL.")
+    if int(match.group(2)) != number:
+        raise WorkerError("GitHub returned a pull request URL that does not match its number.")
+    return [
+        "gh", "api", f"repos/{match.group(1)}/pulls/{number}", "--method", "PATCH",
+        "--field", f"title={title}", "--field", f"body={body}",
+    ]
 
 
 class Worker:
@@ -3349,7 +3363,10 @@ class Worker:
             if not isinstance(number, int) or not isinstance(url, str) or not url.startswith("https://github.com/"):
                 raise WorkerError("GitHub returned an invalid existing pull request record.")
             updated = self._run_active_command(
-                ["gh", "pr", "edit", str(number), "--title", task.title[:200], "--body", (summary or "Automated implementation; see linked Kanzo tasks for context.")[:5000]],
+                _draft_pr_update_command(
+                    url, number, task.title[:200],
+                    (summary or "Automated implementation; see linked Kanzo tasks for context.")[:5000],
+                ),
                 active, cwd=checkout, env=auth_env, timeout=120,
             )
             if updated.returncode:

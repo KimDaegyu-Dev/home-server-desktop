@@ -57,9 +57,9 @@ Configure a project catalog card with:
 ```json
 {
   "slug": "babmukdang-local",
-  "repo": "KimDaegyu-Dev/Babmukdang-Backend",
+  "repo": "KimDaegyu-Dev/BabMukDang-Backend",
   "source_kind": "local",
-  "source_path": "/mnt/c/Github/Babmukdang/backend",
+  "source_path": "/mnt/c/Github/Babmukdang/BabMukDang-Backend",
   "runner_id": "wsl-home",
   "runner_os": "wsl",
   "workspace_id": "babmukdang-backend",
@@ -77,6 +77,8 @@ The source path must be the absolute WSL path to the Git root. The checkout must
 Start the runner from the WSL checkout with `bash platform/kanzo-agent-worker/launch-wsl-runner.sh`. It reads the worker, broker, and Langfuse Kubernetes Secrets through `k3s kubectl`, passes their values through process memory, and starts the runner as the current WSL user; it does not write credentials to a file. A non-root shell prompts for sudo access to K3s. Credentials are read once at launch, so after changing Vault values, wait for Vault Secrets Operator to sync and relaunch the WSL runner to load the new values. Set `KANZO_RUNNER_ID`, `KANZO_WORKSPACE`, and `KANZO_WORKER_STATE_DIR` before launch to override the defaults. The runner binds its local wake/metrics endpoint to `127.0.0.1`; its defaults use `kanzo.tail5389e9.ts.net`, `mcp.tail5389e9.ts.net`, `hermes-executor.tail5389e9.ts.net`, and `kanzo-broker.tail5389e9.ts.net`.
 
 Local sources are currently supported on Linux/WSL runners. Windows drive paths and a native Windows runner are not accepted. The repo card's `repo` remains the GitHub remote used for PR publication.
+
+In automated Kanzo sessions, Hermes file tools (read_file, search_files, write_file, and patch) use the same session-bound broker sandbox as terminal; relative paths start at /workspace, and /workspace/... is an accepted absolute path. If the session cannot be bound to its broker environment, file operations fail closed instead of reading the Gateway container's separate filesystem.
 # Workspace and runner metrics
 
 The worker exports low-cardinality Prometheus metrics for operations:

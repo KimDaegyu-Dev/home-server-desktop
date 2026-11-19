@@ -376,11 +376,19 @@ class KanzoFileToolRoutingTests(unittest.TestCase):
     def _install_tools(self, environments):
         tools = types.ModuleType("tools")
         tools.__path__ = []
+        env_lock = threading.Lock()
+
+        def start_cleanup_thread():
+            acquired = env_lock.acquire(blocking=False)
+            if not acquired:
+                raise AssertionError("cleanup thread starter called while environment lock is held")
+            env_lock.release()
+
         terminal_tool = types.SimpleNamespace(
             _active_environments=environments,
             _last_activity={key: float(index) for index, key in enumerate(environments)},
-            _env_lock=threading.RLock(),
-            _start_cleanup_thread=lambda: None,
+            _env_lock=env_lock,
+            _start_cleanup_thread=start_cleanup_thread,
         )
         file_operations = types.ModuleType("tools.file_operations")
 
